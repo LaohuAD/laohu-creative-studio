@@ -31,13 +31,14 @@ HYPIT_TASK_VERSION = 1
 
 _PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _REQUEST_ID = re.compile(r"^[^\x00\r\n]{1,160}$")
-_SLOTS = ("text", "image", "video", "audio", "voice")
+_SLOTS = ("text", "image", "video", "audio", "music", "voice")
 _RUNNINGHUB_REGIONS = frozenset(("global", "cn"))
 _SLOT_NODE_TYPES = {
     "text": "text_generation",
     "image": "image_generation",
     "video": "video_generation",
     "audio": "audio_generation",
+    "music": "music_generation",
     "voice": "audio_generation",
 }
 _SLOT_KINDS = {
@@ -45,6 +46,7 @@ _SLOT_KINDS = {
     "image": "image",
     "video": "video",
     "audio": "audio",
+    "music": "music",
     "voice": "audio",
 }
 
@@ -88,6 +90,11 @@ SUPPORTED_HYPIT_CAPABILITIES = (
         "label": {"zh": "音频生成", "en": "Audio generation"},
     },
     {
+        "slot": "music", "kind": "music", "node_type": "music_generation",
+        "capability": _capability_ref("music-generation"), "returns": _capability_ref("audio-set"),
+        "label": {"zh": "音乐生成", "en": "Music generation"},
+    },
+    {
         "slot": "voice",
         "kind": "audio",
         "node_type": "audio_generation",
@@ -98,14 +105,6 @@ SUPPORTED_HYPIT_CAPABILITIES = (
 )
 
 UNSUPPORTED_HYPIT_CAPABILITIES = (
-    {
-        "name": "music-generation",
-        "label": {"zh": "音乐生成", "en": "Music generation"},
-        "reason": {
-            "zh": "当前 Endpoint 桥接未实现音乐输出，不能把音乐模型映射到语音槽位。",
-            "en": "Music output is not implemented by this Endpoint bridge; music models are not mapped to speech.",
-        },
-    },
     {
         "name": "ai-application",
         "label": {"zh": "AI 应用", "en": "AI application"},
@@ -623,7 +622,7 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
     if kind == "speech":
         kind = "audio"
     if not kind or _capability_by_kind(kind) is None:
-        raise HTTPException(status_code=400, detail="Hypit 只支持已声明的文本、图片、视频和语音能力")
+        raise HTTPException(status_code=400, detail="Hypit 只支持已声明的文本、图片、视频、语音和音乐能力")
     if capability_kind and capability_kind != kind:
         raise HTTPException(status_code=400, detail="Endpoint capability 与请求 kind 不一致")
     capability = _capability_by_kind(kind)
@@ -652,6 +651,9 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
         _SLOT_NODE_TYPES[slot],
         _normalise_region(explicit_region),
     )
+    from studio_module_models import hypit_profile_reasons
+    if hypit_profile_reasons(slot, profile):
+        raise HTTPException(400, detail="该模型不支持此 Hypit 生成用途，请重新选择模型")
     if profile.get("validation_mode") not in (None, "strict") or profile.get("readiness") not in (None, "ready") or profile.get("runnable") is False:
         readiness = profile.get("readiness") or "needs_profile"
         if readiness == "adapter_missing":
@@ -660,12 +662,21 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
             message = f"模型 {model} 当前不可运行（{readiness}）"
         raise HTTPException(status_code=400, detail=message)
 
+    # §10.7 收敛：显式 provider/model 覆盖不再是隐藏路径。
+    # 原生 Endpoint 会转发这些字段（static/hypit-endpoint.mjs），因此保留受限兼容：
+    # 覆盖仍要落到该槽位真实允许、且档案就绪的模型；这里把来源显式记录下来，
+    # 供审计与后续按槽位 runtime_model_override 策略判定，而不是静默绕过模块设置。
+    explicit_override = bool(
+        str(constraints.get("provider_id") or constraints.get("provider") or "").strip()
+        or str(constraints.get("model") or constraints.get("model_id") or "").strip()
+    )
+    matches_module_binding = provider == selected.get("provider") and model == selected.get("model")
+    model_source = "runtime_override" if (explicit_override and not matches_module_binding) else "module_settings"
+
     prompt_parts: list[str] = []
     system_parts: list[str] = []
-    if provider == selected.get("provider") and model == selected.get("model") and isinstance(selected.get("parameters"), Mapping):
-        parameters: Dict[str, Any] = dict(selected.get("parameters") or {})
-    else:
-        parameters = {}
+    # Hypit 参数由本次复刻请求与模型默认契约决定，旧模块参数不再覆盖任务。
+    parameters: Dict[str, Any] = {}
     _collect_constraint_parameters(constraints, parameters)
     _normalise_ports(constraints, prompt_parts, system_parts, media := {}, parameters)
     _normalise_media_inputs(constraints, media)
@@ -688,6 +699,7 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
         "image": {"reference"},
         "video": {"reference", "source_video", "reference_audio", "first_frame", "last_frame"},
         "audio": {"reference_audio"},
+        "music": {"reference_audio"},
     }[kind]
     unexpected = [role for role, values in media.items() if values and role not in allowed_media]
     if unexpected:
@@ -725,6 +737,8 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
         "input_counts": input_counts,
         "references": references,
         "system_prompt": "\n".join(system_parts).strip(),
+        "model_source": model_source,
+        "module_slot": slot,
     }
 
 
@@ -825,11 +839,15 @@ def create_hypit_models_router(
             raise HTTPException(status_code=500, detail="主控模型能力目录格式不正确")
         return _copy(value)
 
-    def validate_settings(defaults: Mapping[str, Any]) -> Dict[str, Any]:
+    def validate_settings(defaults: Mapping[str, Any], previous: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         catalog = catalog_record()
         result = _empty_defaults()
         for slot in _SLOTS:
             value = _normalise_slot(defaults.get(slot), slot)
+            prior = (previous or {}).get(slot) or {}
+            if previous is not None and all(value.get(k) == prior.get(k) for k in ('provider', 'model', 'region')):
+                result[slot] = value
+                continue
             if value["provider"] and value["model"]:
                 profile, region = _resolve_profile(
                     catalog,
@@ -838,6 +856,9 @@ def create_hypit_models_router(
                     _SLOT_NODE_TYPES[slot],
                     value.get("region", ""),
                 )
+                from studio_module_models import hypit_profile_reasons
+                if hypit_profile_reasons(slot, profile):
+                    raise HTTPException(400, detail="该模型不支持此 Hypit 生成用途，请重新选择模型")
                 value["region"] = region
                 value["parameters"] = _validate_parameters(profile, value["parameters"])
             result[slot] = value
@@ -952,6 +973,7 @@ def create_hypit_models_router(
     @router.get("/capabilities")
     async def capabilities() -> Dict[str, Any]:
         catalog = catalog_record()
+        from studio_module_models import hypit_profile_reasons, select_options_for_slot
         supported = []
         for item in SUPPORTED_HYPIT_CAPABILITIES:
             models = []
@@ -961,6 +983,8 @@ def create_hypit_models_router(
                 provider_id = _provider_id(provider)
                 for model in _provider_models(provider):
                     if model.get("node_type") != item["node_type"]:
+                        continue
+                    if hypit_profile_reasons(item['slot'], model):
                         continue
                     models.append(
                         {
@@ -987,6 +1011,8 @@ def create_hypit_models_router(
             "supported_capabilities": supported,
             "unsupported_capabilities": _copy(list(UNSUPPORTED_HYPIT_CAPABILITIES)),
             "defaults": settings_record()["defaults"],
+            "slot_options": {item['slot']: select_options_for_slot(catalog.get('options') or [], 'hypit', item['slot'])['options']
+                             for item in SUPPORTED_HYPIT_CAPABILITIES} if 'options' in catalog else None,
         }
 
     @router.get("/settings")
@@ -1014,7 +1040,10 @@ def create_hypit_models_router(
                 if key not in _SLOTS:
                     raise HTTPException(status_code=400, detail=f"不支持的 Hypit 模型槽位：{key}")
                 merged[key] = _normalise_slot(value, key)
-            defaults = validate_settings(merged)
+            if payload.get('parameter_mode') == 'per_request':
+                for value in merged.values():
+                    value['parameters'] = {}
+            defaults = validate_settings(merged, current['defaults'])
             now = _now()
             record = {
                 "version": HYPIT_SETTINGS_VERSION,

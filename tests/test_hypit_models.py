@@ -12,7 +12,7 @@ from studio_hypit_models import create_hypit_models_router
 
 
 def catalog():
-    return {
+    result = {
         "schema_version": 1,
         "providers": [
             {
@@ -73,6 +73,19 @@ def catalog():
                         "parameters": {"speaker": {"type": "text"}},
                         "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1}},
                     },
+                    {
+                        "model_id": "music-1",
+                        "node_type": "music_generation",
+                        "family_id": "music-family",
+                        "runnable": True,
+                        "readiness": "ready",
+                        "validation_mode": "strict",
+                        "parameters": {"instrumental": {"type": "boolean"}},
+                        "inputs": {
+                            "prompt": {"media_type": "text", "min": 1, "max": 1},
+                            "reference_audio": {"media_type": "audio", "min": 0, "max": 1},
+                        },
+                    },
                 ],
             },
             {
@@ -123,6 +136,17 @@ def catalog():
     }
 
 
+    operations = {'text_generation': 'chat', 'image_generation': 'text_to_image',
+                  'video_generation': 'text_to_video', 'audio_generation': 'text_to_speech',
+                  'music_generation': 'music'}
+    for provider in result['providers']:
+        for model in provider['models']:
+            for profile in [model, *model.get('region_profiles', {}).values()]:
+                profile['operation'] = operations[profile['node_type']]
+                profile['output'] = {'media_type': 'audio' if profile['node_type'] == 'music_generation' else profile['node_type'].split('_')[0]}
+    return result
+
+
 class HypitModelsTests(unittest.TestCase):
     def setUp(self):
         self.root = Path("cache/hypit-tests") / f"case-{time.time_ns()}"
@@ -149,6 +173,8 @@ class HypitModelsTests(unittest.TestCase):
             await asyncio.sleep(0)
             if self.fail_generation:
                 raise RuntimeError("simulated generation failure")
+            if request['kind'] == 'music':
+                return {'audios': [{'url': '/api/results/fixture-music.wav'}], 'model': request['model']}
             return {"images": [{"url": "/api/results/result-a.png"}], "model": request["model"]}
 
         self.app = FastAPI()
@@ -360,7 +386,7 @@ class HypitModelsTests(unittest.TestCase):
             explicit_request = [call[1] for call in self.calls if call[0] == "validate"][-1]
             self.assertEqual(explicit_request["region"], "global")
 
-    def test_native_projection_keeps_media_roles_and_rejects_music(self):
+    def test_native_projection_keeps_media_roles_and_requires_music_configuration(self):
         with TestClient(self.app) as client:
             setup = client.put(
                 "/api/studio/hypit/models/settings",
@@ -408,7 +434,64 @@ class HypitModelsTests(unittest.TestCase):
                 },
             )
             self.assertEqual(unsupported.status_code, 400, unsupported.text)
-            self.assertIn("支持", unsupported.text)
+            self.assertIn("请先为 music 配置工作台模型", unsupported.text)
+
+    def test_configured_music_request_uses_music_slot_and_returns_audio(self):
+        with TestClient(self.app) as client:
+            saved = client.put('/api/studio/hypit/models/settings', json={'defaults': {
+                'music': {'provider':'provider-a', 'model':'music-1', 'parameters':{'instrumental':True}}
+            }})
+            self.assertEqual(saved.status_code, 200, saved.text)
+            submitted = client.post('/api/studio/hypit/models/projects/project-a/requests', json={
+                'request_id':'configured-music',
+                'capability': {'module':{'name':'@laohu/studio-models','version':'1'}, 'name':'music-generation'},
+                'constraints': {
+                    'kind':'music', 'prompt':'fixture instrumental music',
+                    'parameters': {'instrumental': True},
+                    'inputs': {'reference_audio': ['data:audio/wav;base64,AA==']},
+                },
+            })
+            self.assertEqual(submitted.status_code, 200, submitted.text)
+            done = self.wait_for_status(client, 'project-a', 'configured-music', 'succeeded')
+            request = next(call[1] for call in self.calls if call[0] == 'generate')
+            self.assertEqual(request['kind'], 'music')
+            self.assertEqual(request['model'], 'music-1')
+            self.assertTrue(request['parameters']['instrumental'])
+            self.assertEqual(request['inputs']['reference_audio'], ['data:audio/wav;base64,AA=='])
+            self.assertEqual(request['input_counts']['audio'], 1)
+            self.assertEqual(done['result']['audios'][0]['url'], '/api/results/fixture-music.wav')
+
+            rejected = client.post('/api/studio/hypit/models/projects/project-a/requests', json={
+                'request_id': 'invalid-music-image',
+                'capability': {'module': {'name': '@laohu/studio-models', 'version': '1'}, 'name': 'music-generation'},
+                'constraints': {
+                    'kind': 'music', 'prompt': 'fixture music',
+                    'inputs': {'reference': ['data:image/png;base64,AA==']},
+                },
+            })
+            self.assertEqual(rejected.status_code, 400, rejected.text)
+            self.assertIn('music 能力不支持输入类型', rejected.text)
+            self.assertEqual(len([call for call in self.calls if call[0] == 'generate']), 1)
+
+    def test_model_only_save_clears_stale_parameters_and_request_supplies_values(self):
+        with TestClient(self.app) as client:
+            saved = client.put('/api/studio/hypit/models/settings', json={
+                'parameter_mode': 'per_request',
+                'defaults': {'image': {'provider': 'provider-a', 'model': 'image-1',
+                                       'parameters': {'resolution': 'obsolete-value'}}},
+            })
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()['defaults']['image']['parameters'], {})
+            request = {'request_id': 'per-request-parameters', 'constraints': {
+                'kind': 'image', 'prompt': 'fixture', 'parameters': {'count': 2}}}
+            response = client.post('/api/studio/hypit/models/projects/project-a/requests', json=request)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.wait_for_status(client, 'project-a', request['request_id'], 'succeeded')
+            self.assertEqual(next(call[1] for call in self.calls if call[0] == 'generate')['parameters'], {'count': 2})
+            request['request_id'] = 'invalid-request-parameters'
+            request['constraints']['parameters'] = {'count': 3}
+            response = client.post('/api/studio/hypit/models/projects/project-a/requests', json=request)
+            self.assertEqual(response.status_code, 400, response.text)
 
     def test_request_id_is_idempotent_cross_project_isolated_and_failure_is_not_retried(self):
         with TestClient(self.app) as client:

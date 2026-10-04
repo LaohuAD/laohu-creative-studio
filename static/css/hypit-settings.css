@@ -115,20 +115,87 @@
 
 .hypit-slot-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
 }
 
 .hypit-slot-card {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 13px;
-    padding: 16px;
+    gap: 8px;
+    padding: 10px 12px;
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--panel);
     box-shadow: 0 8px 22px rgba(15, 23, 42, .045);
+}
+.hypit-model-config-fallback { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-bottom:4px; }
+.hypit-model-config-fallback label { display:grid; gap:5px; min-width:0; color:var(--muted); font-size:10px; }
+.hypit-model-config-fallback select { width:100%; min-width:0; height:38px; padding:0 9px; border:1px solid var(--line); border-radius:9px; background:var(--card); color:var(--text); text-align:center; }
+@media(max-width:700px){.hypit-model-config-fallback{grid-template-columns:1fr;}}
+
+/* Hypit 仅配置模型，运行参数由每次复刻请求提供。 */
+.hypit-slot-card .model-config-module { width: 100%; }
+.hypit-slot-card .model-config-module .model-config-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+}
+.hypit-slot-card .model-config-module .model-config-trigger,
+.hypit-slot-card .model-config-module .model-config-summary {
+    width: 100%;
+    max-width: none;
+    min-height: 34px;
+    justify-content: space-between;
+    text-align: left;
+}
+.hypit-slot-card .model-config-module .model-config-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+}
+.hypit-slot-card .model-config-module .model-config-popover.is-module {
+    position: static;
+    width: 100%;
+    /* 外层面板固定；滚动只发生在三个选项列表内部。 */
+    height: auto;
+    max-height: none;
+    overflow: hidden;
+    margin-top: 6px;
+    border-radius: 10px;
+    box-shadow: none;
+}
+.hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-stages {
+    height: 285px;
+    max-height: 285px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hypit-slot-card .model-config-module .model-config-option-label {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-parameters {
+    max-height: 285px;
+    overflow-y: auto;
+}
+
+@media (max-height: 760px) {
+    .hypit-slot-card .model-config-module .model-config-popover.is-module {
+        height: auto;
+        max-height: none;
+    }
+
+    .hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-stages,
+    .hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-parameters {
+        height: 225px;
+        max-height: 225px;
+    }
 }
 
 .hypit-slot-card.is-disabled {
@@ -306,7 +373,6 @@
         flex-direction: column;
     }
 
-    .hypit-slot-grid,
     .hypit-capability-summary,
     .hypit-model-fields,
     .hypit-parameters {

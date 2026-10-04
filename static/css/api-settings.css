@@ -42,6 +42,7 @@ html.studio-theme-dark body .provider-card.provider-card-banner.active { box-sha
 .provider-card-banner .ai-money-icon { width:28px; height:28px; border-radius:6px; object-fit:cover; }
 .provider-card-ai-money .provider-logo-ai-money { width:auto; max-width:100%; display:inline-flex; justify-content:center; gap:10px; }
 .provider-card-ai-money .provider-logo-name { flex:0 0 auto; color:var(--text); font-size:13px; line-height:1; font-weight:900; letter-spacing:0; white-space:nowrap; }
+.provider-card-ai-money .laohu-wordmark { width:72px; height:30px; object-fit:contain; filter:invert(1) brightness(1.7); }
 .provider-card-banner .ms-icon-dark { display:none; }
 body.studio-theme-dark .provider-card-banner .ms-icon-light,
 html.studio-theme-dark body .provider-card-banner .ms-icon-light { display:none; }

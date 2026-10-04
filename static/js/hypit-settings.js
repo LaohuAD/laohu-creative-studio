@@ -1,12 +1,13 @@
 (function () {
     'use strict';
 
-    const SLOTS = ['text', 'image', 'video', 'audio', 'voice'];
+    const SLOTS = ['text', 'image', 'video', 'audio', 'music', 'voice'];
     const NODE_TYPES = {
         text: 'text_generation',
         image: 'image_generation',
         video: 'video_generation',
         audio: 'audio_generation',
+        music: 'music_generation',
         voice: 'audio_generation'
     };
     const SLOT_LABELS = {
@@ -14,9 +15,12 @@
         image: 'hypit.slotImage',
         video: 'hypit.slotVideo',
         audio: 'hypit.slotAudio',
+        music: 'hypit.slotMusic',
         voice: 'hypit.slotVoice'
     };
     const API = '/api/studio/hypit/models';
+    // 画布模型选择器目前不提供这两个平台的生成节点；Hypit 默认设置必须与画布候选保持同一白名单。
+    const CANVAS_EXCLUDED_PROVIDERS = new Set(['modelscope', 'volcengine']);
     const settingsURL = `${API}/settings`;
     const root = document.getElementById('providerSettingsView');
     const layout = document.querySelector('.layout');
@@ -47,12 +51,13 @@
             'hypit.navLabel': 'Hypit',
             'hypit.navMeta': '生成模型',
             'hypit.title': 'Hypit 设置',
-            'hypit.description': '选择各类生成任务使用的模型，自动应用于所有 Hypit 项目的后续生成。',
+            'hypit.description': '选择各类生成任务使用的模型；参数由每次复刻任务按模型要求配置。',
             'hypit.reload': '重新读取',
             'hypit.slotText': '文本生成',
             'hypit.slotImage': '图片生成',
             'hypit.slotVideo': '视频生成',
             'hypit.slotAudio': '音效生成',
+            'hypit.slotMusic': '音乐生成',
             'hypit.slotVoice': '语音生成',
             'hypit.family': '模型',
             'hypit.variant': '模式',
@@ -73,12 +78,13 @@
             'hypit.navLabel': 'Hypit',
             'hypit.navMeta': 'Generation models',
             'hypit.title': 'Hypit settings',
-            'hypit.description': 'Choose the models for future generation in all Hypit projects.',
+            'hypit.description': 'Choose generation models. Each recreation task supplies parameters supported by its model.',
             'hypit.reload': 'Reload',
             'hypit.slotText': 'Text generation',
             'hypit.slotImage': 'Image generation',
             'hypit.slotVideo': 'Video generation',
             'hypit.slotAudio': 'Sound effects',
+            'hypit.slotMusic': 'Music generation',
             'hypit.slotVoice': 'Speech generation',
             'hypit.family': 'Model',
             'hypit.variant': 'Variant',
@@ -101,6 +107,7 @@
     }
 
     function t(key, values) {
+        if (translations[currentLang()][key] === '') return '';
         const base = window.StudioI18n ? window.StudioI18n.t(key) : (translations.zh[key] || key);
         return String(base).replace(/\{(\w+)\}/g, (_, name) => values && values[name] !== undefined ? String(values[name]) : `{${name}}`);
     }
@@ -203,16 +210,64 @@
         }));
     }
 
+    // 槽位候选优先取自目录选项投影（§9.4、§10.5）：与画布共用同一份可执行选项，
+    // 不再在这里各写一套 strict/runnable/节点类型规则，避免两处规则慢慢漂移。
+    function slotOptions(slot) {
+        const slotCatalog = state.catalog?.slot_options;
+        const projected = slotCatalog && Array.isArray(slotCatalog[slot]) ? slotCatalog[slot]
+            : (Array.isArray(state.catalog?.options) ? state.catalog.options : []);
+        if (slotCatalog && !projected.length) return [];
+        if (!projected.length) {
+            // 投影缺失会安静地退回旧推导，曾经导致“以为接上了其实没生效”。
+            // 这里留下可观测痕迹，便于在页面控制台与状态里发现。
+            if (!state.projectionWarningShown) {
+                state.projectionWarningShown = true;
+                state.projectionAvailable = false;
+                console.warn('[hypit-settings] 目录缺少 options 投影，槽位候选回退到旧推导');
+            }
+            return null;
+        }
+        state.projectionAvailable = true;
+        const nodeType = NODE_TYPES[slot];
+        const scoped = projected.filter(option => option.node_type === nodeType
+            && option.runnable === true
+            && option.selectable !== false
+            && !CANVAS_EXCLUDED_PROVIDERS.has(String(option.connection_id || '').trim().toLowerCase()));
+        if (!scoped.length) return [];
+        return scoped.map(option => ({
+            ...option,
+            option_id: option.option_id,
+            provider_id: option.connection_id,
+            provider_name: option.platform_label || option.capability_provider_id || option.connection_id,
+            model_id: option.catalog_model_id,
+            model: option.catalog_model_id,
+            node_type: option.node_type,
+            family_id: option.canonical_family_id,
+            family_name: (option.canonical_family_label || {}).zh || option.canonical_family_id,
+            region: normalizeRegion(option.region_id),
+            runnable: option.runnable,
+            readiness: option.readiness,
+            validation_mode: option.validation_mode,
+            parameters: option.parameters || {},
+            inputs: option.inputs || {},
+            capability_tags: option.capability_tags || []
+        }));
+    }
+
     function enabledModels(slot) {
+        const projected = slotOptions(slot);
+        if (projected) return projected;
         const capability = capabilityFor(slot);
         if (Array.isArray(capability?.models)) {
             return capability.models
-                .filter(model => model && model.model_id && model.runnable === true && model.validation_mode === 'strict')
+                .filter(model => model && model.model_id && model.runnable === true && model.validation_mode === 'strict'
+                    && !CANVAS_EXCLUDED_PROVIDERS.has(String(model.provider_id || '').trim().toLowerCase()))
                 .flatMap(model => expandModel(model, (state.catalog.providers || []).find(provider => provider.id === model.provider_id)));
         }
         const nodeType = NODE_TYPES[slot];
         return (state.catalog.providers || []).flatMap(provider => (provider.models || [])
-            .filter(model => model.node_type === nodeType && model.runnable === true && model.validation_mode === 'strict')
+            .filter(model => model.node_type === nodeType && model.runnable === true && model.validation_mode === 'strict'
+                && !CANVAS_EXCLUDED_PROVIDERS.has(String(provider.id || '').trim().toLowerCase()))
             .flatMap(model => expandModel({ ...model, provider_id: provider.id, provider_name: provider.name || provider.id }, provider)));
     }
 
@@ -383,16 +438,115 @@
             return `<option value="${escapeHtml(value)}"${value === selectionKey(selectedProvider) ? ' selected' : ''}>${escapeHtml(modelLabel(item))}</option>`;
         }).join('');
         const title = t(SLOT_LABELS[slot]);
-        const modelNote = unavailable ? `<div class="hypit-slot-description">${escapeHtml(t('hypit.selectedUnavailable'))}<br><code>${escapeHtml(current.provider)} / ${escapeHtml(current.model)}${current.region ? ` · ${escapeHtml(regionLabel(current.region))}` : ''}</code></div>` : '';
+        const providerName = current.provider === 'ai-money' ? 'laohu' : current.provider;
+        const modelNote = unavailable ? `<div class="hypit-slot-description">${escapeHtml(t('hypit.selectedUnavailable'))}<br><code>${escapeHtml(providerName)} / ${escapeHtml(current.model)}${current.region ? ` · ${escapeHtml(regionLabel(current.region))}` : ''}</code></div>` : '';
         if (!models.length || !families.length) {
             return `<section class="hypit-slot-card is-disabled" data-hypit-slot-card="${escapeHtml(slot)}"><div class="hypit-slot-head"><div><div class="hypit-slot-title">${escapeHtml(title)}</div></div><span class="hypit-slot-status is-warning">${escapeHtml(t('hypit.unavailable'))}</span></div><div class="hypit-empty">${escapeHtml(t('hypit.noModels'))}${modelNote}</div></section>`;
         }
-        return `<section class="hypit-slot-card" data-hypit-slot-card="${escapeHtml(slot)}"><div class="hypit-slot-head"><div><div class="hypit-slot-title">${escapeHtml(title)}</div></div><span class="hypit-slot-status ${status.className}">${escapeHtml(status.text)}</span></div><div class="hypit-model-fields"><label class="hypit-field"><span class="hypit-field-label">${escapeHtml(t('hypit.family'))}</span><select data-hypit-family data-hypit-slot="${escapeHtml(slot)}">${familyOptions}</select></label><label class="hypit-field"><span class="hypit-field-label">${escapeHtml(t('hypit.variant'))}</span><select data-hypit-variant data-hypit-slot="${escapeHtml(slot)}">${variantOptionsHtml}</select></label><label class="hypit-field"><span class="hypit-field-label">${escapeHtml(t('hypit.provider'))}</span><select data-hypit-provider data-hypit-slot="${escapeHtml(slot)}">${providerOptions}</select></label></div>${modelNote}${renderParameters(slot, activeModel)}</section>`;
+        const fallbackControls = `<div class="hypit-model-config-fallback" data-model-config-slot="${escapeHtml(slot)}"><label><span>${escapeHtml(currentLang() === 'en' ? 'Model' : '模型')}</span><select data-hypit-slot="${escapeHtml(slot)}" data-hypit-family="${escapeHtml(slot)}">${familyOptions}</select></label><label><span>${escapeHtml(currentLang() === 'en' ? 'Platform' : '平台')}</span><select data-hypit-slot="${escapeHtml(slot)}" data-hypit-provider="${escapeHtml(slot)}">${providerOptions}</select></label><label><span>${escapeHtml(currentLang() === 'en' ? 'Run mode' : '运行模式')}</span><select data-hypit-slot="${escapeHtml(slot)}" data-hypit-variant="${escapeHtml(slot)}">${variantOptionsHtml}</select></label></div>`;
+        // 公共控件自身包含参数面板；旧的槽位级参数渲染只在公共控件尚未加载时保留，
+        // 避免同一组分辨率、画幅、数量在卡片里出现两次。
+        const legacyParameters = '';
+        return `<section class="hypit-slot-card" data-hypit-slot-card="${escapeHtml(slot)}"><div class="hypit-slot-head"><div><div class="hypit-slot-title">${escapeHtml(title)}</div></div><span class="hypit-slot-status ${status.className}">${escapeHtml(status.text)}</span></div><div class="hypit-model-config" data-model-config-slot="${escapeHtml(slot)}">${fallbackControls}</div>${modelNote}${legacyParameters}</section>`;
+    }
+
+    // Hypit 槽位使用内联公共控件（§16 P6 第 3 项、§9.4）：
+    // 与画布共用同一套三栏选择与参数面板，不维护第二套模型下拉。
+    let slotControls = [];
+
+    function destroySlotControls() {
+        slotControls.forEach(instance => { try { instance.destroy(); } catch (_) {} });
+        slotControls = [];
+    }
+
+    function optionIdForSlot(slot, model, current) {
+        const models = enabledModels(slot);
+        const exact = models.find(item => item.provider_id === current.provider
+            && item.model_id === current.model
+            && normalizeRegion(item.region) === normalizeRegion(current.region));
+        if (exact?.option_id) return exact.option_id;
+        const sameModel = models.filter(item => item.provider_id === current.provider && item.model_id === current.model);
+        if (sameModel.length === 1 && sameModel[0].option_id) return sameModel[0].option_id;
+        return '';
+    }
+
+    function slotOptionsForControl(slot) {
+        return enabledModels(slot).map(model => ({
+            ...model,
+            option_id: model.option_id || '',
+            node_type: NODE_TYPES[slot],
+            operation: model.operation || '',
+            connection_id: model.provider_id,
+            capability_provider_id: model.provider_id,
+            platform_label: model.provider_name || model.provider_id,
+            region_id: normalizeRegion(model.region),
+            catalog_model_id: model.model_id,
+            canonical_family_id: model.family_id || model.model_id,
+            canonical_family_label: {
+                zh: model.family_name || model.family_id || model.model_id,
+                en: model.canonical_family_label?.en || model.family_name_en || model.family_name || model.model_id
+            },
+            readiness: model.readiness || 'ready',
+            runnable: model.runnable !== false,
+            selectable: true,
+            capability_tags: model.capability_tags || [],
+            parameters: model.parameters || {},
+            inputs: model.inputs || {}
+        })).filter(option => option.option_id);
+    }
+
+    function mountSlotControls() {
+        destroySlotControls();
+        if (!slotsEl || !window.mountModelConfigControl) return;
+        SLOTS.forEach(slot => {
+            const host = slotsEl.querySelector(`[data-model-config-slot="${slot}"]`);
+            if (!host) return;
+            const options = slotOptionsForControl(slot);
+            if (!options.length) return;
+            // 挂载公共控件前清空兼容下拉，避免两套选择器重叠并拦截点击。
+            host.replaceChildren();
+            const current = state.settings.defaults[slot] || emptySlot();
+            const instance = window.mountModelConfigControl(host, {
+                context: { host: 'module-settings', moduleId: 'hypit', slotId: slot, phase: 'template' },
+                catalog: { options, profiles: [] },
+                selection: { optionId: optionIdForSlot(slot, options[0], current), parameters: current.parameters || {} },
+                presentation: 'module',
+                modelOnly: true,
+                onCommit: payload => {
+                    const picked = options.find(option => option.option_id === payload.selection.optionId);
+                    if (!picked) return Promise.reject(new Error('选择不属于当前槽位'));
+                    state.settings.defaults[slot] = {
+                        provider: picked.connection_id || '',
+                        model: picked.catalog_model_id || '',
+                        region: normalizeRegion(picked.region_id),
+                        parameters: {}
+                    };
+                    const card = host.closest('.hypit-slot-card');
+                    const status = card?.querySelector('.hypit-slot-status');
+                    if (status) { status.textContent = currentLang() === 'en' ? 'Ready' : '可运行'; status.className = 'hypit-slot-status is-ready'; }
+                    card?.querySelector('.hypit-slot-description')?.remove();
+                    markDirty();
+                    return Promise.resolve();
+                },
+                onParametersChange: payload => {
+                    const latest = state.settings.defaults[slot] || emptySlot();
+                    state.settings.defaults[slot] = {
+                        ...latest,
+                        parameters: Object.assign({}, payload?.parameters || {})
+                    };
+                    markDirty();
+                }
+            });
+            if (instance) slotControls.push(instance);
+        });
     }
 
     function render() {
         ensureDefaults();
-        if (slotsEl) slotsEl.innerHTML = SLOTS.map(renderSlot).join('');
+        if (slotsEl) {
+            slotsEl.innerHTML = SLOTS.map(renderSlot).join('');
+            mountSlotControls();
+        }
         refreshIcons();
     }
 
@@ -426,13 +580,20 @@
         state.loading = true;
         setStatus(t('hypit.loading'));
         try {
-            const [capabilityResponse, settingsResponse] = await Promise.all([
+            const [capabilityResponse, settingsResponse, catalogResponse] = await Promise.all([
                 fetch(`${API}/capabilities`),
-                fetch(settingsURL)
+                fetch(settingsURL),
+                // 统一可执行选项投影（§9.4）：槽位候选与画布共用同一份，不在这里重算规则。
+                fetch('/api/model-capabilities', { cache:'no-store' })
             ]);
             const capabilities = await responseJSON(capabilityResponse);
             state.settings = await responseJSON(settingsResponse);
-            state.catalog = capabilities;
+            const catalogOptions = await responseJSON(catalogResponse);
+            state.catalog = {
+                ...capabilities,
+                options: Array.isArray(catalogOptions?.options) ? catalogOptions.options : [],
+                catalog_revision: catalogOptions?.catalog_revision || ''
+            };
             state.capabilities = Array.isArray(capabilities.supported_capabilities) ? capabilities.supported_capabilities : [];
             state.unsupported = Array.isArray(capabilities.unsupported_capabilities) ? capabilities.unsupported_capabilities : [];
             state.loaded = true;
@@ -463,6 +624,7 @@
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({
                         defaults: snapshot.defaults,
+                        parameter_mode: 'per_request',
                         expected_revision: snapshot.expectedRevision
                     })
                 });
@@ -604,6 +766,20 @@
 
     registerTranslations();
     if (window.StudioI18n) window.StudioI18n.apply(document);
+
+    // 诊断/测试用只读查询：让用例断言“候选数据”而不是渲染出来的 HTML，
+    // 这样槽位 UI 换成公共控件时不会因为标记变化而误报。
+    window.hypitSlotCandidates = slot => enabledModels(slot).map(model => ({
+        option_id: model.option_id || '',
+        provider_id: model.provider_id || '',
+        model_id: model.model_id || '',
+        region: normalizeRegion(model.region),
+        label: modelLabel(model),
+        parameters: model.parameters || {},
+        inputs: model.inputs || {}
+    }));
+    window.hypitSlotSelection = slot => clone(state.settings.defaults[slot] || emptySlot());
+    window.hypitProjectionAvailable = () => state.projectionAvailable === true;
 
     window.openHypitSettings = open;
     window.closeHypitSettings = close;

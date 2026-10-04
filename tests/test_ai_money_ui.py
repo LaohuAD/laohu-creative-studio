@@ -124,7 +124,8 @@ class AiMoneyUiTests(unittest.TestCase):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         styles = (ROOT / "static/css/api-settings.css").read_text(encoding="utf-8")
 
-        self.assertIn('class="provider-logo-name">laohu</span>', script)
+        self.assertIn('src="/static/images/laohu-wordmark.png" alt="laohu" class="laohu-wordmark"', script)
+        self.assertTrue((ROOT / 'static/images/laohu-wordmark.png').is_file())
         self.assertIn(".provider-card-ai-money .provider-logo-ai-money { width:auto;", styles)
 
     def test_api_settings_and_smart_canvas_expose_audio_model_flow(self):

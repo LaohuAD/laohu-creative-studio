@@ -182,7 +182,7 @@ class HypitRuntime:
             profile['endpoints']['studio.models'] = {'use': '@laohu/studio-models',
                 'config': {'projectId': project_id, 'baseURL': self.base_url, 'pollIntervalMs': 1000}}
             profile['bindings'].update({f'@laohu/studio-models@1#{name}': 'studio.models'
-                for name in ('text-generation', 'image-generation', 'video-generation', 'speech-generation', 'audio-generation')})
+                for name in ('text-generation', 'image-generation', 'video-generation', 'speech-generation', 'audio-generation', 'music-generation')})
         if self.profile_provider:
             extra = self.profile_provider(project_id)
             profile['endpoints'].update(extra.get('endpoints', {}))

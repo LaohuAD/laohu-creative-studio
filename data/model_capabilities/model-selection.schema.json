@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "laohu-creative-studio/model-selection.schema.json",
+  "title": "统一模型选择契约（身份索引 / 可执行选项 / 选择记录 / 参数 schema 增量字段）",
+  "description": "依据《老胡创意工作台_统一模型选择与参数配置_V2_执行规划.md》§8.2、§8.3、§8.4、§8.5。规则表达式限定为受限 JSON 表达式，禁止任意脚本（§8.5）。",
+  "$defs": {
+    "localizedLabel": {
+      "type": "object",
+      "properties": {
+        "zh": {"type": "string"},
+        "en": {"type": "string"}
+      },
+      "required": ["zh", "en"],
+      "additionalProperties": false
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "status": {"enum": ["reviewed", "unmapped", "proposed"]},
+        "source_ref": {"type": "string"},
+        "matched_token": {"type": "string"}
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
+    "identityFamily": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "label": {"$ref": "#/$defs/localizedLabel"}
+      },
+      "required": ["id", "label"],
+      "additionalProperties": false
+    },
+    "identityBinding": {
+      "type": "object",
+      "properties": {
+        "match": {
+          "type": "object",
+          "properties": {
+            "capability_provider_id": {"type": "string", "minLength": 1},
+            "model_id": {"type": "string", "minLength": 1},
+            "node_type": {"type": "string", "minLength": 1},
+            "operation": {"type": "string"}
+          },
+          "required": ["capability_provider_id", "model_id", "node_type"],
+          "additionalProperties": false
+        },
+        "canonical_family_id": {"type": "string", "minLength": 1},
+        "model_version": {"type": "string"},
+        "edition_id": {"type": "string"},
+        "display_mode": {"type": "string"},
+        "evidence": {"$ref": "#/$defs/evidence"}
+      },
+      "required": ["match", "canonical_family_id", "evidence"],
+      "additionalProperties": false
+    },
+    "identityDocument": {
+      "type": "object",
+      "properties": {
+        "schema_version": {"const": 1},
+        "families": {"type": "array", "items": {"$ref": "#/$defs/identityFamily"}},
+        "bindings": {"type": "array", "items": {"$ref": "#/$defs/identityBinding"}}
+      },
+      "required": ["schema_version", "families", "bindings"],
+      "additionalProperties": false
+    },
+    "executionOption": {
+      "type": "object",
+      "description": "§8.3 可执行选项。option_id 必须由机器字段的稳定 JSON 编码哈希得到，不得由显示名生成。",
+      "properties": {
+        "schema_version": {"const": 2},
+        "option_id": {"type": "string", "pattern": "^opt_[0-9a-f]{16}$"},
+        "canonical_family_id": {"type": "string", "minLength": 1},
+        "canonical_family_label": {"$ref": "#/$defs/localizedLabel"},
+        "legacy_family_id": {"type": "string"},
+        "model_version": {"type": "string"},
+        "model_version_origin": {"enum": ["", "id_pattern"]},
+        "edition_id": {"type": "string"},
+        "edition_origin": {"enum": ["", "id_token"]},
+        "operation": {"type": "string"},
+        "node_type": {"type": "string", "minLength": 1},
+        "connection_id": {"type": "string", "minLength": 1},
+        "capability_provider_id": {"type": "string", "minLength": 1},
+        "region_id": {"type": "string"},
+        "deployment_id": {"type": "string"},
+        "catalog_model_id": {"type": "string", "minLength": 1},
+        "request_model_id": {"type": "string"},
+        "endpoint_id": {"type": "string"},
+        "profile_revision": {"type": "string"},
+        "adapter_id": {"type": "string"},
+        "output_contract": {"type": "string"},
+        "readiness": {"enum": ["ready", "needs_profile", "adapter_missing", "deprecated", "not_observed", ""]},
+        "evidence_level": {"type": "string"},
+        "identity_mapping_status": {"enum": ["mapped", "provider_local", "unresolved"]},
+        "identity_evidence": {"$ref": "#/$defs/evidence"}
+      },
+      "required": [
+        "schema_version", "option_id", "canonical_family_id", "operation",
+        "node_type", "connection_id", "capability_provider_id",
+        "catalog_model_id", "identity_mapping_status"
+      ],
+      "additionalProperties": true
+    },
+    "modelSelection": {
+      "type": "object",
+      "description": "§8.4 选择记录：只保存稳定标识与参数，不复制整份目录或任何凭据。",
+      "properties": {
+        "schema_version": {"const": 2},
+        "option_id": {"type": "string", "pattern": "^opt_[0-9a-f]{16}$"},
+        "connection_id": {"type": "string", "minLength": 1},
+        "region_id": {"type": "string"},
+        "operation": {"type": "string"},
+        "profile_revision_seen": {"type": ["integer", "string"]},
+        "parameters": {"type": "object"},
+        "parameter_origins": {"type": "object"},
+        "revision": {"type": "integer", "minimum": 0}
+      },
+      "required": ["schema_version", "option_id", "connection_id", "operation", "parameters"],
+      "additionalProperties": false,
+      "not": {
+        "anyOf": [
+          {"required": ["api_key"]},
+          {"required": ["wallet_api_key"]},
+          {"required": ["authorization"]}
+        ]
+      }
+    },
+    "condition": {
+      "type": "object",
+      "description": "受限 JSON 表达式：只允许 eq/in/all/any/not/count_lte，禁止任意代码、Shell 或网络访问（§8.5）。",
+      "properties": {
+        "op": {"enum": ["eq", "in", "all", "any", "not", "count_lte"]},
+        "path": {"type": "string"},
+        "value": {}
+      },
+      "required": ["op"],
+      "additionalProperties": false
+    },
+    "parameterField": {
+      "type": "object",
+      "description": "§8.5 参数 schema 增量字段。显式 required 与旧 level 兼容并存，不得互相冲突。",
+      "properties": {
+        "type": {"enum": ["enum", "integer", "number", "boolean", "string", "text", "model"]},
+        "required": {"type": "boolean"},
+        "min": {"type": "number"},
+        "max": {"type": "number"},
+        "step": {"type": "number", "exclusiveMinimum": 0},
+        "default": {},
+        "unit": {"type": "string"},
+        "options": {"type": "array"},
+        "level": {"enum": ["required", "optional", "advanced"]},
+        "ui": {
+          "type": "object",
+          "properties": {
+            "level": {"enum": ["common", "advanced", "hidden"]},
+            "control": {"enum": ["grid", "segmented", "stepper", "slider", "text", "search", "readonly"]},
+            "order": {"type": "number"}
+          },
+          "additionalProperties": false
+        },
+        "applicable_if": {"$ref": "#/$defs/condition"},
+        "visible_if": {"$ref": "#/$defs/condition"},
+        "enabled_if": {"$ref": "#/$defs/condition"},
+        "required_if": {"$ref": "#/$defs/condition"}
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/identityDocument"},
+    {"$ref": "#/$defs/executionOption"},
+    {"$ref": "#/$defs/modelSelection"}
+  ]
+}

@@ -189,6 +189,8 @@ let runningHubFieldPicker = null;
 let runningHubFieldPickerOpeningEvent = null;
 let runningHubFieldPickerOpeningStamp = null;
 let nodeClipboard = null;
+let smartClipboardIntent = null;
+const SMART_NODE_CLIPBOARD_MIME = 'application/x-laohu-smart-nodes';
 let imageClickTimer = null;
 let suppressImageClickUntil = 0;
 let lastMouseWorld = null;
@@ -485,6 +487,9 @@ function trf(key, values={}){
 function copyTextWithCopyEvent(value){
     let handled = false;
     const onCopy = event => {
+        // Model-ID copy and similar explicit text actions must not be
+        // intercepted by the canvas node clipboard listener.
+        event.stopImmediatePropagation?.();
         event.preventDefault();
         event.clipboardData?.setData('text/plain', value);
         handled = true;
@@ -530,7 +535,7 @@ async function clipboardMatchesText(value){
 async function copyTextToClipboard(text){
     const value = String(text || '');
     if(!value) return false;
-    if(copyTextWithCopyEvent(value) || copyTextWithTextarea(value)){
+    if(copyTextWithTextarea(value) || copyTextWithCopyEvent(value)){
         const verified = await clipboardMatchesText(value);
         return verified !== false;
     }
@@ -1152,6 +1157,27 @@ let smartCapabilityOptionDragState = null;
 const smartCapabilityOptionShiftAnimations = new WeakMap();
 let smartPreferencePointerDragState = null;
 let smartPreferenceDragMoved = false;
+let smartCanvasPersonalizationSaveTimer = null;
+
+async function loadSmartCanvasPersonalization(){
+    let localValue = null;
+    try { localValue = JSON.parse(localStorage.getItem(SMART_CANVAS_PERSONALIZATION_KEY) || 'null'); } catch(e) {}
+    try {
+        const response = await fetch('/api/smart-canvas/personalization', {cache:'no-store'});
+        if(response.ok){
+            const serverValue = await response.json();
+            const serverHasPreferences = serverValue && ['executionLayouts','parameterOptionOrder','modelOrder']
+                .some(key => serverValue[key] && Object.keys(serverValue[key]).length);
+            const localHasPreferences = localValue && ['executionLayouts','parameterOptionOrder','modelOrder']
+                .some(key => localValue[key] && Object.keys(localValue[key]).length);
+            smartCanvasPersonalization = serverHasPreferences || !localHasPreferences ? serverValue : localValue;
+            localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalization));
+            if(!serverHasPreferences && localHasPreferences) saveSmartCanvasPersonalization();
+            return;
+        }
+    } catch(e) {}
+    smartCanvasPersonalization = localValue && typeof localValue === 'object' ? localValue : {};
+}
 
 function smartCanvasPersonalizationStore(){
     if(smartCanvasPersonalization) return smartCanvasPersonalization;
@@ -1168,7 +1194,14 @@ function smartCanvasPersonalizationStore(){
     return smartCanvasPersonalization;
 }
 function saveSmartCanvasPersonalization(){
-    try { localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalizationStore())); } catch(e) {}
+    const value = smartCanvasPersonalizationStore();
+    try { localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(value)); } catch(e) {}
+    clearTimeout(smartCanvasPersonalizationSaveTimer);
+    smartCanvasPersonalizationSaveTimer = setTimeout(() => {
+        fetch('/api/smart-canvas/personalization', {
+            method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(value), keepalive:true
+        }).catch(() => {});
+    }, 180);
 }
 function smartPreferenceScopeKey(kind, ...parts){
     return [kind, ...parts].map(part => String(part ?? '').trim()).join('::');
@@ -3151,7 +3184,7 @@ function renderExecutionPlatformControl(kind=executionPlatformKind(), availableE
     const currentUnavailable = Boolean(selected && current && !entries.some(provider => provider.id === selected));
     const scope = smartPreferenceScopeKey('platforms', executionSelectionDescriptor(activeSettingsSubject())?.nodeType || `${kind}_generation`);
     const orderedEntries = smartOrderedItems(entries, scope, provider => provider.id);
-    const options = `${currentUnavailable ? `<div class="muted-note">${escapeHtml(tr('smart.platformInputMismatch'))}</div>` : ''}${orderedEntries.map(provider => `<button type="button" class="direct-option ${provider.id === selected ? 'active' : ''}" data-execution-platform-option="${escapeAttr(provider.id)}" data-preference-id="${escapeAttr(provider.id)}">${renderPreferenceHandle(scope, provider.id)}<span>${escapeHtml(provider.name || provider.id)}</span></button>`).join('')}`;
+    const options = `${currentUnavailable ? `<div class="muted-note">${escapeHtml(tr('smart.platformInputMismatch'))}</div>` : ''}${orderedEntries.map(provider => `<button type="button" class="direct-option ${provider.id === selected ? 'active' : ''}" data-execution-platform-option="${escapeAttr(provider.id)}" data-preference-id="${escapeAttr(provider.id)}">${renderPreferenceHandle(scope, provider.id)}<span>${escapeHtml(laohuDisplayText(provider.name || provider.id))}</span></button>`).join('')}`;
     return renderExecutionChoiceControl(tr('smart.platform'), 'plug-zap', 'execution-platform-control', options, !entries.length, currentUnavailable, current?.name || current?.id || '');
 }
 function selectExecutionPlatform(providerId){
@@ -3266,12 +3299,25 @@ function capabilityInputRoles(refs=[], promptPresent=true){
     });
     return roles;
 }
-function videoCapabilityInputRoles(refs=[], source=settings, promptPresent=true){
+function videoShouldUseFrameRoles(refs=[], source=settings, profile=null){
     const images = imageRefsOnly(refs);
-    const useFrames = Boolean(source?.videoUseFrameRoles)
-        && images.length === 2
-        && videoRefsOnly(refs).length === 0
-        && audioRefsOnly(refs).length === 0;
+    if(images.length !== 2
+        || videoRefsOnly(refs).length > 0
+        || audioRefsOnly(refs).length > 0) return false;
+    profile = profile || capabilityProfileFor(
+        source?.videoProvider,
+        source?.videoModel,
+        'video_generation',
+        capabilityRegionForProvider(source?.videoProvider, source)
+    );
+    const inputs = profile?.inputs || {};
+    return Number(inputs.first_frame?.max || 0) >= 1 && Number(inputs.last_frame?.max || 0) >= 1;
+}
+function videoCapabilityInputRoles(refs=[], source=settings, promptPresent=true, profile=null){
+    // 模型列表先按媒体类型过滤，不能因当前模型把图片临时解释为首尾帧，
+    // 就把只支持普通参考图的其他模型从候选列表中误删。
+    if(!profile) return capabilityInputRoles(refs, promptPresent);
+    const useFrames = videoShouldUseFrameRoles(refs, source, profile);
     if(!useFrames) return capabilityInputRoles(refs, promptPresent);
     let imageIndex = 0;
     return capabilityInputRoles((refs || []).map(ref => {
@@ -3308,6 +3354,12 @@ function capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles={
 }
 function capabilityProviderConfig(providerId){
     return (apiProviders || []).find(item => item.id === providerId || item.capability_provider_id === providerId) || null;
+}
+function laohuDisplayText(value){
+    return String(value || '')
+        .replace(/laohuaimoney/ig, 'laohu')
+        .replace(/ai[-_ ]money/ig, 'laohu')
+        .replace(/zhenzhen/ig, 'laohu');
 }
 function capabilityProviderEnabled(providerId){
     const provider = capabilityProviderConfig(providerId);
@@ -3374,49 +3426,228 @@ function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operat
 }
 function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation='', inputRoles={}, parameters={}, region=''){
     const providerIds = capabilityEnabledProviderIds(nodeType, region);
-    const families = window.SmartModelCapabilities?.familiesAcrossProviders?.(
-        modelCapabilityCatalog,
-        nodeType,
-        inputCounts,
-        providerIds,
-        operation,
-        inputRoles,
-        parameters,
-        region
-    ) || [];
-    return families.map(family => {
-        const variants = (family.compatible_variants || family.variants || []).filter(variant => (
-            capabilityProviderEnabled(variant.provider_id)
-            && configuredCapabilityModelIds(variant.provider_id, nodeType, region).has(String(variant.model_id || '').trim())
-        ));
-        if(!variants.length) return null;
-        const compatibleVariants = variants.filter(variant => window.SmartModelCapabilities?.modelSupportsInputs(
-            variant,
-            inputCounts,
-            inputRoles,
-            parameters,
-            region
-        ));
-        if(!compatibleVariants.length) return null;
-        return {
-            ...family,
-            variants,
-            compatible_variants:compatibleVariants,
-            provider_ids:[...new Set(compatibleVariants.map(variant => variant.provider_id).filter(Boolean))],
-            providers:[...new Set(compatibleVariants.map(variant => variant.provider_id).filter(Boolean))].map(providerId => {
-                const provider = capabilityProviderConfig(providerId);
-                return {id:providerId, name:provider?.name || providerId, protocol:provider?.protocol || ''};
-            }),
-            resolved_variant:window.SmartModelCapabilities?.resolveFamilyVariant?.(
-                {...family, variants:compatibleVariants},
-                inputCounts,
-                operation,
-                inputRoles,
-                parameters,
-                region
-            ) || null
+    const grouped = new Map();
+    providerIds.forEach(providerId => {
+        capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation, inputRoles, parameters, region).forEach(sourceFamily => {
+            const variants = (sourceFamily.compatible_variants || sourceFamily.variants || []).filter(variant => (
+                capabilityProviderEnabled(variant.provider_id)
+                && configuredCapabilityModelIds(variant.provider_id, nodeType, region).has(String(variant.model_id || '').trim())
+                && capabilityProfileMatchesCurrentInput(variant, nodeType, inputCounts)
+                && window.SmartModelCapabilities?.modelSupportsInputs(variant, inputCounts, inputRoles, parameters, region)
+            ));
+            variants.forEach(variant => {
+                const identity = capabilitySelectionIdentity(variant, nodeType);
+                const key = identity?.canonical_family_id || `${nodeType}::${String(sourceFamily.family_id || '').toLowerCase()}`;
+                let family = grouped.get(key);
+                if(!family){
+                    family = {
+                        ...sourceFamily,
+                        // 跨平台聚合后，选择状态必须使用稳定的规范系列 ID；
+                        // provider-local family 只保留在 aliases 中用于迁移和追踪。
+                        family_id:identity?.canonical_family_id || sourceFamily.family_id,
+                        canonical_family_id:identity?.canonical_family_id || '',
+                        canonical_family_label:identity?.canonical_family_label || null,
+                        display_name:identity?.canonical_family_label?.zh || sourceFamily.display_name || sourceFamily.family_name,
+                        display_name_en:identity?.canonical_family_label?.en || sourceFamily.display_name_en || sourceFamily.family_name_en,
+                        family_aliases:[], variants:[], compatible_variants:[], provider_ids:[], providers:[], resolved_variant:null
+                    };
+                    grouped.set(key, family);
+                }
+                family.family_aliases = [...new Set([...(family.family_aliases || []), sourceFamily.family_id])];
+                const existingIndex = family.compatible_variants.findIndex(item => item.provider_id === variant.provider_id && item.model_id === variant.model_id);
+                if(existingIndex >= 0) return;
+                const presented = identity ? {
+                    ...variant,
+                    canonical_family_id:identity.canonical_family_id,
+                    canonical_family_label:identity.canonical_family_label,
+                    display_mode:identity.display_mode || variant.display_mode || ''
+                } : variant;
+                family.variants.push(presented);
+                family.compatible_variants.push(presented);
+                if(!family.provider_ids.includes(variant.provider_id)){
+                    family.provider_ids.push(variant.provider_id);
+                    const provider = capabilityProviderConfig(variant.provider_id);
+                    family.providers.push({id:variant.provider_id, name:provider?.name || variant.provider_id, protocol:provider?.protocol || ''});
+                }
+            });
+        });
+    });
+    return [...grouped.values()].map(family => {
+        family.resolved_variant = window.SmartModelCapabilities?.resolveFamilyVariant?.(
+            {...family, variants:family.compatible_variants}, inputCounts, operation, inputRoles, parameters, region
+        ) || null;
+        return family;
+    }).sort((left, right) => String(left.canonical_family_label?.zh || left.display_name || left.family_id).localeCompare(String(right.canonical_family_label?.zh || right.display_name || right.family_id)));
+}
+function capabilitySelectionIdentity(profile, nodeType=''){
+    const providerId = String(profile?.provider_id || '').trim();
+    const modelId = String(profile?.model_id || '').trim();
+    if(!providerId || !modelId) return null;
+    const normalizedModelId = modelId.toLowerCase();
+    // 审核目录已经逐条绑定真实 ID、节点类型与 operation；先用它，避免旧平台家族名
+    // 把 Luma Max、Nano Banana Pro 或即梦 CLI 重新拆成独立模型。
+    const profileConnectionId = String(profile?.connection_id || '').trim();
+    const capabilityProviderId = String(profile?.capability_provider_id || (providerId === 'jimeng' ? 'jimeng-cli' : providerId)).trim();
+    const matches = (typeof modelCapabilityCatalog === 'undefined' ? [] : (modelCapabilityCatalog.options || [])).filter(option => (
+        (option.capability_provider_id === capabilityProviderId || option.connection_id === providerId
+            || (profileConnectionId && option.connection_id === profileConnectionId))
+        && option.catalog_model_id === modelId
+        && (!nodeType || option.node_type === nodeType)
+        && (!profile.operation || !option.operation || option.operation === profile.operation)
+    ));
+    const option = matches.find(item => !profile.region || !item.region_id || item.region_id === profile.region) || matches[0];
+    if(option?.canonical_family_id && !option.canonical_family_id.startsWith('provider-local:')) return {
+        canonical_family_id:option.canonical_family_id,
+        canonical_family_label:option.canonical_family_label || null,
+        display_mode:option.display_mode || option.display_label?.zh || ''
+    };
+    // 只修补当前身份档案未覆盖或映射错误的家族；已正确归类的档案仍沿用原结果。
+    // 真实 ID 优先于 provider family/display name，避免错误标签把模型归到别家。
+    if(nodeType === 'image_generation'){
+        if((providerId === 'jimeng-cli' && /^\d+(?:\.\d+)*(?:pro)?$/i.test(modelId))
+            || /(^|[/_-])(?:jimeng|dreamina)(?:[/_.-]|$)|即梦/.test(normalizedModelId)){
+            return {canonical_family_id:'series-image-seedream', canonical_family_label:{zh:'Seedream',en:'Seedream'}, display_mode:''};
+        }
+        if(/nano[-_ ]?banana|全能图片\s*g/i.test(normalizedModelId)){
+            return {canonical_family_id:'series-image-nano-banana', canonical_family_label:{zh:'Nano Banana',en:'Nano Banana'}, display_mode:''};
+        }
+        if(/(^|[/_-])grok(?:[/_-]|$)|xai\/grok-imagine/.test(normalizedModelId) || /^laohu-image-g(?:2|[-_])/.test(normalizedModelId)){
+            return {canonical_family_id:'series-image-grok-image', canonical_family_label:{zh:'Grok Image',en:'Grok Image'}, display_mode:''};
+        }
+        if(/qwen[-_/ ]?image|qwen\/qwen-image/.test(normalizedModelId)){
+            return {canonical_family_id:'series-image-qwen-image', canonical_family_label:{zh:'Qwen Image',en:'Qwen Image'}, display_mode:''};
+        }
+    }
+    if(nodeType === 'video_generation'){
+        if(/(^|[/_-])wan(?:[/_.-]|$)|万相/.test(normalizedModelId)){
+            return {canonical_family_id:'wan-video', canonical_family_label:{zh:'Wan',en:'Wan'}, display_mode:''};
+        }
+        if(/(^|[/_-])sora(?:[/_.-]|$)|全能视频s|omni-video-s/.test(normalizedModelId)){
+            return {canonical_family_id:'series-video-sora', canonical_family_label:{zh:'Sora',en:'Sora'}, display_mode:''};
+        }
+        if(/(^|[/_-])grok(?:[/_.-]|$)|xai\/grok-imagine|laohu-video-gk/.test(normalizedModelId)){
+            return {canonical_family_id:'series-video-grok', canonical_family_label:{zh:'Grok',en:'Grok'}, display_mode:''};
+        }
+        // Hailuo/H3 是 MiniMax 的具体视频模型/版本，使用既有 MiniMax 视频 family。
+        if(/minimax|hailuo|海螺/.test(normalizedModelId)){
+            return {canonical_family_id:'series-video-minimax', canonical_family_label:{zh:'MiniMax',en:'MiniMax'}, display_mode:''};
+        }
+        if(/happy[-_ ]?horse/.test(normalizedModelId)){
+            return {canonical_family_id:'series-video-happyhorse', canonical_family_label:{zh:'HappyHorse',en:'HappyHorse'}, display_mode:''};
+        }
+    }
+    if(nodeType === 'text_generation' && /(^|[/_-])qwen(?:[/_-]|$)/.test(normalizedModelId)){
+        return {canonical_family_id:'series-text-qwen', canonical_family_label:{zh:'Qwen',en:'Qwen'}, display_mode:''};
+    }
+    // Grok image IDs exist on several providers and must never inherit a provider-local
+    // GPT Image family merely because both use the same image operation.
+    // laohu-image-g / grok-* are the same Grok Image family. Check this
+    // before GPT Image aliases so the provider prefix cannot misclassify it.
+    if(nodeType === 'image_generation' && (/(^|[/_-])grok([/_-]|$)/.test(normalizedModelId) || /^laohu-image-g(?:2|[-_])/.test(normalizedModelId))){
+        return {canonical_family_id:'series-image-grok-image', canonical_family_label:{zh:'Grok Image',en:'Grok Image'}, display_mode:''};
+    }
+    if(nodeType === 'image_generation' && /(^|[/_-])gpt[-_]?image([/_-]|$)/.test(normalizedModelId)){
+        return {canonical_family_id:'series-image-gpt-image', canonical_family_label:{zh:'GPT Image',en:'GPT Image'}, display_mode:''};
+    }
+    // 某些平台把同一系列写成独立的 provider family（例如 Seedance 2.0、
+    // Seedance 2.5 和即梦 CLI 的 seedance2.0），但这些条目仍应在模型栏
+    // 合并，平台和运行模式由后两栏区分。能力选项缺少映射时使用稳定的
+    // 系列关键词兜底，避免同名模型因平台字段差异再次分裂。
+    const familyText = [
+        profile?.family_id, profile?.family_name, profile?.family_name_en,
+        profile?.display_name, profile?.display_name_en, modelId
+    ].filter(Boolean).join(' ').toLowerCase();
+    if(String(normalizedModelId).toLowerCase() === 'auto' && /antigravity/.test(String(providerId || '').toLowerCase())){
+        return {canonical_family_id:'antigravity', canonical_family_label:{zh:'antigravity',en:'antigravity'}, display_mode:''};
+    }
+    // These video brands arrive under multiple provider-local family labels
+    // (for example Kling O1/O3 and PixVerse C1). Keep their identity stable
+    // even when a catalog refresh temporarily omits an explicit mapping.
+    const reviewedVideoFamilies = [
+        [/\bvidu\b|维度/i, 'series-video-vidu', 'Vidu'],
+        [/\bkling\b|可灵/i, 'series-video-kling', 'Kling'],
+        [/\bpix\s?verse\b|\bpixverse\b|\bpixverse\s+c1\b/i, 'series-video-pixverse', 'PixVerse']
+    ];
+    if(nodeType === 'video_generation'){
+        const match = reviewedVideoFamilies.find(([pattern]) => pattern.test(familyText));
+        if(match) return {canonical_family_id:match[1], canonical_family_label:{zh:match[2],en:match[2]}, display_mode:''};
+    }
+    const inferredFamilies = [
+        [nodeType === 'video_generation' && /seedance/.test(familyText), 'series-video-seedance', 'Seedance'],
+        [nodeType === 'video_generation' && /\bsora\b|全能视频s|omni-video-s/.test(familyText), 'series-video-sora', 'Sora'],
+        [nodeType === 'video_generation' && /\bwan\b|万相/.test(familyText), 'wan-video', 'Wan'],
+        [nodeType === 'image_generation' && /seedream|dola[-_ ]?seedream/.test(familyText), 'series-image-seedream', 'Seedream'],
+        [nodeType === 'music_generation' && /suno/.test(familyText), 'series-music-suno', 'Suno'],
+        [nodeType === 'audio_generation' && /minimax/.test(familyText), 'series-audio-minimax-speech', 'MiniMax 语音'],
+        [nodeType === 'music_generation' && /minimax/.test(familyText), 'series-music-minimax', 'MiniMax'],
+        [nodeType === 'video_generation' && /minimax[-_ ]?h3|hailuo|海螺/.test(familyText), 'series-video-minimax', 'MiniMax']
+    ];
+    const inferred = inferredFamilies.find(item => item[0]);
+    if(inferred) return {canonical_family_id:inferred[1], canonical_family_label:{zh:inferred[2],en:inferred[2]}, display_mode:''};
+    // 文本节点只保留可对话/多模态文本模型的九类正式家族。
+    // 这里按真实模型 ID 归类，不能让平台内部 family 名把 g5/g6、gk、gm 拆成独立项。
+    if(nodeType === 'text_generation'){
+        const textIdentity = [
+            [/deepseek/i, 'series-text-deepseek', 'DeepSeek'],
+            [/(^|[/_.-])(?:glm|zhipu)(?:[/_.-]|$)/i, 'series-text-glm', 'GLM'],
+            [/(^|[/_.-])(?:kimi|moonshot)(?:[/_.-]|$)/i, 'series-text-kimi', 'Kimi'],
+            [/(^|[/_.-])(?:qwen)(?:[/_.-]|$)/i, 'series-text-qwen', 'Qwen'],
+            [/(^|[/_.-])(?:minimax|minmax)(?:[/_.-]|$)/i, 'series-text-minimax', 'MiniMax'],
+            [/(^|[/_.-])(?:grok)(?:[/_.-]|$)|(?:^|[/_.-])gk(?:[/_.-]|$)/i, 'series-text-grok', 'Grok'],
+            [/(^|[/_.-])(?:gemini)(?:[/_.-]|$)|(?:^|[/_.-])gm(?:[/_.-]|$)/i, 'series-text-gemini', 'Gemini'],
+            [/doubao|bytedance[/_.-]doubao/i, 'series-text-doubao-seed', '豆包'],
+            [/(^|[/_.-])gpt(?:[/_.-]|$)|openai[/_.-]gpt|(?:^|[/_.-])g[56](?:[/_.-]|$)/i, 'series-text-gpt', 'GPT']
+        ];
+        const textMatch = textIdentity.find(([pattern]) => pattern.test(normalizedModelId))
+            || textIdentity.find(([pattern]) => pattern.test(familyText));
+        if(textMatch) return {
+            canonical_family_id:textMatch[1],
+            canonical_family_label:{zh:textMatch[2],en:textMatch[2] === '豆包' ? 'Doubao' : textMatch[2]},
+            display_mode:''
         };
-    }).filter(Boolean).sort((left, right) => String(left.family_id || '').localeCompare(String(right.family_id || '')));
+    }
+    // 能力档案没有显式 identity 时，至少按同一节点类型的正式 family_name
+    // 合并跨平台条目。版本、渠道和操作会留在运行模式，不再制造第二个模型。
+    const familyName = String(profile?.family_name || profile?.family_name_en || profile?.display_name || profile?.display_name_en || '').trim();
+    if(familyName && !/^(auto|unknown|default|provider-local[:/])/i.test(familyName)){
+        const normalizedFamily = familyName
+            .replace(/^(?:ai[-_ ]?money|laohuaimoney|zhenzhen|laohu|runninghub|jimeng)[-_: /]+/i, '')
+            .replace(/\b(?:v|ver|version)[ ._-]*\d+(?:\.\d+)*\b/gi, '')
+            .replace(/\s+\d+(?:\.\d+)*\b/g, '')
+            .replace(/[^\p{L}\p{N}]+/gu, ' ')
+            .trim();
+        const slug = normalizedFamily.toLowerCase().replace(/\s+/g, '-');
+        if(slug) return {canonical_family_id:`series-${nodeType.replace(/_generation$/, '')}-${slug}`, canonical_family_label:{zh:normalizedFamily,en:normalizedFamily}, display_mode:''};
+    }
+    if(nodeType === 'text_generation'){
+        if(normalizedModelId === 'auto' && providerId === 'gemini-cli'){
+            return {canonical_family_id:'series-text-gemini', canonical_family_label:{zh:'Gemini',en:'Gemini'}, display_mode:'跟随当前 CLI 配置'};
+        }
+        if(/^gpt[-_/]|^openai\/gpt|^laohu\/g(?:\d|pt)/.test(normalizedModelId) || (normalizedModelId === 'auto' && providerId === 'codex-cli')){
+            return {canonical_family_id:'series-text-gpt', canonical_family_label:{zh:'GPT',en:'GPT'}, display_mode:''};
+        }
+        if(/doubao[-_/].*seed|bytedance\/doubao/.test(normalizedModelId)){
+            return {canonical_family_id:'series-text-doubao-seed', canonical_family_label:{zh:'豆包',en:'Doubao'}, display_mode:''};
+        }
+    }
+    if(!option && nodeType === 'text_generation'){
+        const normalized = normalizedModelId;
+        let canonicalFamilyId = '';
+        let label = '';
+        if(/^gpt[-_/]|^openai\/gpt|^laohu\/g(?:\d|pt)/.test(normalized) || (normalized === 'auto' && providerId === 'codex-cli')){
+            canonicalFamilyId = 'series-text-gpt'; label = 'GPT';
+        } else if(/doubao[-_/].*seed|bytedance\/doubao/.test(normalized)){
+            canonicalFamilyId = 'series-text-doubao-seed'; label = '豆包';
+        } else if(normalized === 'auto' && providerId === 'gemini-cli'){
+            canonicalFamilyId = 'series-text-gemini'; label = 'Gemini';
+        }
+        if(canonicalFamilyId) return {canonical_family_id:canonicalFamilyId, canonical_family_label:{zh:label,en:label}, display_mode:''};
+    }
+    return option ? {
+        canonical_family_id:option.canonical_family_id || '',
+        canonical_family_label:option.canonical_family_label || null,
+        display_mode:option.display_mode || option.display_label?.zh || ''
+    } : null;
 }
 function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, region=''){
     const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId) || null;
@@ -3446,8 +3677,21 @@ function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, fam
     };
 }
 function capabilityPickerVariantKey(variant){
-    return window.SmartModelCapabilities?.variantSelectionKey?.(variant)
-        || [variant?.variant_id, variant?.variant_name, variant?.variant_name_en, variant?.model_id].filter(Boolean).join('::');
+    // Run modes are shared across platforms. Keep distinct operation/mode/
+    // version combinations, but don't create duplicate rows per provider ID.
+    const operation = String(variant?.operation || '').trim().toLowerCase();
+    const mode = String(variant?.display_mode || variant?.variant_name || variant?.variant_name_en || '').trim().toLowerCase();
+    let version = String(variant?.model_version || variant?.version || '').trim().toLowerCase();
+    // Recover explicit family versions when a provider omitted reviewed fields.
+    if(!version){
+        const id = String(variant?.model_id || '').trim().toLowerCase();
+        const match = id.match(/(?:seedream|dola[-_]?seedream)[-_/]?(v?\d+(?:\.\d+)?(?:[-_](?:pro|lite|standard|turbo|fast))?)/i)
+            || id.match(/(?:suno[-_](?:custom|single))[-_]?((?:v)?\d+(?:\.\d+)?)/i);
+        if(match) version = match[1];
+    }
+    const stable = [operation, mode, version].filter(Boolean).join('::');
+    return stable || window.SmartModelCapabilities?.variantSelectionKey?.(variant)
+        || [variant?.variant_id, variant?.model_id].filter(Boolean).join('::');
 }
 function capabilityPickerVariantGroups(family, preferredProviderId=''){
     const groups = new Map();
@@ -3498,17 +3742,38 @@ function capabilityPickerPlatformEntries(profiles=[], nodeType=''){
     });
     return entries;
 }
-function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, preferredProviderId='', preferredVariantKey=''){
+function capabilityProfileMatchesCurrentInput(profile, nodeType, inputCounts={}){
+    const operation = String(profile?.operation || '').trim().toLowerCase().replace(/-/g, '_');
+    const lifecycleText = [profile?.model_id, profile?.variant_name, profile?.display_mode].filter(Boolean).join(' ').toLowerCase();
+    if(/\bdeprecated\b|已废弃|已下线/.test(lifecycleText)) return false;
+    // 此文本模型选择器展示聊天、Agent 和提示词增强；转写、图像描述、
+    // 文生 3D 等专用工具仍保留能力档案，不冒充九类文本模型。
+    if(nodeType === 'text_generation' && !['chat', 'chat_or_agent_text', 'multimodal_chat', 'prompt_enhancement'].includes(operation)) return false;
+    const count = type => Math.max(0, Number(inputCounts?.[type]) || 0);
+    // 混合模式由能力档案的可选输入决定，不能因名称含 image_to_image 就要求先接图片。
+    if(nodeType === 'image_generation' && /^(text_to_image_or_image_to_image|text_or_image_to_image)$/.test(operation)) return true;
+    if(nodeType === 'video_generation' && /^(text_to_video_or_image_to_video|text_or_image_to_video)$/.test(operation)) return true;
+    // Operation names are part of the execution contract. Do not expose an edit/reference mode
+    // when the node does not currently contain the input that mode requires.
+    if(nodeType === 'image_generation' && /(^|_)(image|reference)_to_image|image_edit|inpaint|outpaint|region_edit/.test(operation)) return count('image') > 0;
+    if(nodeType === 'video_generation' && /image_to_video|start_end_to_video|reference_to_video|multimodal_to_video/.test(operation)) return count('image') > 0;
+    if(nodeType === 'video_generation' && /video_to_video/.test(operation)) return count('video') > 0;
+    if(nodeType === 'audio_generation' && /audio_to_audio|voice_clone/.test(operation)) return count('audio') > 0;
+    return true;
+}
+function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, preferredProviderId='', preferredVariantKey='', preferredRegionOverride=''){
     const families = capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation, inputRoles, parameters);
-    const preferredRegion = preferredProviderId === 'runninghub' ? capabilityRegionForProvider(preferredProviderId, settings) : '';
+    const preferredRegion = preferredProviderId === 'runninghub'
+        ? normalizeRunningHubRegion(preferredRegionOverride || capabilityRegionForProvider(preferredProviderId, settings), runningHubRegion(settings))
+        : '';
     const requestedModelId = String(legacyModelId || '').trim();
     const legacyFamily = requestedModelId
         ? families.find(family => (family.compatible_variants || []).some(variant => variant.model_id === requestedModelId))
         : null;
     const requestedFamilyId = String(familyId || '').trim();
-    const requestedFamilyExists = requestedFamilyId && families.some(item => item.family_id === requestedFamilyId);
     // 旧 family_id 可能来自 provider 专属档案；已有真实 model_id 时优先用它恢复所属家族。
-    const requestedId = String((requestedFamilyExists ? requestedFamilyId : legacyFamily?.family_id || requestedFamilyId) || '').trim();
+    // 真实 model_id 的归属优先于旧 family_id，避免模型已迁移到 Grok Image 后仍显示旧 GPT Image 家族。
+    const requestedId = String(legacyFamily?.family_id || requestedFamilyId || '').trim();
     const requestedFamily = families.find(item => item.family_id === requestedId) || null;
     const defaultFamily = requestedFamily || families.find(item => capabilitySafeDefaultProfileForFamily(item)) || families[0] || null;
     const family = requestedFamily || (!requestedId ? defaultFamily : null);
@@ -3647,8 +3912,32 @@ function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={
         || previous.model !== target[descriptor.modelKey];
 }
 function capabilityFamilyLabel(family){
-    if(window.StudioI18n?.lang?.() === 'en') return family?.display_name_en || family?.display_name || family?.family_name_en || family?.family_name || family?.family_id || '';
-    return family?.display_name || family?.family_name || family?.display_name_en || family?.family_name_en || family?.family_id || '';
+    const isEnglish = window.StudioI18n?.lang?.() === 'en';
+    const canonical = family?.canonical_family_label || family?.identity_label || {};
+    const providerText = (family?.providers || []).map(item => `${item?.id || ''} ${item?.name || ''}`).join(' ');
+    if(/^(auto|自动选择)$/i.test(String(family?.family_name || family?.display_name || family?.family_id || '').trim())
+        && /antigravity/i.test(providerText)) return 'Antigravity';
+    const canonicalLabel = isEnglish ? (canonical.en || canonical.zh) : (canonical.zh || canonical.en);
+    if(canonicalLabel && !/^provider-local[:/]/i.test(canonicalLabel)) return laohuDisplayText(canonicalLabel);
+    const preferred = isEnglish
+        ? (canonical.en || family?.display_name_en || family?.display_name || family?.family_name_en || family?.family_name)
+        : (canonical.zh || family?.display_name || family?.family_name || family?.display_name_en || family?.family_name_en);
+    const raw = String(family?.family_id || family?.family_name || '').trim();
+    const cleaned = raw
+        .replace(/^provider-local:[^:]+:/i, '')
+        .replace(/^(?:ai[-_ ]?money|laohuaimoney|zhenzhen|laohu)[-_: /]+/i, '')
+        .replace(/^[^/]+\//, '');
+    const aliases = [
+        [/seedance/i, 'Seedance'], [/seedream|jimeng/i, 'Seedream'], [/deepseek/i, 'DeepSeek'],
+        [/minimax/i, 'MiniMax'], [/hailuo|全能视频/i, '海螺'], [/kling/i, 'Kling'], [/vidu/i, 'Vidu'],
+        [/wan|万相/i, 'Wan'], [/sora|全能视频s|omni-video-s/i, 'Sora'], [/qwen/i, 'Qwen'], [/grok(?:[-_ ]?image)?/i, 'Grok Image'], [/midjourney/i, 'Midjourney'], [/gpt[-_ ]?image/i, 'GPT Image'],
+        [/nano[-_ ]?banana/i, 'Nano Banana'], [/doubao|bytedance/i, '豆包'], [/glm/i, 'GLM'],
+        [/kimi/i, 'Kimi'], [/claude/i, 'Claude'], [/gemini/i, 'Gemini'], [/suno/i, 'Suno'],
+        [/mureka/i, 'Mureka'], [/flowmusic/i, 'FlowMusic'], [/whisper/i, 'Whisper']
+    ];
+    const alias = aliases.find(([pattern]) => pattern.test(cleaned));
+    const preferredLabel = laohuDisplayText(preferred);
+    return alias ? alias[1] : (preferredLabel && !/^provider-local[:/]/i.test(preferredLabel) && !preferredLabel.includes('/') ? preferredLabel : laohuDisplayText(cleaned || (family?.family_id || '')));
 }
 function renderCapabilityFamilyControl(families, settingKey, selectedId, icon='box'){
     const selected = (families || []).find(item => item.family_id === selectedId) || (!selectedId ? families?.[0] : null) || null;
@@ -3710,10 +3999,49 @@ function capabilityUiText(zh, en){
 }
 function capabilityVariantLabel(variant){
     const modelId = String(variant?.model_id || '').trim().toLowerCase();
+    const isEnglish = window.StudioI18n?.lang?.() === 'en';
+    if(variant?.node_type === 'text_generation'){
+        if(modelId === 'auto') return /antigravity/i.test(String(variant?.provider_id || variant?.platform_id || ''))
+            ? 'antigravity'
+            : capabilityUiText('跟随当前 CLI 配置','Use current CLI configuration');
+        let parts = modelId
+            .replace(/^openai\//, '').replace(/^bytedance\/doubao-/, '').replace(/^doubao-/, '')
+            // 平台缩写不应泄露到运行模式：g5/g6 是 GPT 版本，gk 是 Grok，gm 是 Gemini。
+            .replace(/^laohu\/g([56])(?=\.)/, '$1')
+            .replace(/^laohu\/g(?:k|m)[-_\/]?/, '')
+            .replace(/^laohu\/g([56])[-_\/]/, '$1-')
+            .replace(/^gpt-/, '')
+            .split(/[-_/]+/).filter(Boolean);
+        const familyTokens = String(variant?.canonical_family_label?.en || variant?.family_name_en || variant?.family_name || '')
+            .toLowerCase().split(/[^a-z0-9.]+/).filter(Boolean);
+        while(parts.length && (familyTokens.includes(parts[0]) || ['qwen','gpt','gemini','grok','deepseek','glm','kimi','minimax','minmax','doubao','seed'].includes(parts[0]))) parts.shift();
+        const cleaned = parts.map(part => /^(cli|api|ai)$/.test(part) ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1)).join(' · ');
+        return cleaned || capabilityUiText('标准模式','Standard');
+    }
+    if(variant?.display_mode && !/^(chat|chat_or_agent_text|对话|文本对话)$/i.test(String(variant.display_mode).trim())){
+        // 身份目录的审核名称目前为中文；英文界面使用同一精确档案生成的英文模式名。
+        if(isEnglish && variant?.variant_name_en) return String(variant.variant_name_en).trim();
+        const familyLabels = [variant?.canonical_family_label?.zh, variant?.canonical_family_label?.en, variant?.family_name, variant?.family_name_en]
+            .map(value => String(value || '').trim()).filter(Boolean);
+        let label = String(variant.display_mode).trim();
+        familyLabels.forEach(family => { label = label.replace(new RegExp(`^${family.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ ·:_/-]*`, 'i'), ''); });
+        const versionMatch = modelId.match(/(?:^|[/_-])(?:v|ver(?:sion)?[-_]?)?(\d+(?:\.\d+)?)(?=[/_-]|$)/i);
+        const hasVersion = /(?:^|[ ·_-])v?\d+(?:\.\d+)?(?:$|[ ·_-])/i.test(label);
+        if(versionMatch && !hasVersion) label = `${versionMatch[1]} · ${label}`;
+        return label;
+    }
     const suno = SUNO_ACTION_INFO[modelId];
     if(suno) return capabilityUiText(suno.zhTitle, suno.enTitle);
-    if(window.StudioI18n?.lang?.() === 'en') return variant?.variant_name_en || variant?.variant_name || variant?.display_name || variant?.label || variant?.model_id || variant?.variant_id || '';
-    return variant?.variant_name || variant?.variant_name_en || variant?.display_name || variant?.label || variant?.model_id || variant?.variant_id || '';
+    const raw = String((window.StudioI18n?.lang?.() === 'en'
+        ? (variant?.variant_name_en || variant?.variant_name || variant?.display_name || variant?.label || variant?.model_id || variant?.variant_id)
+        : (variant?.variant_name || variant?.variant_name_en || variant?.display_name || variant?.label || variant?.model_id || variant?.variant_id)) || '');
+    const parts = raw.replace(/\[[^\]]*(?:deprecated|废弃)[^\]]*\]/ig, '').split(/[\/_-]+/).filter(Boolean);
+    const translations = window.StudioI18n?.lang?.() === 'en' ? {} : {
+        text:'文生', image:'图像', video:'视频', audio:'音频', to:'转', official:'官方', stable:'稳定版',
+        channel:'渠道', low:'低价', price:'版', edit:'编辑', reference:'参考', fast:'快速', pro:'专业版', lite:'轻量版'
+    };
+    const concise = parts.map(part => translations[part.toLowerCase()] || part).join(' · ').replace(/文生 · 转 · 图像/g,'文生图').replace(/图像 · 转 · 图像/g,'图生图');
+    return concise;
 }
 function renderCapabilityVariantControl(selection, settingKey){
     selection = selection || {};
@@ -3738,7 +4066,7 @@ function renderCapabilityVariantControl(selection, settingKey){
 }
 function capabilityPickerProviderLabel(providerId, profile=null){
     const provider = capabilityProviderConfig(providerId);
-    return provider?.name || profile?.provider_name || profile?.providerId || profile?.provider_id || providerId || '';
+    return laohuDisplayText(provider?.name || profile?.provider_name || profile?.providerId || profile?.provider_id || providerId || '');
 }
 function capabilityPickerSearchMatches(value, query){
     return window.SmartModelCapabilities?.matchesSearch
@@ -3803,7 +4131,10 @@ function renderCapabilityPickerOption(stage, value, label, searchText, active=fa
     const badgeMarkup = badges.length
         ? `<span class="capability-picker-option-badges">${badges.map(badge => `<span class="capability-picker-option-badge">${escapeHtml(badge)}</span>`).join('')}</span>`
         : '';
-    return `<button type="button" class="capability-picker-option ${active ? 'active' : ''}" data-capability-picker-option data-capability-picker-search-text="${escapeAttr(searchText)}" ${attributes} title="${escapeAttr(searchText)}"><span class="capability-picker-option-main"><span class="capability-picker-option-label">${escapeHtml(label)}</span></span>${badgeMarkup}</button>`;
+    // 三栏都在左侧统一放置拖动手柄；运行模式不再把手柄挤到标题右侧。
+    const scope = smartPreferenceScopeKey('picker', stage);
+    // 不把完整搜索串放进浏览器原生 title，避免悬停时弹出重复且过长的技术提示。
+    return `<button type="button" class="capability-picker-option ${active ? 'active' : ''}" data-capability-picker-option data-preference-id="${escapeAttr(value)}" data-capability-picker-search-text="${escapeAttr(searchText)}" ${attributes} aria-label="${escapeAttr(label)}">${renderPreferenceHandle(scope, value)}<span class="capability-picker-option-main"><span class="capability-picker-option-label">${escapeHtml(label)}</span></span>${badgeMarkup}</button>`;
 }
 function renderCapabilityPickerStage(stage, index, label, options, emptyText){
     return `<section class="capability-picker-stage capability-picker-stage-${escapeAttr(stage)}" data-capability-picker-stage="${escapeAttr(stage)}">
@@ -3815,6 +4146,7 @@ function renderCapabilityModelPicker(selection, descriptor=null){
     selection = selection || {};
     descriptor = descriptor || executionSelectionDescriptor(activeSettingsSubject());
     const nodeType = descriptor?.nodeType || '';
+    const pickerInputState = executionSelectionInputState(activeSettingsSubject(), descriptor);
     const familyScope = smartPreferenceScopeKey('families', nodeType);
     const variantScope = smartPreferenceScopeKey('variants', nodeType, selection.family?.family_id || '');
     const selectedFamily = selection.family || null;
@@ -3845,13 +4177,23 @@ function renderCapabilityModelPicker(selection, descriptor=null){
         familyScope,
         family => family.family_id
     );
-    const familyOptions = families.map(family => {
+    const usableFamilies = families.filter(family => {
+        const profiles = (family.compatible_variants || family.variants || []).filter(profile => capabilityProfileMatchesCurrentInput(profile, nodeType, pickerInputState.inputCounts));
+        if(!profiles.length) return false;
+        // A family with no configured provider/region must not appear as a selectable model.
+        const platforms = capabilityPickerPlatformEntries(profiles, nodeType);
+        return platforms.some(entry => capabilityPickerVariantGroups({...family, compatible_variants:profiles}, entry.id).length > 0);
+    });
+    const familyOptions = usableFamilies.map(family => {
         const label = capabilityFamilyLabel(family);
         const searchText = [label, family.family_id, family.family_name, family.display_name_en, (family.providers || []).map(item => item.name).join(' ')].filter(Boolean).join(' · ');
         return renderCapabilityPickerOption('family', family.family_id, label, searchText, family.family_id === selectedFamily?.family_id, {family:family.family_id});
     }).join('');
     const variants = smartOrderedItems(
-        selection.variantGroups || [],
+        (selection.variantGroups || []).map(variant => ({
+            ...variant,
+            profiles:(variant.profiles || []).filter(profile => capabilityProfileMatchesCurrentInput(profile, nodeType, pickerInputState.inputCounts))
+        })).filter(variant => variant.profiles.length),
         variantScope,
         variant => variant.key || variant.model_id
     );
@@ -3860,21 +4202,31 @@ function renderCapabilityModelPicker(selection, descriptor=null){
     const variantOptions = variants
         .filter(variant => !currentProvider || (variant.profiles || []).some(item => item.provider_id === currentProvider))
         .map(variant => {
-            const profiles = variant.profiles || [];
-            const profile = profiles.find(item => item.provider_id === currentProvider) || variant.representative || profiles[0] || variant;
+            let profiles = (variant.profiles || []).filter(item => item.provider_id === currentProvider || !currentProvider);
+            if(currentProvider === 'runninghub') profiles = profiles.map(item => window.SmartModelCapabilities?.profileForRegion?.(item, selectedRegion)).filter(Boolean);
+            const profile = profiles[0] || variant.representative || variant;
             const label = capabilityVariantLabel(variant) || profile.model_id || variant.key;
             const value = profile.model_id || variant.model_id || variant.key;
             const searchText = [label, variant.variant_id, variant.variant_name, variant.variant_name_en, variant.model_id, ...profiles.flatMap(item => [item.model_id, item.provider_id, item.provider_name])].filter(Boolean).join(' · ');
             return renderCapabilityPickerOption('variant', value, label, searchText, variant.key === selectedVariantKey, {
-                family:selectedFamily?.family_id || '', model:value, provider:profile.provider_id || '', variantKey:variant.key,
+                family:selectedFamily?.family_id || '', model:value, provider:profile.provider_id || '', variantKey:variant.key, region:profile.region || selectedRegion,
+                // 标签从当前运行模式的合并档案读取；平台筛选仍由 profiles 决定。
                 badges:capabilityPickerBadgeLabels(variant, nodeType)
             });
         }).join('');
     // 平台段提前到第二级：展示整个家族在所有已启用平台上的可选渠道，而非仅当前运行模式对应的平台。
-    const platformSourceProfiles = (selection.allCompatibleVariants && selection.allCompatibleVariants.length)
+    const platformSourceProfiles = ((selection.allCompatibleVariants && selection.allCompatibleVariants.length)
         ? selection.allCompatibleVariants
-        : (selection.platformProfiles || []);
-    const platforms = capabilityPickerPlatformEntries(platformSourceProfiles, nodeType);
+        : (selection.platformProfiles || [])).filter(profile => capabilityProfileMatchesCurrentInput(profile, nodeType, pickerInputState.inputCounts));
+    const platforms = capabilityPickerPlatformEntries(platformSourceProfiles, nodeType).filter(entry => {
+        const scopedProfiles = platformSourceProfiles.filter(profile => {
+            if(profile.provider_id !== entry.id) return false;
+            if(entry.id !== 'runninghub') return true;
+            const scoped = window.SmartModelCapabilities?.profileForRegion?.(profile, entry.region);
+            return Boolean(scoped);
+        });
+        return capabilityPickerVariantGroups({...selection.family, compatible_variants:scopedProfiles}, entry.id).length > 0;
+    });
     const platformOptions = platforms.map(entry => {
         const providerId = entry.id || entry.provider?.id || '';
         const region = providerId === 'runninghub' ? (entry.region || 'global') : '';
@@ -3893,12 +4245,12 @@ function renderCapabilityModelPicker(selection, descriptor=null){
     return `<div class="smart-control capability-model-picker capability-model-picker-control" data-capability-model-picker data-control-key="capability-model-picker-control">
         <button class="smart-pill capability-model-picker-pill" type="button" title="${escapeAttr(summaryTitle)}" aria-label="${escapeAttr(title)}"><i data-lucide="boxes"></i><span class="capability-model-picker-value">${summaryParts.map((part, index) => `${index ? '<span class="capability-model-picker-separator" aria-hidden="true">·</span>' : ''}<span>${escapeHtml(part)}</span>`).join('')}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
         <div class="smart-popover capability-model-picker-popover">
-            <div class="capability-model-picker-head"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(tr('smart.modelPickerFiltered') || capabilityUiText('按能力筛选','Filtered by capability'))}</span></div>
+            <div class="capability-model-picker-head"><strong>${escapeHtml(title)}</strong><code class="capability-picker-selected-id" data-capability-picker-selected-id title="${escapeAttr(selectedProfile?.model_id || '')}">${escapeHtml(selectedProfile?.model_id || '')}</code><span>${escapeHtml(tr('smart.modelPickerFiltered') || capabilityUiText('按能力筛选','Filtered by capability'))}</span></div>
             <label class="capability-model-picker-search"><i data-lucide="search"></i><input type="search" data-capability-picker-search aria-label="${escapeAttr(searchLabel)}" placeholder="${escapeAttr(searchLabel)}" autocomplete="off"></label>
             <div class="capability-model-picker-stages">
-                ${renderCapabilityPickerStage('family', 1, tr('smart.modelPickerFamily') || capabilityUiText('模型','Model'), familyOptions, emptyText)}
-                ${renderCapabilityPickerStage('platform', 2, tr('smart.modelPickerProvider') || capabilityUiText('平台','Platform'), platformOptions, emptyText)}
-                ${renderCapabilityPickerStage('variant', 3, tr('smart.modelPickerVariant') || capabilityUiText('运行模式','Run mode'), variantOptions, emptyText)}
+                ${renderCapabilityPickerStage('family', 1, capabilityUiText('模型','Model'), familyOptions, emptyText)}
+                ${renderCapabilityPickerStage('platform', 2, capabilityUiText('平台','Platform'), platformOptions, emptyText)}
+                ${renderCapabilityPickerStage('variant', 3, capabilityUiText('运行模式','Run mode'), variantOptions, emptyText)}
             </div>
             <div class="capability-model-picker-no-match" data-capability-picker-no-match hidden>${escapeHtml(tr('smart.modelPickerNoMatch') || capabilityUiText('没有匹配的模型、模式或平台','No matching family, mode, or provider'))}</div>
         </div>
@@ -3976,12 +4328,7 @@ function capabilityParameterIsOptional(spec){
 function capabilityParameterDefaultValue(profile, key, spec={}){
     if(spec.ui_hidden === true && capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET;
     if(spec.default !== undefined && spec.default !== null && spec.default !== '') return spec.default;
-    const options = Array.isArray(spec.options) ? spec.options : [];
-    if(options.length) return options[0];
-    const type = String(spec.type || '').toLowerCase();
-    if(type === 'model') return String(profile?.model_id || '').trim() || undefined;
-    if(type === 'boolean') return false;
-    if(['integer','number'].includes(type) && Number.isFinite(Number(spec.min))) return Number(spec.min);
+    // 契约没有声明默认值时保持未设置；不能擅自选第一项、最小值或 false。
     return capabilityParameterIsOptional(spec) ? CAPABILITY_PARAMETER_UNSET : undefined;
 }
 function capabilityProfileHasParameterDefaults(profile){
@@ -4035,9 +4382,6 @@ function setCapabilityParameter(profile, key, value){
     const spec=profile?.parameters?.[key];
     if(spec && ['integer','number'].includes(spec.type) && typeof value==='number'){
         if(!Number.isFinite(value))return;
-        if(spec.min!==undefined)value=Math.max(Number(spec.min),value);
-        if(spec.max!==undefined)value=Math.min(Number(spec.max),value);
-        if(spec.type==='integer')value=Math.round(value);
     }
     if(profile?._externalEngine){
         const storeKey=profile._externalEngine==='rh'?'rhParams':'comfyParams';
@@ -4094,7 +4438,9 @@ function generatedCapabilityParameterLabel(key, spec={}){
     return words.map(word => tokens[word.toLowerCase()] || '参数').join('') || '模型参数';
 }
 function capabilityParameterLabel(key, spec, profile=null){
+    if(key === 'style' && profile?.node_type === 'music_generation') return capabilityUiText('风格提示词','Style prompt');
     const known = {
+        vocal_gender:'演唱人声性别',
         resolution:'分辨率', size:'尺寸', aspect_ratio:'画幅', ratio:'画幅', duration:'时长', generate_audio:'生成音频',
         count:'数量', quality:'质量', format:'格式', sample_rate:'采样率', speech_rate:'语速',
         loudness_rate:'音量', pitch_rate:'音调', speaker:'音色',
@@ -4110,6 +4456,7 @@ function capabilityParameterLabel(key, spec, profile=null){
         target_speed:'播放速度', persona_name:'歌手角色名称', stem_type:'音轨类型'
     };
     const knownEn = {
+        vocal_gender:'Vocal gender',
         resolution:'Resolution', size:'Size', aspect_ratio:'Aspect Ratio', ratio:'Aspect Ratio', duration:'Duration', generate_audio:'Generate Audio',
         count:'Count', quality:'Quality', format:'Format', sample_rate:'Sample Rate', speech_rate:'Speech Rate',
         loudness_rate:'Volume', pitch_rate:'Pitch', speaker:'Voice', negativePrompt:'Negative Prompt',
@@ -4173,6 +4520,24 @@ function capabilityAudioParameterValues(profile, source=settings, referenceAudio
     };
     return window.SmartModelCapabilities?.effectiveParameters(profile, values) || values;
 }
+// 运行前参数阻断：非法值不再被静默修正，也不允许悄悄丢字段后继续提交（§6.6、C07/C09）。
+function capabilityParameterIssuesForRun(profile, rawValues){
+    return window.SmartModelCapabilities?.parameterIssues?.(profile, rawValues) || {};
+}
+function assertCapabilityRunParameters(profile, rawValues){
+    const issues = capabilityParameterIssuesForRun(profile, rawValues);
+    const keys = Object.keys(issues);
+    if(!keys.length) return;
+    const details = keys.map(key => {
+        const label = capabilityOptionLabel(key) || key;
+        const reason = issues[key] === 'PARAM_REQUIRED' ? tr('smart.paramRequired') : tr('smart.paramInvalid');
+        return `${label}（${reason}）`;
+    }).join('；');
+    const error = new Error(`${tr('smart.errParameterBlocked')}：${details}`);
+    error.canvasParameterBlocked = true;
+    error.parameterIssues = issues;
+    throw error;
+}
 function capabilityParameterIntent(providerId, modelId, nodeType, source=settings){
     const profile = capabilityProfileFor(providerId, modelId, nodeType, capabilityRegionForProvider(providerId, source));
     return profile ? capabilityParameterSubmissionValues(profile, source) : {};
@@ -4195,6 +4560,7 @@ function capabilityOptionLabel(key, option){
     const value = String(option ?? '');
     const normalized = value.toLowerCase();
     const common = {
+        male:['男声','Male'], female:['女声','Female'],
         auto:['自动','Auto'], low:['低','Low'], medium:['中','Medium'], high:['高','High'],
         standard:['标准','Standard'], true:['是','Yes'], false:['否','No'],
         landscape:['横向','Landscape'], portrait:['竖向','Portrait'], square:['方形','Square'],
@@ -4387,6 +4753,7 @@ function syncExecutionCountControl(profile){
 }
 function capabilityParameterControlKind(key, spec){
     const type = String(spec?.type || 'text').toLowerCase();
+    if(Array.isArray(spec?.options) && spec.options.length) return 'segments';
     if(capabilityParameterSemantic(key, spec) === 'aspect_ratio') return 'segments';
     if(capabilityParameterSemantic(key, spec) === 'duration') return 'select';
     if(capabilityParameterSemantic(key, spec) === 'resolution') return 'select';
@@ -4406,8 +4773,10 @@ const CAPABILITY_DEFAULT_ASPECT_RATIOS = Object.freeze([
 ]);
 function capabilityParameterChoiceOptions(key, spec){
     if(Array.isArray(spec?.options) && spec.options.length) return spec.options;
-    if(capabilityParameterSemantic(key, spec) === 'aspect_ratio') return CAPABILITY_DEFAULT_ASPECT_RATIOS;
-    if(capabilityParameterSemantic(key,spec)==='resolution' && ['enum','text','string'].includes(spec?.type))return ['1K','2K','4K'];
+    // 空枚举代表档案缺失，不能伪造一组看似可选、提交却非法的值。
+    if(spec?.type === 'enum') return [];
+    if(capabilityParameterSemantic(key, spec) === 'aspect_ratio' && ['text','string'].includes(spec?.type)) return CAPABILITY_DEFAULT_ASPECT_RATIOS;
+    if(capabilityParameterSemantic(key,spec)==='resolution' && ['text','string'].includes(spec?.type))return ['1K','2K','4K'];
     if(key !== 'count' && capabilityParameterSemantic(key, spec) !== 'duration' && !['integer','number'].includes(spec?.type)) return [];
     const isDuration=capabilityParameterSemantic(key,spec)==='duration';
     const minimum = Number(spec?.min ?? (isDuration ? 1 : NaN));
@@ -4472,6 +4841,7 @@ function capabilityParameterDescription(key, spec={}, profile=null){
         : (spec?.description || spec?.description_cn || spec?.descriptionZh || '');
     if(description) return String(description);
     const descriptions = {
+        vocal_gender:['选择演唱人声的性别倾向；纯音乐模式下不使用人声。','Select the preferred vocal gender; instrumental mode does not use vocals.'],
         model:['指定实际调用的底层模型。通常由上方“模型”选择自动决定，不应在高级参数中重复填写。','Specifies the underlying model. This is normally determined by the Model selector and should not be entered again.'],
         resolution:['决定输出素材的像素尺寸和清晰度；更高分辨率通常会增加生成时间、文件大小或费用。','Controls output pixel dimensions and clarity; higher resolutions usually increase time, file size, or cost.'],
         size:['决定输出素材的像素尺寸和清晰度；更大尺寸通常会增加生成时间、文件大小或费用。','Controls output dimensions and clarity; larger sizes usually increase time, file size, or cost.'],
@@ -4593,11 +4963,7 @@ function capabilityInputValue(control){
     const type = control.dataset.capabilityType;
     if(!['integer','number'].includes(type)) return control.value;
     if(control.value.trim() === '' || !Number.isFinite(Number(control.value))) return undefined;
-    let value = Number(control.value);
-    if(control.min !== '') value = Math.max(Number(control.min), value);
-    if(control.max !== '') value = Math.min(Number(control.max), value);
-    if(type === 'integer') value = Math.round(value);
-    return value;
+    return Number(control.value);
 }
 function syncCapabilityNumericControls(control, value){
     const root = control.closest('.capability-range-field,.capability-stepper');
@@ -4612,12 +4978,17 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
     const optional = capabilityParameterIsOptional(spec);
     const storedValue = values[key];
     const unset = optional && (storedValue === undefined || storedValue === CAPABILITY_PARAMETER_UNSET);
-    const value = unset ? CAPABILITY_PARAMETER_UNSET : (storedValue ?? spec?.default ?? spec?.min ?? '');
+    const value = unset ? CAPABILITY_PARAMETER_UNSET : (storedValue ?? spec?.default ?? '');
     const controlKind = capabilityParameterControlKind(key, spec);
     const choices = capabilityParameterChoiceOptions(key, spec);
     const optionScope = capabilityOptionOrderScope(profile, key);
+    if(type === 'enum' && !choices.length){
+        const body = `<div class="capability-text-field" role="status">${escapeHtml(capabilityUiText('此参数的可选值尚未核实，请更新平台模型资料。','The allowed values are unverified. Refresh the platform model information.'))}</div>`;
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value, unset, body, extraClass:'capability-unavailable-control'};
+    }
     const optionButton = option => `<button type="button" class="capability-option ${semantic === 'aspect_ratio' ? 'capability-aspect-option' : ''} ${String(option) === String(value) ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" data-capability-value="${escapeAttr(option)}" title="${escapeAttr(capabilityOptionLabel(key, option))}">${capabilityChoiceContent(key, option, semantic, spec)}</button>`;
-    if((controlKind === 'segments' || controlKind === 'select') && choices.length){
+    const continuousRange = ['integer','number'].includes(type) && !spec?.options?.length && Number.isFinite(Number(spec?.min)) && Number.isFinite(Number(spec?.max));
+    if(!continuousRange && (controlKind === 'segments' || controlKind === 'select') && choices.length){
         const gridClass = semantic === 'aspect_ratio'
             ? 'capability-aspect-options'
             : semantic === 'duration'
@@ -4634,17 +5005,18 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
         return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value, unset, body, extraClass:'capability-boolean-control'};
     }
     if(type === 'integer' || type === 'number'){
-        const step = spec?.step ?? (type === 'integer' ? 1 : 0.1);
+        const step = spec?.step ?? (type === 'integer' ? 1 : 'any');
+        const delta = spec?.step ?? spec?.ui_step ?? (type === 'integer' ? 1 : 0.1);
         const minimum = Number(spec?.min);
         const maximum = Number(spec?.max);
-        const hasRange = Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum;
+        const hasRange = spec?.min != null && spec?.max != null && Number.isFinite(minimum) && Number.isFinite(maximum) && maximum > minimum;
         if(hasRange){
-            const rangeValue = unset ? (spec?.default ?? minimum) : value;
+            const rangeValue = unset ? (spec?.default ?? '') : value;
             const body = `<div class="capability-range-field"><div class="capability-range-value"><span>${escapeHtml(capabilityUiText('当前值','Current'))}</span><input class="capability-number-value" type="number" aria-label="${escapeAttr(label)}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(rangeValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<input type="range" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>`;
             return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:rangeValue, unset, body, extraClass:'capability-range-control'};
         }
-        const stepValue = unset ? (spec?.default ?? 0) : value;
-        const body = `${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(stepValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<div class="capability-stepper ${unset ? 'is-disabled' : ''}"><button type="button" data-capability-step="-1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('减少','Decrease'))}" ${unset ? 'disabled' : ''}>−</button><input class="capability-number-value" type="number" aria-label="${escapeAttr(label)}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(stepValue)}" ${spec?.min !== undefined ? `min="${escapeAttr(spec.min)}"` : ''} ${spec?.max !== undefined ? `max="${escapeAttr(spec.max)}"` : ''} step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}><button type="button" data-capability-step="1" data-capability-delta="${escapeAttr(step)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('增加','Increase'))}" ${unset ? 'disabled' : ''}>+</button></div>`;
+        const stepValue = unset ? (spec?.default ?? '') : value;
+        const body = `${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(stepValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<div class="capability-stepper ${unset ? 'is-disabled' : ''}"><button type="button" data-capability-step="-1" data-capability-delta="${escapeAttr(delta)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('减少','Decrease'))}" ${unset ? 'disabled' : ''}>−</button><input class="capability-number-value" type="number" aria-label="${escapeAttr(label)}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(stepValue)}" ${spec?.min !== undefined ? `min="${escapeAttr(spec.min)}"` : ''} ${spec?.max !== undefined ? `max="${escapeAttr(spec.max)}"` : ''} step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}><button type="button" data-capability-step="1" data-capability-delta="${escapeAttr(delta)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('增加','Increase'))}" ${unset ? 'disabled' : ''}>+</button></div>`;
         return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:stepValue, unset, body, extraClass:'capability-stepper-control'};
     }
     const isLongText = spec.ui_multiline === true || ['lyrics','prompt','instructions','negative_prompt','negativePrompt'].includes(key);
@@ -4655,7 +5027,7 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
 }
 function renderCapabilitySettingsControl(entries, extraSettings=''){
     if(!entries.length && !extraSettings) return '';
-    const title = capabilityUiText('参数','Parameters');
+    const title = capabilityUiText('更多设置','More settings');
     const itemCount = entries.length + (extraSettings ? 1 : 0);
     return `<div class="smart-control capability-settings-control" data-capability-settings data-control-key="capability-settings-control">
         <button class="smart-pill capability-settings-pill" type="button" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"><i data-lucide="settings-2"></i></button>
@@ -4688,9 +5060,22 @@ function renderCapabilityParameterBundleForSource(profile, source, excluded=[], 
     // 仅 level=advanced 的冷门参数收进右侧齿轮，避免常用调节被藏起来。
     const inlineEntries = orderByShortcut(rawEntries.filter(entry => !entry.advanced));
     const advancedEntries = orderByShortcut(rawEntries.filter(entry => entry.advanced));
-    const markup = inlineEntries.map(entry => renderCapabilityParameterControl(
-        entry.key, entry.label, profile.parameters?.[entry.key] || {}, profile, entry.value, entry.unset, entry.body, entry.extraClass
-    )).join('');
+    const inlineMarkup = inlineEntries.map(entry => `<section class="capability-summary-field ${entry.extraClass.includes('is-long') ? 'is-long' : ''}"><div class="capability-setting-label"><span>${escapeHtml(entry.label)}</span>${renderCapabilityParameterHelp(entry.label, entry.description)}${entry.optional ? `<small>${escapeHtml(capabilityUiText('可选','Optional'))}</small>` : ''}</div>${entry.body}</section>`).join('');
+    const summaryParts = inlineEntries.slice(0, 6).map(entry => {
+        const missing = entry.value === undefined || entry.value === CAPABILITY_PARAMETER_UNSET || entry.value === '';
+        return missing ? entry.label : capabilityOptionLabel(entry.key, entry.value);
+    });
+    const summary = summaryParts.length
+        ? summaryParts.join(' · ')
+        : capabilityUiText('无需额外参数', 'No additional parameters');
+    // Keep the node compact while preserving the existing per-parameter
+    // controls inside one model-width upward panel.
+    const markup = inlineEntries.length
+        ? `<div class="smart-control capability-summary-control" data-capability-summary-control>
+            <button class="smart-pill capability-summary-pill" type="button" title="${escapeAttr(summary)}" aria-label="${escapeAttr(capabilityUiText('参数配置','Parameter settings'))}"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(summary)}</span><i data-lucide="chevron-up" class="pill-caret"></i></button>
+            <div class="smart-popover capability-summary-popover"><div class="capability-summary-head"><strong>${escapeHtml(capabilityUiText('常用参数','Common parameters'))}</strong><span>${escapeHtml(capabilityUiText('按模型契约提供','From model contract'))}</span></div><div class="capability-summary-grid">${inlineMarkup}</div></div>
+        </div>`
+        : '';
     const orderedEntries = [...inlineEntries, ...advancedEntries];
     return {
         markup,
@@ -4748,7 +5133,10 @@ function runningHubProviderForRegion(region, provider=runningHubProvider()){
     if(!regions || typeof regions !== 'object' || Array.isArray(regions)) return {...provider, rh_region:safeRegion};
     const config = regions[safeRegion];
     if(!config || config.enabled !== true) return null;
-    return {...provider, ...config, rh_region:safeRegion, rh_regions:regions};
+    const merged = {...provider, ...config, rh_region:safeRegion, rh_regions:regions};
+    if(!Array.isArray(config.rh_apps) && Array.isArray(provider.rh_apps)) merged.rh_apps = provider.rh_apps;
+    if(!Array.isArray(config.rh_workflows) && Array.isArray(provider.rh_workflows)) merged.rh_workflows = provider.rh_workflows;
+    return merged;
 }
 function runningHubEntries(kind, sourceSettings=settings){
     const region = runningHubRegion(sourceSettings);
@@ -4763,9 +5151,12 @@ function runningHubEntries(kind, sourceSettings=settings){
         })).filter(item => item.id);
     }
     const key = kind === 'workflow' ? 'rh_workflows' : 'rh_apps';
-    return Array.isArray(provider?.[key])
-        ? provider[key].filter(item => item?.enabled !== false && item?.hidden !== true).map(item => ({...item, region}))
-        : [];
+    // 站点目录优先；部分旧配置仍把应用保存在 provider 根节点，作为
+    // 同一站点的兼容来源读取，避免 API 设置已添加但画布看不到。
+    const entries = Array.isArray(provider?.[key])
+        ? provider[key]
+        : (Array.isArray(provider?.[key === 'rh_apps' ? 'rh_apps' : 'rh_workflows']) ? provider[key] : []);
+    return entries.filter(item => item?.enabled !== false && item?.hidden !== true).map(item => ({...item, region}));
 }
 function runningHubEntryId(entry, kind){
     if(kind === 'model') return String(entry?.id || entry?.model || entry?.title || '').trim();
@@ -4904,6 +5295,17 @@ function selectedRunningHubRef(sourceSettings=settings){
             .filter(item => item.kind === parsed.kind && item.id === parsed.id);
         if(matches.length === 1) ref = matches[0];
     }
+    // API 设置按站点保存应用；当前编辑站点没有应用时，仍要从另一
+    // 个已启用站点恢复可用配置，避免画布显示为空而掩盖已同步的应用。
+    if(!ref){
+        const candidates = runningHubEnabledRegions()
+            .filter(region => region !== runningHubRegion(sourceSettings))
+            .flatMap(region => runningHubAllEntries(kinds, sourceSettings, region));
+        const matches = parsed
+            ? candidates.filter(item => item.kind === parsed.kind && item.id === parsed.id)
+            : candidates;
+        if(matches.length) ref = matches[0];
+    }
     if(!ref && all.length) ref = all[0];
     if(ref){
         sourceSettings.rhRegion = ref.region || runningHubRegion(sourceSettings);
@@ -5039,7 +5441,7 @@ function renderTextExecutionPlatformControl(capabilityModels, inputCounts={}){
     const options = smartOrderedItems(providers, scope, provider => provider.id).map(provider => {
         const compatibleCount = textProviderCompatibleModelCount(provider.id, capabilityModels);
         const countLabel = capabilityUiText(`${compatibleCount} 个可用`, `${compatibleCount} available`);
-        return `<button type="button" class="direct-option text-provider-option ${provider.id === settings.textProvider ? 'active' : ''}" data-text-provider-option="${escapeAttr(provider.id)}" data-preference-id="${escapeAttr(provider.id)}">${renderPreferenceHandle(scope, provider.id)}<span>${escapeHtml(provider.name || provider.id)}</span><small>${escapeHtml(countLabel)}</small></button>`;
+        return `<button type="button" class="direct-option text-provider-option ${provider.id === settings.textProvider ? 'active' : ''}" data-text-provider-option="${escapeAttr(provider.id)}" data-preference-id="${escapeAttr(provider.id)}">${renderPreferenceHandle(scope, provider.id)}<span>${escapeHtml(laohuDisplayText(provider.name || provider.id))}</span><small>${escapeHtml(countLabel)}</small></button>`;
     }).join('');
     return renderExecutionChoiceControl(tr('smart.platform'), 'plug-zap', 'text-generation-field text-provider-control', options, !providers.length, false, current?.name || current?.id || '');
 }
@@ -5351,18 +5753,10 @@ function renderVideoToggleControl(key, label){
     return `<button type="button" class="setting-check ${on ? 'active' : ''}" data-toggle-param="${escapeHtml(key)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
 }
 function renderVideoInputModeControl(profile, refs=[]){
-    const images = imageRefsOnly(refs);
-    if(images.length !== 2 || videoRefsOnly(refs).length || audioRefsOnly(refs).length) return '';
-    const inputs = profile?.inputs || {};
-    const supportsFrames = Number(inputs.first_frame?.max || 0) >= 1 && Number(inputs.last_frame?.max || 0) >= 1;
-    if(!supportsFrames) return '';
-    const useFrames = Boolean(settings.videoUseFrameRoles);
-    const label = capabilityUiText('图片用途', 'Image role');
-    const options = [
-        ['reference', capabilityUiText('普通参考图', 'Reference images')],
-        ['frames', capabilityUiText('首尾帧', 'First / last frames')]
-    ].map(([value, text]) => `<button type="button" class="direct-option ${useFrames === (value === 'frames') ? 'active' : ''}" data-video-input-mode="${value}"><span>${escapeHtml(text)}</span></button>`).join('');
-    return renderExecutionChoiceControl(label, 'images', 'video-input-mode-control', options, false, false, useFrames ? capabilityUiText('首尾帧', 'First / last frames') : capabilityUiText('普通参考图', 'Reference images'));
+    // 输入素材的用途由当前模型契约和输入端口决定，用户无需再在节点里
+    // 额外选择“普通参考图/首尾帧”。保留函数和底层 videoUseFrameRoles
+    // 字段用于读取历史画布，但不再把实现细节渲染成一个参数控件。
+    return '';
 }
 function optionHtml(value, label, selected){
     return `<option value="${escapeHtml(value)}" ${String(value) === String(selected) ? 'selected' : ''}>${escapeHtml(label ?? value)}</option>`;
@@ -5470,6 +5864,7 @@ function dynamicParamsScrollSnapshot(){
     return {
         top:dynamicParams.scrollTop || 0,
         left:dynamicParams.scrollLeft || 0,
+        summaryGrids:[...dynamicParams.querySelectorAll('.capability-summary-grid')].map(grid => ({top:grid.scrollTop || 0, left:grid.scrollLeft || 0})),
         sizePickers:[...dynamicParams.querySelectorAll('.size-picker-control')].map(ctrl => ({
             key:controlTypeKey(ctrl),
             lists:[...ctrl.querySelectorAll('.size-picker-list')].map(list => ({top:list.scrollTop || 0, left:list.scrollLeft || 0}))
@@ -5481,6 +5876,12 @@ function restoreDynamicParamsScroll(snapshot){
     const apply = () => {
         dynamicParams.scrollTop = snapshot.top || 0;
         dynamicParams.scrollLeft = snapshot.left || 0;
+        [...dynamicParams.querySelectorAll('.capability-summary-grid')].forEach((grid, index) => {
+            const position = snapshot.summaryGrids?.[index];
+            if(!position) return;
+            grid.scrollTop = position.top || 0;
+            grid.scrollLeft = position.left || 0;
+        });
         const used = new Set();
         (snapshot.sizePickers || []).forEach(item => {
             const pickers = [...dynamicParams.querySelectorAll('.size-picker-control')];
@@ -5499,14 +5900,124 @@ function restoreDynamicParamsScroll(snapshot){
     apply();
     requestAnimationFrame(apply);
 }
+// P5 薄包装挂载（§14.3）：五类节点在运行时统一使用公共模型配置控件。
+// 旧渲染保留为挂载前的骨架；目录缺少 options 时不挂载，避免空控件。
+let canvasModelConfigInstance = null;
+let canvasLegacyResolution = null;
+// 模型/平台点击只是弹层内的临时筛选；运行模式点击后才提交到节点。
+const capabilityPickerDrafts = new Map();
+function capabilityPickerDraft(node, descriptor){
+    const key = String(node?.id || descriptor?.nodeType || 'active');
+    return capabilityPickerDrafts.get(key) || {};
+}
+function capabilityPickerDraftKey(node, descriptor){
+    return String(node?.id || descriptor?.nodeType || 'active');
+}
+function canvasSelectionNodeType(subject){
+    if(subject?.type === SMART_NODE_TYPES.textGenerator) return 'text_generation';
+    if(settings.apiKind === 'music') return 'music_generation';
+    if(settings.apiKind === 'audio') return 'audio_generation';
+    if(settings.apiKind === 'video') return 'video_generation';
+    return 'image_generation';
+}
+function canvasModelOptionsForNode(subject){
+    const nodeType = canvasSelectionNodeType(subject);
+    return (modelCapabilityCatalog.options || []).filter(option => option.node_type === nodeType);
+}
+// 已选读取：交给宿主做确定性解析；歧义或下线时不猜、不换模型（§15.2、§15.6）
+function canvasSelectionForNode(subject){
+    const options = canvasModelOptionsForNode(subject);
+    const legacyNode = {...subject, provider_id:settings.provider_id, model:settings.model, rhRegion:settings.rhRegion};
+    const resolved = window.CanvasModelConfigHost?.resolveLegacyNodeSelection?.(legacyNode, options)
+        || {resolved:false, ambiguous:false, optionId:'', reason:'MIGRATION_AMBIGUOUS'};
+    canvasLegacyResolution = resolved;
+    if(resolved.resolved){
+        const record = subject?.modelSelection;
+        const parameters = record?.parameters ? {...record.parameters} : {...capabilityParameterSubmissionValues(null, settings)};
+        return {optionId:resolved.optionId, parameters, revision:record?.revision};
+    }
+    return {optionId:'', parameters:{}};
+}
+// 提交一次完整选择：记撤销、写新记录、派生旧字段（§8.4、§12.4）
+function canvasCommitModelSelection(subject, payload){
+    const optionId = String(payload?.selection?.optionId || '');
+    const option = (modelCapabilityCatalog.options || []).find(item => item.option_id === optionId);
+    if(!option) return Promise.reject(new Error(tr('smart.errModelNotInCatalog') || '选择不属于当前目录'));
+    pushUndo();
+    subject.modelSelection = {
+        schema_version:2,
+        option_id:option.option_id,
+        connection_id:option.connection_id,
+        region_id:option.region_id || '',
+        operation:option.operation || '',
+        parameters:{...(payload?.selection?.parameters || {})},
+        parameter_origins:subject.modelSelection?.parameter_origins || {},
+        revision:Number(subject.modelSelection?.revision || 0) + 1
+    };
+    settings.provider_id = option.connection_id || settings.provider_id;
+    settings.model = option.catalog_model_id || settings.model;
+    if(option.region_id) settings.rhRegion = option.region_id;
+    persistActiveSmartSettings();
+    return Promise.resolve();
+}
+function mountCanvasModelConfigPickers(subject){
+    if(!subject || !dynamicParams) return;
+    const host = dynamicParams.querySelector('[data-capability-model-picker]');
+    if(!host) return;
+    if(!window.ModelConfigCore || !window.mountModelConfigControl) return;
+    const options = canvasModelOptionsForNode(subject);
+    if(!options.length) return;
+    host.replaceChildren();
+    const container = document.createElement('div');
+    container.className = 'canvas-model-config-host';
+    host.appendChild(container);
+    if(canvasModelConfigInstance){ canvasModelConfigInstance.destroy(); canvasModelConfigInstance = null; }
+    canvasModelConfigInstance = window.mountModelConfigControl(container, {
+        context:{
+            host:'canvas', moduleId:'canvas', slotId:canvasSelectionNodeType(subject), phase:'live',
+            nodeId:String(subject.id || '')
+        },
+        catalog:{options, profiles:[]},
+        selection:canvasSelectionForNode(subject),
+        onCommit:payload => canvasCommitModelSelection(subject, payload)
+    });
+}
 function renderDynamicParams(){
     const editableState = captureCanvasEditableState(document.activeElement);
     renderDynamicParamsContent();
     if(editableState) restoreCanvasEditableState(editableState);
 }
+const capabilityPickerScrollMemory = {};
+function capabilityPickerScrollSnapshot(){
+    const snapshot = {};
+    dynamicParams?.querySelectorAll?.('[data-capability-model-picker]').forEach((picker, index) => {
+        const key = picker.dataset.controlKey || `picker-${index}`;
+        snapshot[key] = {...(capabilityPickerScrollMemory[key] || {})};
+        picker.querySelectorAll('[data-capability-picker-options]').forEach(options => {
+            const stage = options.dataset.capabilityPickerOptions || '';
+            snapshot[key][stage] = options.scrollTop;
+            capabilityPickerScrollMemory[key] ||= {};
+            capabilityPickerScrollMemory[key][stage] = options.scrollTop;
+        });
+    });
+    return snapshot;
+}
+function restoreCapabilityPickerScroll(snapshot){
+    if(!snapshot) return;
+    dynamicParams?.querySelectorAll?.('[data-capability-model-picker]').forEach((picker, index) => {
+        const key = picker.dataset.controlKey || `picker-${index}`;
+        const values = snapshot[key];
+        if(!values) return;
+        picker.querySelectorAll('[data-capability-picker-options]').forEach(options => {
+            const stage = options.dataset.capabilityPickerOptions || '';
+            if(Object.prototype.hasOwnProperty.call(values, stage)) options.scrollTop = values[stage];
+        });
+    });
+}
 function renderDynamicParamsContent(){
     if(!dynamicParams) return;
     const keepOpen = openControlState();
+    const pickerScroll = capabilityPickerScrollSnapshot();
     const scrollState = dynamicParamsScrollSnapshot();
     const subject = activeSettingsSubject();
     if(!subject){
@@ -5534,11 +6045,17 @@ function renderDynamicParamsContent(){
     else if(settings.engine === 'runninghub') renderRunningHubParams();
     else renderComfyParams();
     bindDynamicParams();
+    // 画布继续使用原有的模型选择弹层；公共配置控件仅作为后续模块接入点，
+    // 不替换现有节点的双入口弹层和参数交互。
     restoreOpenControl(keepOpen);
     restoreDynamicParamsScroll(scrollState);
+    // 保留原有节点弹层和布局；公共控件仅作为独立模块的接入能力，不替换画布界面。
+    // mountCanvasModelConfigPickers(subject); // 独立模块宿主使用，画布不在此处替换界面。
     updatePromptPlaceholder();
     persistActiveSmartSettings();
     if(window.lucide) lucide.createIcons();
+    restoreCapabilityPickerScroll(pickerScroll);
+    requestAnimationFrame(() => restoreCapabilityPickerScroll(pickerScroll));
     requestAnimationFrame(() => {
         const active = activeComposerNode();
         if(active && composer?.classList?.contains('open')) positionComposerForNode(active);
@@ -5601,8 +6118,9 @@ function renderTextGenerationParams(node=activeSettingsSubject()){
         settings.textModel = '';
     }
     const descriptor = executionSelectionDescriptor(node);
+    const draft = capabilityPickerDraft(node, descriptor);
     // 保留 provider 级运行校验入口：resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', inputCounts, ...)。
-    const selection = resolveCapabilityFamilyPickerSelection('text_generation', inputCounts, settings.textFamilyId, settings.textModel, '', request.inputRoles, parameterIntent, settings.textProvider);
+    const selection = resolveCapabilityFamilyPickerSelection('text_generation', inputCounts, draft.familyId ?? settings.textFamilyId, draft.model ?? settings.textModel, '', request.inputRoles, parameterIntent, draft.provider ?? settings.textProvider, '', draft.region || '');
     applyCapabilityPickerSelection(settings, descriptor, selection);
     const parameterBundle = renderCapabilityParameterBundle(selection.profile);
     dynamicParams.innerHTML = renderExecutionConfigPanel(`<div class="text-generation-params">
@@ -5624,7 +6142,8 @@ function renderApiParams(){
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
     const parameterIntent = {};
     const descriptor = executionSelectionDescriptor(activeSettingsSubject());
-    const selection = resolveCapabilityFamilyPickerSelection('image_generation', inputCounts, settings.imageFamilyId, settings.model, '', inputRoles, parameterIntent, settings.provider_id);
+    const draft = capabilityPickerDraft(activeSettingsSubject(), descriptor);
+    const selection = resolveCapabilityFamilyPickerSelection('image_generation', inputCounts, draft.familyId ?? settings.imageFamilyId, draft.model ?? settings.model, '', inputRoles, parameterIntent, draft.provider ?? settings.provider_id, '', draft.region || '');
     applyCapabilityPickerSelection(settings, descriptor, selection);
     if(!settings.provider_id){
         if(selection.profile?.provider_id) settings.provider_id = selection.profile.provider_id;
@@ -5662,7 +6181,8 @@ function renderApiVideoParams(){
     const currentProfile = capabilityProfileFor(settings.videoProvider, settings.videoModel, 'video_generation', capabilityRegionForProvider(settings.videoProvider, settings));
     parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, refs, settings, Boolean(manualSmartVideoLink(settings)));
     const descriptor = executionSelectionDescriptor(activeSettingsSubject());
-    const selection = resolveCapabilityFamilyPickerSelection('video_generation', inputCounts, settings.videoFamilyId, settings.videoModel, '', inputRoles, parameterIntent, settings.videoProvider);
+    const draft = capabilityPickerDraft(activeSettingsSubject(), descriptor);
+    const selection = resolveCapabilityFamilyPickerSelection('video_generation', inputCounts, draft.familyId ?? settings.videoFamilyId, draft.model ?? settings.videoModel, '', inputRoles, parameterIntent, draft.provider ?? settings.videoProvider, '', draft.region || '');
     applyCapabilityPickerSelection(settings, descriptor, selection);
     if(!settings.videoProvider){
         if(selection.profile?.provider_id) settings.videoProvider = selection.profile.provider_id;
@@ -5683,7 +6203,8 @@ function renderApiAudioParams(){
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
     const parameterIntent = {};
     const descriptor = executionSelectionDescriptor(activeSettingsSubject());
-    const selection = resolveCapabilityFamilyPickerSelection('audio_generation', inputCounts, settings.audioFamilyId, settings.audioModel, '', inputRoles, parameterIntent, settings.audioProvider);
+    const draft = capabilityPickerDraft(activeSettingsSubject(), descriptor);
+    const selection = resolveCapabilityFamilyPickerSelection('audio_generation', inputCounts, draft.familyId ?? settings.audioFamilyId, draft.model ?? settings.audioModel, '', inputRoles, parameterIntent, draft.provider ?? settings.audioProvider, '', draft.region || '');
     applyCapabilityPickerSelection(settings, descriptor, selection);
     if(!settings.audioProvider){
         if(selection.profile?.provider_id) settings.audioProvider = selection.profile.provider_id;
@@ -5704,7 +6225,8 @@ function renderApiMusicParams(){
     const inputRoles = capabilityInputRoles(visibleReferenceImagesFor(activeSettingsSubject()), true);
     const parameterIntent = {};
     const descriptor = executionSelectionDescriptor(activeSettingsSubject());
-    const selection = resolveCapabilityFamilyPickerSelection('music_generation', inputCounts, settings.musicFamilyId, settings.musicModel, '', inputRoles, parameterIntent, settings.musicProvider);
+    const draft = capabilityPickerDraft(activeSettingsSubject(), descriptor);
+    const selection = resolveCapabilityFamilyPickerSelection('music_generation', inputCounts, draft.familyId ?? settings.musicFamilyId, draft.model ?? settings.musicModel, '', inputRoles, parameterIntent, draft.provider ?? settings.musicProvider, '', draft.region || '');
     applyCapabilityPickerSelection(settings, descriptor, selection);
     const profile = selection.profile;
     const profileControls = renderCapabilityParameters(profile, 'music');
@@ -7523,6 +8045,17 @@ function bindCapabilityOptionSort(){
         }
         // 仍恢复用户已经保存的选项顺序，但参数弹层不再注入默认拖拽手柄，避免短选项被挤窄。
     });
+    dynamicParams.querySelectorAll('[data-capability-picker-options]').forEach(container => {
+        const stage = container.dataset.capabilityPickerOptions || '';
+        const scope = smartPreferenceScopeKey('picker', stage);
+        const stored = smartCanvasPersonalizationStore().modelOrder[scope];
+        const buttons = preferenceListButtons(container);
+        if(Array.isArray(stored) && stored.length){
+            const positions = new Map(stored.map((id, index) => [String(id), index]));
+            buttons.sort((a,b) => (positions.get(a.dataset.preferenceId) ?? Number.MAX_SAFE_INTEGER) - (positions.get(b.dataset.preferenceId) ?? Number.MAX_SAFE_INTEGER));
+            buttons.forEach(button => container.appendChild(button));
+        }
+    });
 }
 function preferenceListButtons(list){
     return [...(list?.children || [])].filter(item => item.matches?.('button[data-preference-id]'));
@@ -7608,7 +8141,7 @@ function cancelPreferencePointerDrag(event){
 function startPreferencePointerDrag(event, handle){
     if(event.button !== 0 || smartPreferencePointerDragState) return;
     const button = handle.closest('button[data-preference-id]');
-    const list = button?.closest('.model-list');
+    const list = button?.closest('.model-list, [data-capability-picker-options]');
     if(!button || !list || !preferenceListButtons(list).includes(button)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -7709,6 +8242,16 @@ function bindDynamicParams(){
         input.onclick = event => event.stopPropagation();
         input.oninput = filter;
     });
+    dynamicParams.querySelectorAll('[data-capability-picker-options]').forEach(options => {
+        options.addEventListener('scroll', () => {
+            const picker = options.closest('[data-capability-model-picker]');
+            if(!picker) return;
+            const key = picker.dataset.controlKey || 'picker-0';
+            const stage = options.dataset.capabilityPickerOptions || '';
+            capabilityPickerScrollMemory[key] ||= {};
+            capabilityPickerScrollMemory[key][stage] = options.scrollTop;
+        }, {passive:true});
+    });
     dynamicParams.querySelectorAll('[data-capability-picker-option]').forEach(button => {
         button.onclick = event => {
             if(smartPreferenceDragMoved) return;
@@ -7717,6 +8260,8 @@ function bindDynamicParams(){
             const node = activeSettingsSubject();
             const descriptor = executionSelectionDescriptor(node);
             if(!descriptor) return;
+            const draftKey = capabilityPickerDraftKey(node, descriptor);
+            const draft = {...capabilityPickerDraft(node, descriptor)};
             const stage = button.dataset.capabilityPickerStage || '';
             const value = button.dataset.capabilityPickerValue || '';
             if(stage === 'family'){
@@ -7731,36 +8276,43 @@ function bindDynamicParams(){
                     {},
                     settings[descriptor.providerKey] || ''
                 );
-                settings[descriptor.familyKey] = value;
-                settings[descriptor.modelKey] = selection.profile?.model_id || '';
-                if(selection.profile?.provider_id) settings[descriptor.providerKey] = selection.profile.provider_id;
+                draft.familyId = value;
+                draft.model = '';
             } else if(stage === 'variant'){
-                settings[descriptor.familyKey] = button.dataset.capabilityPickerFamily || settings[descriptor.familyKey] || '';
+                settings[descriptor.familyKey] = button.dataset.capabilityPickerFamily || draft.familyId || settings[descriptor.familyKey] || '';
                 settings[descriptor.modelKey] = button.dataset.capabilityPickerModel || value;
                 if(button.dataset.capabilityPickerProvider) settings[descriptor.providerKey] = button.dataset.capabilityPickerProvider;
-            } else if(stage === 'platform'){
-                settings[descriptor.familyKey] = button.dataset.capabilityPickerFamily || settings[descriptor.familyKey] || '';
-                settings[descriptor.modelKey] = button.dataset.capabilityPickerModel || settings[descriptor.modelKey] || '';
-                settings[descriptor.providerKey] = value;
-                if(value === 'runninghub' && button.dataset.capabilityPickerRegion){
+                if(button.dataset.capabilityPickerRegion && button.dataset.capabilityPickerProvider === 'runninghub'){
                     settings.rhRegion = normalizeRunningHubRegion(button.dataset.capabilityPickerRegion, runningHubRegion(settings));
                 }
+                capabilityPickerDrafts.delete(draftKey);
+            } else if(stage === 'platform'){
+                draft.familyId = button.dataset.capabilityPickerFamily || draft.familyId || settings[descriptor.familyKey] || '';
+                draft.provider = value;
+                draft.model = '';
+                if(value === 'runninghub' && button.dataset.capabilityPickerRegion){
+                    draft.region = normalizeRunningHubRegion(button.dataset.capabilityPickerRegion, runningHubRegion(settings));
+                }
             } else return;
+            if(stage !== 'variant') capabilityPickerDrafts.set(draftKey, draft);
             // 运行模式是选择链的最后一段：选中即确定，随即收起整个参数选择弹层。
             // 模型 / 平台仍保持打开，交由 restoreOpenControl 在重渲染后自动恢复。
             if(stage === 'variant'){
                 button.closest('[data-capability-model-picker]')?.classList.remove('pinned');
             }
-            ensureExecutionSelectionDefaults(settings, node);
-            persistActiveSmartSettings();
+            if(stage === 'variant') ensureExecutionSelectionDefaults(settings, node);
             renderDynamicParams();
-            scheduleSave();
-            render();
+            if(stage === 'variant'){
+                persistActiveSmartSettings();
+                scheduleSave();
+                render();
+            }
         };
     });
     // 运行模式（最后一段）悬停预览：鼠标移到某个运行模式上时，顶部实时显示它对应的真实模型 ID，移开后还原为已选值。
     (() => {
         const modelName = dynamicParams.querySelector('.execution-config-panel-head .capability-model-name');
+        const pickerId = dynamicParams.querySelector('[data-capability-picker-selected-id]');
         if(!modelName) return;
         const committedText = modelName.textContent || '';
         const committedTitle = modelName.getAttribute('title') || '';
@@ -7769,6 +8321,10 @@ function bindDynamicParams(){
             modelName.setAttribute('title', committedTitle);
             modelName.classList.remove('is-previewing');
             option?.classList.remove('is-previewing');
+            if(pickerId){
+                pickerId.textContent = committedTitle;
+                pickerId.setAttribute('title', committedTitle);
+            }
         };
         dynamicParams.querySelectorAll('[data-capability-picker-option][data-capability-picker-stage="variant"]').forEach(option => {
             const modelId = option.dataset.capabilityPickerModel || option.dataset.capabilityPickerValue || '';
@@ -7778,6 +8334,10 @@ function bindDynamicParams(){
                 modelName.setAttribute('title', modelId);
                 modelName.classList.add('is-previewing');
                 option.classList.add('is-previewing');
+                if(pickerId){
+                    pickerId.textContent = modelId;
+                    pickerId.setAttribute('title', modelId);
+                }
             });
             option.addEventListener('mouseleave', () => restore(option));
         });
@@ -9279,21 +9839,18 @@ function canvasNodeDisplayNumber(value){
     return Number.isInteger(number) && number > 0 ? number : 0;
 }
 function allocateCanvasNodeDisplayNumber(){
-    if(canvas){
-        const holder = {nodes, nextNodeNumber:canvas.nextNodeNumber};
-        const number = CANVAS_SYNC.allocateDisplayNumber(holder);
-        canvas.nextNodeNumber = holder.nextNodeNumber;
-        return number;
-    }
     const used = new Set(nodes.map(node => canvasNodeDisplayNumber(node?.displayNumber)).filter(Boolean));
     let number = used.size ? Math.max(...used) + 1 : 1;
     while(used.has(number)) number += 1;
+    if(canvas) canvas.nextNodeNumber = number + 1;
     return number;
 }
 function appendSmartNodes(...incoming){
     const additions = incoming.flat ? incoming.flat().filter(Boolean) : incoming.filter(Boolean);
     const used = new Set(nodes.map(node => canvasNodeDisplayNumber(node?.displayNumber)).filter(Boolean));
-    let next = Math.max(1, Number(canvas?.nextNodeNumber) || 1, ...used, 0);
+    // Display numbers describe the current canvas, so deletion creates no
+    // permanent counter gap. Allocate after the highest number still present.
+    let next = Math.max(1, ...used, 0) + 1;
     additions.forEach(node => {
         let number = canvasNodeDisplayNumber(node.displayNumber);
         if(!number || used.has(number)){
@@ -9304,7 +9861,7 @@ function appendSmartNodes(...incoming){
         used.add(number);
         next = Math.max(next, number + 1);
     });
-    if(canvas) canvas.nextNodeNumber = Math.max(Number(canvas.nextNodeNumber) || 1, next);
+    if(canvas) canvas.nextNodeNumber = next;
     nodes.push(...additions);
     return additions;
 }
@@ -10817,19 +11374,30 @@ function copySelectedNodes(){
         nodes:JSON.parse(JSON.stringify(copiedNodes)),
         connections:JSON.parse(JSON.stringify(copiedConnections))
     };
+    saveSmartClipboardIntent({kind:'nodes', source:'canvas', count:copiedNodes.length, at:Date.now()});
+    // Nodes stay in the canvas clipboard. Do not overwrite the OS media
+    // clipboard: it may still be needed when the user pastes outside the app.
     toast(`已复制 ${copiedNodes.length} 个节点`);
+    return nodeClipboard;
 }
 function selectedClipboardMedia(){
-    return selectedNodeIds()
-        .map(id => nodes.find(node => node.id === id))
-        .filter(node => isSmartImageNode(node))
-        .flatMap(node => (node.images || []).filter(item => item?.url || isTextMediaItem(item)).map(item => ({node, item})));
+    const selectedMedia = selectedImage.nodeId
+        ? [{node:nodes.find(node => node.id === selectedImage.nodeId), index:Number(selectedImage.index)}]
+        : selectedNodeIds().map(id => ({node:nodes.find(node => node.id === id), index:-1}));
+    return selectedMedia
+        .filter(entry => isSmartImageNode(entry.node))
+        .flatMap(({node,index}) => {
+            const images = node.images || [];
+            const items = index >= 0 ? [images[index]].filter(Boolean) : images;
+            return items.filter(item => item?.url || isTextMediaItem(item)).map(item => ({node, item:{...item,kind:mediaKindForItem(item)}}));
+        });
 }
 async function copySelectedMediaToSystemClipboard(){
     const entries = selectedClipboardMedia();
     if(!entries.length){ toast(tr('smart.clipboardNoMaterial')); return false; }
     try {
         await StudioMedia.copy(entries.map(entry=>({...entry.item,kind:mediaKindForItem(entry.item),text:SMART_NODE_CONTRACT.textContentForMediaItem(entry.item)||undefined})));
+        saveSmartClipboardIntent({kind:'media', source:'canvas', count:entries.length, kinds:[...new Set(entries.map(entry => mediaKindForItem(entry.item)))], at:Date.now()});
         toast(entries.length > 1 ? trf('smart.clipboardCopiedMany', {n:entries.length}) : tr('smart.clipboardCopiedOne'));
         return true;
     } catch(error){
@@ -10878,6 +11446,29 @@ function pasteNodes(){
 // 跨页"素材库 → 画布"剪贴板：素材库管理页把所选素材写进这个 localStorage key，
 // 画布里按 Ctrl+V 读取并批量生成图片节点（网格平铺），用完即清空（一次性）。
 const SMART_CANVAS_ASSET_INBOX_KEY = 'smart_canvas_asset_inbox';
+const SMART_CANVAS_CLIPBOARD_INTENT_KEY = 'smart_canvas_clipboard_intent';
+function saveSmartClipboardIntent(intent){
+    smartClipboardIntent = {...intent, at:Number(intent?.at || Date.now())};
+    try { localStorage.setItem(SMART_CANVAS_CLIPBOARD_INTENT_KEY, JSON.stringify({...smartClipboardIntent, ts:smartClipboardIntent.at})); } catch(_) {}
+}
+function loadSmartClipboardIntent(){
+    try {
+        const value = JSON.parse(localStorage.getItem(SMART_CANVAS_CLIPBOARD_INTENT_KEY) || 'null');
+        if(value && !value.invalidatedAt && Date.now() - Number(value.ts || value.at || 0) < 30 * 60 * 1000) return value;
+    } catch(_) {}
+    return null;
+}
+function invalidateCanvasNodeClipboardOnFocusLoss(){
+    // The browser exposes no event for an external application's copy action.
+    // Losing the canvas window is the reliable boundary we do have: after that
+    // boundary, a system clipboard file is treated as the user's new material
+    // copy instead of a stale file left before a canvas-node copy.
+    const intent = smartClipboardIntent || loadSmartClipboardIntent();
+    if(intent?.kind !== 'nodes') return;
+    const invalidated = {...intent, invalidatedAt:Date.now()};
+    smartClipboardIntent = invalidated;
+    try { localStorage.setItem(SMART_CANVAS_CLIPBOARD_INTENT_KEY, JSON.stringify({...invalidated, ts:invalidated.at})); } catch(_) {}
+}
 function readAssetInbox(){
     try {
         const data = JSON.parse(localStorage.getItem(SMART_CANVAS_ASSET_INBOX_KEY) || 'null');
@@ -10890,25 +11481,32 @@ function readAssetInbox(){
 function pasteAssetsFromInbox(){
     const items = readAssetInbox();
     if(!items) return false;
+    pasteMediaItemsToCanvas(items);
+    saveSmartClipboardIntent({kind:'media', source:'asset-library', count:items.length, kinds:[...new Set(items.map(item => mediaKindForItem(item)))], at:Date.now()});
+    try { localStorage.removeItem(SMART_CANVAS_ASSET_INBOX_KEY); } catch(e){}
+    return true;
+}
+function pasteMediaItemsToCanvas(items=[]){
+    const normalized = (items || []).filter(item => item && (item.url || mediaKindForItem(item) === 'text'))
+        .map(item => ({...item, kind:mediaKindForItem(item)}));
+    if(!normalized.length) return false;
     const center = lastMouseWorld || viewportCenter();
-    const cell = 260; // 网格间距（世界坐标）
-    const cols = Math.max(1, Math.min(items.length, Math.ceil(Math.sqrt(items.length))));
-    const rows = Math.ceil(items.length / cols);
+    const cell = 260;
+    const cols = Math.max(1, Math.min(normalized.length, Math.ceil(Math.sqrt(normalized.length))));
     const startX = center.x - (cols - 1) * cell / 2;
-    const startY = center.y - (rows - 1) * cell / 2;
+    const startY = center.y - (Math.ceil(normalized.length / cols) - 1) * cell / 2;
     pushUndo();
     const created = [];
-    items.forEach((it, i) => {
-        const r = Math.floor(i / cols), c = i % cols;
-        const p = {x: startX + c * cell, y: startY + r * cell};
-        const node = createImageNodeAt(p, [assetNodeImageFromItem(it)], {skipUndo:true, select:false});
+    normalized.forEach((item, index) => {
+        const point = {x:startX + (index % cols) * cell, y:startY + Math.floor(index / cols) * cell};
+        const node = item.kind === 'text'
+            ? createTextMaterialNodeAt(point, item.text || item.content || '', {skipUndo:true, name:item.name || '剪贴板文本.md', select:false})
+            : createImageNodeAt(point, [assetNodeImageFromItem(item)], {skipUndo:true, select:false});
         if(node) created.push(node.id);
     });
     selectedId = created.length === 1 ? created[0] : '';
     selectedIds = created.length > 1 ? created : [];
     selectedImage = {nodeId:'', index:-1};
-    lastNodePasteAt = Date.now();
-    try { localStorage.removeItem(SMART_CANVAS_ASSET_INBOX_KEY); } catch(e){}
     render();
     scheduleSave();
     toast(`已粘贴 ${created.length} 个素材到画布`);
@@ -12335,6 +12933,7 @@ function closeSmartPriceComparison(){
 }
 function closeSmartTopPanels(except=''){
     if(except !== 'prices') closeSmartPriceComparison();
+    if(except !== 'production') canvasProductionView?.open(false);
     if(except !== 'workflow') closeSmartWorkflowTransferModal();
     if(except !== 'shortcuts') closeSmartCanvasShortcuts();
     if(except !== 'logs') closeSmartCanvasLog();
@@ -14757,6 +15356,7 @@ function smartNodeToolbarHtml(node){
         const actions = [
             ...(images.length>1 ? [{key:'remove-item',icon:'minus-circle',label:capabilityUiText('移除当前素材','Remove current item'),enabled:true}] : []),
 
+            {key:'register-segment', icon:'list-plus', label:capabilityUiText('登记创作分段','Register segment'), enabled:true},
             {key:'replace', icon:'upload', label:capabilityUiText('上传素材','Upload material'), enabled:true},
             {key:'template', icon:'library', label:capabilityUiText('模板库','Templates'), enabled:true},
 
@@ -14822,6 +15422,10 @@ function extractResultGroupItemToCanvas(group, itemIndex){
 async function runSmartNodeToolbarAction(nodeId, action){
     const node = nodes.find(n => n.id === nodeId);
     if(!node) return;
+    if(action === 'register-segment'){
+        registerProductionSegments([nodeId]);
+        return;
+    }
     const index = smartNodeToolbarImageIndex(node);
     const item = imageForDisplay(node.images?.[index]);
     if(!item || (!item.url && mediaKindForItem(item) !== 'text')) return;
@@ -14883,6 +15487,13 @@ async function runSmartNodeToolbarAction(nodeId, action){
     const modeMap = {crop:'crop', outpaint:'outpaint', mask:'mask', brush:'brush', grid:'grid'};
     openImageEditor(nodeId, index);
     setImageEditMode(modeMap[action] || 'preview', true);
+}
+function registerProductionSegments(nodeIds){
+    const selected= [...new Set(nodeIds)].map(id=>nodes.find(n=>n.id===id)).filter(n=>n&&CanvasProduction.kind(n)==='text'&&n.production?.role!=='script'&&n.production?.role!=='segment');
+    if(!selected.length){toast(capabilityUiText('该文本节点已登记，或当前没有可登记的文本节点','This text node is already registered, or no eligible text node is available'));return;}
+    pushUndo();
+    CanvasProduction.registerSegments(nodes,selected.map(node=>node.id),canvas?.connections||[]);
+    render();scheduleSave();
 }
 async function promoteSmartMaterial(itemOrId, name=''){
     const item = typeof itemOrId === 'object' ? itemOrId : null;
@@ -25286,6 +25897,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, runNode=null
     const profile = selection.profile;
     runSettings.imageFamilyId = selection.family.family_id;
     runSettings.model = profile.model_id;
+    assertCapabilityRunParameters(profile, capabilityParameterSubmissionValues(profile, runSettings));
     const effective = capabilityImageParameterValues(profile, runSettings);
     const payload = {
         prompt,
@@ -25473,21 +26085,22 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, runNode
         });
         const refVideos = videoRefsOnly(uploadedRefs).map(ref => ref?.url).filter(Boolean);
         const refAudios = audioRefsOnly(uploadedRefs).map(ref => ref?.url).filter(Boolean).slice(0, 3);
-        if(runSettings.videoUseFrameRoles && refImages.length === 2 && !refVideos.length && !refAudios.length){
+        const currentProfile = capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation', capabilityRegionForProvider(runSettings.videoProvider, runSettings));
+        if(videoShouldUseFrameRoles([...refImages, ...refVideos.map(url => ({url, kind:'video'})), ...refAudios.map(url => ({url, kind:'audio'}))], runSettings, currentProfile)){
             refImages[0].role = 'first_frame';
             refImages[1].role = 'last_frame';
         }
         const inputCounts = {text:prompt ? 1 : 0, image:refImages.length, video:refVideos.length, audio:refAudios.length};
         const inputRefs = [...refImages, ...refVideos.map(url => ({url, kind:'video'})), ...refAudios.map(url => ({url, kind:'audio'}))];
-        const inputRoles = videoCapabilityInputRoles(inputRefs, runSettings, Boolean(prompt));
+        const inputRoles = videoCapabilityInputRoles(inputRefs, runSettings, Boolean(prompt), currentProfile);
         const parameterIntent = capabilityParameterIntent(runSettings.videoProvider, runSettings.videoModel, 'video_generation', runSettings);
         const region = capabilityRegionForProvider(runSettings.videoProvider, runSettings);
-        const currentProfile = capabilityProfileFor(runSettings.videoProvider, runSettings.videoModel, 'video_generation', region);
         parameterIntent.__execution_mode = videoExecutionModeFor(currentProfile, inputRefs, runSettings, Boolean(manualSmartVideoLink(runSettings)));
         const selection = resolveCapabilityForRun(runSettings.videoProvider, 'video_generation', inputCounts, runSettings.videoFamilyId, runSettings.videoModel, '', inputRoles, parameterIntent, region);
         const profile = selection.profile;
         runSettings.videoFamilyId = selection.family.family_id;
         runSettings.videoModel = profile.model_id;
+        assertCapabilityRunParameters(profile, capabilityParameterSubmissionValues(profile, runSettings));
         const parameterValues = capabilityVideoParameterValues(profile, runSettings);
         const executionMode = videoExecutionModeFor(profile, inputRefs, runSettings);
         const payload = window.SmartModelCapabilities.buildVideoRequest(profile, {
@@ -25560,6 +26173,7 @@ async function runApiAudioMediaGeneration(prompt, refs, runSettings=settings, ru
     const parameterValues = isMusic
         ? capabilityParameterSubmissionValues(profile, runSettings)
         : capabilityAudioParameterValues(profile, runSettings, referenceAudio);
+    assertCapabilityRunParameters(profile, capabilityParameterSubmissionValues(profile, runSettings));
     const payload = window.SmartModelCapabilities.buildAudioRequest(profile, {
         prompt,
         provider_id:providerId,
@@ -27184,7 +27798,7 @@ shell.oncontextmenu = e => {
         e.stopPropagation();
         return;
     }
-    if(didPan || e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
+    if(didPan || e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-production-toggle,.smart-agent-toggle,.smart-price-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.smart-minimap')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     e.stopPropagation();
@@ -27200,14 +27814,16 @@ shell.oncontextmenu = e => {
     openCreateMenu(e);
 };
 shell.ondblclick = e => {
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
+    // Toolbar buttons must consume rapid repeated clicks themselves; otherwise
+    // the second click bubbles to the canvas and opens the node creation menu.
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-production-toggle,.smart-agent-toggle,.smart-price-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     openCreateMenu(e);
 };
 shell.onclick = e => {
     if(selectionJustFinished) return;
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-production-toggle,.smart-agent-toggle,.smart-price-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     if(createMenuKeepOpenOnNextClick){
         createMenuKeepOpenOnNextClick = false;
@@ -27758,27 +28374,68 @@ shell.ondrop = async e => {
     if(payload.type === 'none') return;
     await handleSmartImageDropPayload(payload, '', {point:p, forceNew:true});
 };
+window.addEventListener('blur', invalidateCanvasNodeClipboardOnFocusLoss);
+document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'hidden') invalidateCanvasNodeClipboardOnFocusLoss();
+});
 window.addEventListener('paste', e => {
-    const files = [...(e.clipboardData?.files || [])].filter(isSupportedUploadFile);
-    if(files.length){
-        lastImagePasteAt = Date.now();
-        handleFiles(files, selectedId);
-        return;
-    }
-    // 素材库管理页「复制到画布」过来的素材：Ctrl+V 批量粘贴成图片节点
-    if(!isEditableTarget(e.target) && pasteAssetsFromInbox()){
-        e.preventDefault();
-        return;
-    }
-    if(nodeClipboard?.nodes?.length && !isEditableTarget(e.target)){
+    if(isEditableTarget(e.target)) return;
+    const intent = loadSmartClipboardIntent();
+    const hasNodeClipboard = Boolean(nodeClipboard?.nodes?.length);
+    // A canvas copy is an explicit in-app action. It wins over stale files that
+    // remain in the OS clipboard; focus loss invalidates it when the user has
+    // had an opportunity to copy new material outside the canvas.
+    if(hasNodeClipboard && intent?.kind === 'nodes'){
         e.preventDefault();
         pasteNodes();
         return;
     }
-    const text = e.clipboardData?.getData('text/plain') || '';
-    if(text && !isEditableTarget(e.target)){
+    // Only inspect system clipboard files when there is no active canvas-node
+    // copy intent. The OS clipboard always contains something, so presence of a
+    // file alone cannot decide which paste behavior the user requested.
+    const externalImageItems = [...(e.clipboardData?.items || [])]
+        .filter(item => item.kind === 'file' && /^image\//i.test(item.type || ''))
+        .map(item => item.getAsFile?.()).filter(Boolean);
+    if(externalImageItems.length){
+        e.preventDefault();
+        lastImagePasteAt = Date.now();
+        // External media creates material nodes. It must not replace a selected
+        // execution node just because one happens to be selected.
+        handleFiles(externalImageItems, '');
+        saveSmartClipboardIntent({kind:'media', source:'external', count:externalImageItems.length, kinds:['image'], at:Date.now()});
+        return;
+    }
+    const files = [...(e.clipboardData?.files || [])].filter(isSupportedUploadFile);
+    if(files.length){
+        e.preventDefault();
+        lastImagePasteAt = Date.now();
+        handleFiles(files, '');
+        saveSmartClipboardIntent({kind:'media', source:'external', count:files.length, kinds:[...new Set(files.map(file => mediaKindForFile(file)))], at:Date.now()});
+        return;
+    }
+    // 素材库管理页「复制到画布」过来的素材：Ctrl+V 批量粘贴成图片节点
+    if(pasteAssetsFromInbox()){
+        e.preventDefault();
+        return;
+    }
+    const mediaText = e.clipboardData?.getData('text/plain') || '';
+    const html = e.clipboardData?.getData('text/html') || '';
+    const richMediaValues = uniqueSmartDropValues([
+        ...smartDropTextFragments(mediaText),
+        ...smartDropTextFragments(html)
+    ]).map(decodeSmartDropText).filter(value => /^https?:\/\//i.test(value));
+    const richMediaItems = richMediaValues.map(url => ({url, name:fileNameFromUrl(url) || smartImageNameFromUrl(url), kind:mediaKindForUrls([url], 'image')}));
+    if(richMediaItems.length){
+        e.preventDefault();
+        saveSmartClipboardIntent({kind:'media', source:'external', count:richMediaItems.length, kinds:[...new Set(richMediaItems.map(item => item.kind))], at:Date.now()});
+        pasteMediaItemsToCanvas(richMediaItems);
+        return;
+    }
+    const text = mediaText;
+    if(text){
         e.preventDefault();
         createTextMaterialNodeAt(viewportCenter(), text, {name:'剪贴板文本.md'});
+        saveSmartClipboardIntent({kind:'media', source:'external', count:1, kinds:['text'], at:Date.now()});
     }
 });
 // 部分桌面浏览器将 Command+C 直接转成原生 copy 事件，仍沿用节点复制。
@@ -27786,7 +28443,13 @@ window.addEventListener('copy', event => {
     if(event.defaultPrevented || isEditableTarget(event.target) || window.getSelection()?.toString()) return;
     if(document.querySelector('dialog[open]') || !selectedNodeIds().length) return;
     event.preventDefault();
-    copySelectedNodes();
+    const clipboard = copySelectedNodes();
+    try {
+        if(event.clipboardData?.setData){
+            event.clipboardData.setData(SMART_NODE_CLIPBOARD_MIME, JSON.stringify({count:clipboard?.nodes?.length || 0}));
+            event.clipboardData.setData('text/plain', `老胡画布节点（${clipboard?.nodes?.length || 0}）`);
+        }
+    } catch(_) {}
 });
 window.addEventListener('keydown', e => {
     const key = String(e.key || '').toLowerCase();
@@ -27830,14 +28493,6 @@ window.addEventListener('keydown', e => {
         e.preventDefault();
         copySelectedNodes();
         return;
-    }
-    if((e.ctrlKey || e.metaKey) && key === 'v' && !isEditableTarget(e.target) && nodeClipboard?.nodes?.length){
-        const requestedAt = Date.now();
-        setTimeout(() => {
-            if(lastImagePasteAt >= requestedAt) return;
-            if(lastNodePasteAt >= requestedAt) return;
-            pasteNodes();
-        }, 90);
     }
     if(e.key === 'Escape' && imageEditModal.classList.contains('open')){
         closeImageEditor();
@@ -28393,7 +29048,10 @@ composer.addEventListener('mousedown', event => event.stopPropagation());
 composer.addEventListener('click', event => {
     // 点「生成」按钮不要收起已展开的参数栏:否则每生成一次参数栏就被收起,需重新点开。
     // 参数控件(.smart-control)内部点击本就不关;运行按钮也排除,让参数栏熬过生成与重渲染。
-    if(!event.target.closest('.smart-control') && !event.target.closest('#runBtn') && !event.target.closest('#cascadeRunBtn')) closeAllSmartPopovers();
+    const controlSurface = event.target.closest('.smart-control');
+    // 控件容器现在会占满整行；点击容器的空白部分也应收起弹层。
+    const insideControlContent = event.target.closest('.smart-pill,.smart-popover');
+    if((!controlSurface || !insideControlContent) && !event.target.closest('#runBtn') && !event.target.closest('#cascadeRunBtn')) closeAllSmartPopovers();
     event.stopPropagation();
 });
 function closeCreateMenuOnOutsidePointer(event){
@@ -28417,6 +29075,38 @@ promptInput.addEventListener('input', () => {
 promptInput.addEventListener('keyup', maybeOpenMentionPicker);
 promptInput.addEventListener('mouseup', saveMentionRange);
 promptInput.addEventListener('focus', saveMentionRange);
+function canvasInputEnterAction(editable){
+    if(!editable || editable.closest('input[type="search"], [data-capability-picker-search], .model-config-search, .node-title, .prompt-template-panel')) return null;
+    const textEditor = editable.closest('#smartTextEditorModal.open');
+    if(textEditor) return {button:textEditor.querySelector('[data-text-editor-save]')};
+    if(editable.matches('.media-text-inline-editor')) return {saveInline:true};
+    const generationEditor = editable.closest('#smartGenerationInfoModal.open');
+    if(generationEditor){
+        const node = nodes.find(item => item.id === smartGenerationInfoNodeId);
+        return {button:generationEditor.querySelector('[data-generation-info-run]'), busy:Boolean(node?.generationRerunPending)};
+    }
+    const owner = editable.closest('.image-node[data-id], [data-smart-node-id]');
+    const nodeId = owner?.dataset.id || owner?.dataset.smartNodeId;
+    const node = nodeId ? nodes.find(item => item.id === nodeId) : selectedNode();
+    if(!editable.closest('#composer.open, .image-node[data-id], [data-smart-node-id]')) return null;
+    if(!isSmartRunnableNode(node) || node?.id !== selectedNode()?.id) return null;
+    return {button:runBtn, busy:smartNodeInFlight(node) || smartCascadeIsLoopRunning(node.id)};
+}
+function handleCanvasInputEnter(event){
+    // 输入法的确认键不是提交；保持 Shift+Enter 的原生多行编辑行为。
+    if(event.defaultPrevented || event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    const editable = canvasTextEditableForTarget(event.target);
+    const action = canvasInputEnterAction(editable);
+    if(!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if(event.repeat || action.busy || action.button?.disabled) return;
+    if(action.saveInline){ finishSmartInlineTextEdit(); return; }
+    // 部分参数在 change 时写回；先提交当前编辑值，再复用按钮原有校验和执行链路。
+    if(editable.matches('input, textarea')) editable.dispatchEvent(new Event('change', {bubbles:true}));
+    action.button?.click();
+}
+document.addEventListener('keydown', handleCanvasInputEnter);
 promptInput.addEventListener('keydown', event => {
     if(event.key === 'Escape') closeMentionPicker();
     if(event.key === ' ' && /@$/.test(textBeforeCaret())){
@@ -28502,7 +29192,7 @@ document.addEventListener('click', event => {
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
     if(!event.target.closest('.prompt-preset-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('.prompt-preset-save')) closePromptPresetPanel();
     if(!event.target.closest('.prompt-template-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('#composerTemplateBtn')) closePromptTemplatePanel();
-    const topPanelHit = event.target.closest('.smart-workflow-toggle,.smart-shortcut-toggle,.smart-price-toggle,.smart-log-toggle,.asset-toggle,.workflow-transfer-panel,.price-comparison-panel,.shortcut-modal,.log-modal,.asset-panel');
+    const topPanelHit = event.target.closest('.smart-workflow-toggle,.smart-production-toggle,.canvas-production-panel,.smart-shortcut-toggle,.smart-price-toggle,.smart-log-toggle,.asset-toggle,.workflow-transfer-panel,.price-comparison-panel,.shortcut-modal,.log-modal,.asset-panel');
     if(!topPanelHit) closeSmartTopPanels();
 });
 document.addEventListener('keydown', event => {
@@ -28821,6 +29511,7 @@ window.onload = async () => {
     if(window.StudioI18n) window.StudioI18n.apply();
     if(window.lucide) lucide.createIcons();
     connectAssetLibrarySyncSocket();
+    await loadSmartCanvasPersonalization();
     await loadConfig();
     await loadAssetLibrary();
     await loadCanvas();
@@ -28850,12 +29541,5 @@ canvasProductionView = CanvasProduction.mount({
         if(!nodes.some(n=>n.id===id))return;
         // 导航不进入参数编辑，避免仅查看进度就触发模型自动选择或改写草稿。
         focusSmartNodeInViewport(id,{bottomInset});
-    },
-    registerSelected:()=>{
-        const selected=selectedNodeIds().map(id=>nodes.find(n=>n.id===id)).filter(n=>n&&CanvasProduction.kind(n)==='text'&&n.production?.role!=='script');
-        if(!selected.length){toast(capabilityUiText('请先选中分段文本节点','Select segment text nodes first'));return;}
-        pushUndo();let order=Math.max(0,...CanvasProduction.rows(nodes,canvas?.connections||[]).map(r=>r.number));
-        selected.filter(n=>n.production?.role!=='segment').forEach(n=>CanvasProduction.update(n,{role:'segment',order:++order},nodes));
-        render();scheduleSave();
     }
 });

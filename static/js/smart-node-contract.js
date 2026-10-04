@@ -752,8 +752,14 @@
     }
     function hydrateRunningHubProviderApps(provider){
         const copy = clone(provider) || {};
-        if(String(copy.id || '').trim().toLowerCase() !== 'runninghub' || !Array.isArray(copy.rh_apps)) return copy;
-        copy.rh_apps = copy.rh_apps.map(hydrateRunningHubAppEntry);
+        if(String(copy.id || '').trim().toLowerCase() !== 'runninghub') return copy;
+        if(Array.isArray(copy.rh_apps)) copy.rh_apps = copy.rh_apps.map(hydrateRunningHubAppEntry);
+        if(copy.rh_regions && typeof copy.rh_regions === 'object' && !Array.isArray(copy.rh_regions)){
+            Object.values(copy.rh_regions).forEach(region => {
+                if(!region || typeof region !== 'object') return;
+                if(Array.isArray(region.rh_apps)) region.rh_apps = region.rh_apps.map(hydrateRunningHubAppEntry);
+            });
+        }
         return copy;
     }
     function runningHubSchemaSnapshot(fields){

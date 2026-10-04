@@ -1481,7 +1481,9 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
 
 class ApiSettingsCanvasEndToEndTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        cache = ROOT / 'cache'
+        cache.mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=cache)
         self.root = Path(self.temp.name)
         self.storage = ProjectStorage(self.root)
         self.storage.ensure_layout()
@@ -1495,12 +1497,18 @@ class ApiSettingsCanvasEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.api_env_file.write_text("", encoding="utf-8")
         self.providers_file = self.root / "data" / "api_providers.json"
         self.history_file = self.root / "data" / "history.json"
+        self.static_providers_file = self.root / "static" / "runninghub" / "api_providers.json"
         self.patches = [
             patch.object(main, "PROJECT_STORAGE", self.storage),
             patch.object(main, "ASSETS_DIR", str(self.storage.assets_dir)),
             patch.object(main, "OUTPUT_OUTPUT_DIR", str(self.storage.results_dir)),
             patch.object(main, "RESULTS_DIR", str(self.storage.results_dir)),
             patch.object(main, "API_PROVIDERS_FILE", str(self.providers_file)),
+            # 保存平台会同步静态模板和工作流存储，必须和正式配置一起隔离。
+            patch.object(main, "STATIC_RUNNINGHUB_DIR", str(self.static_providers_file.parent)),
+            patch.object(main, "STATIC_RUNNINGHUB_API_PROVIDERS_FILE", str(self.static_providers_file)),
+            patch.object(main, "RUNNINGHUB_WORKFLOW_STORE_FILE", str(self.root / "data" / "runninghub_workflows.json")),
+            patch.object(main, "DATA_DIR", str(self.root / "data")),
             patch.object(main, "API_ENV_FILE", str(self.api_env_file)),
             patch.object(main, "HISTORY_FILE", str(self.history_file)),
             patch.object(main, "GLOBAL_LOOP", None),
@@ -1553,6 +1561,8 @@ class ApiSettingsCanvasEndToEndTests(unittest.IsolatedAsyncioTestCase):
 
         saved = await main.save_providers([provider])
         saved_provider = saved["providers"][0]
+        self.assertTrue(self.static_providers_file.is_file(), '静态模板必须写入测试目录')
+        self.assertEqual(Path(main.STATIC_RUNNINGHUB_API_PROVIDERS_FILE), self.static_providers_file)
         self.assertIn(app_id, [item["id"] for item in saved_provider["rh_apps"]])
         self.assertIn(app_id, [item["id"] for item in saved_provider["rh_regions"]["global"]["rh_apps"]])
 

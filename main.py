@@ -964,12 +964,7 @@ def merge_default_api_providers(providers, inject_missing=True):
                 current["base_url"] = ms_default["base_url"]
             seeded_version = int(current.get("ms_defaults_version") or 0)
             if seeded_version < MODELSCOPE_DEFAULTS_VERSION:
-                image_models = model_list_from_values([*MODELSCOPE_DEFAULT_IMAGE_MODELS, *(current.get("image_models") or [])])
-                chat_models = model_list_from_values([*MODELSCOPE_DEFAULT_CHAT_MODELS, *(current.get("chat_models") or [])])
-                loras = normalize_ms_loras([*MODELSCOPE_DEFAULT_LORAS, *(current.get("ms_loras") or [])])
-                current["image_models"] = image_models
-                current["chat_models"] = chat_models
-                current["ms_loras"] = loras
+                # 目录升级只推进内置档案版本；已有平台的可见模型和 LoRA 是用户选择，不能重新播种。
                 current["ms_defaults_version"] = MODELSCOPE_DEFAULTS_VERSION
     rh_default = load_static_runninghub_provider() or next((d for d in default_api_providers() if d["id"] == "runninghub"), None)
     if rh_default:
@@ -1081,11 +1076,9 @@ def merge_default_api_providers(providers, inject_missing=True):
         if current_protocol == "codex":
             image_models = [item for item in image_models if str(item or "").strip().lower() != "$imagegen"]
             image_models = []
-        current["image_models"] = model_list_from_values(image_models if current_protocol == "codex" else [*image_models, *default_image_models])
+        current["image_models"] = model_list_from_values(image_models)
         current["chat_models"] = model_list_from_values(
-            (current.get("chat_models") or [])
-            if current_protocol == "codex"
-            else [*(current.get("chat_models") or []), *default_chat_models]
+            current.get("chat_models") or []
         )
         current["video_models"] = []
         current["audio_models"] = []
@@ -1910,7 +1903,16 @@ def public_model_catalog(providers=None):
     return catalog
 
 def build_model_capability_catalog(providers=None):
-    return MODEL_CAPABILITY_REGISTRY.build_catalog(providers if providers is not None else load_api_providers())
+    catalog = MODEL_CAPABILITY_REGISTRY.build_catalog(providers if providers is not None else load_api_providers())
+    # 统一可执行选项投影：前端不再自行计算稳定标识，避免前后端各算一套（§13.5、§11.2）。
+    try:
+        options = studio_model_selection.compile_catalog_options(catalog)
+    except Exception:  # pragma: no cover - 投影失败不得让目录接口整体不可用
+        options = []
+    catalog["options"] = options
+    catalog["catalog_revision"] = studio_model_selection.catalog_revision(options)
+    catalog["selection_contract_version"] = studio_model_selection.SCHEMA_VERSION
+    return catalog
 
 def validate_model_capability_request(provider_id, model_id, node_type, input_counts=None, input_roles=None, parameters=None, providers=None):
     try:
@@ -2172,6 +2174,37 @@ async def versioned_static_page(page_name: str):
     if not os.path.isfile(os.path.join(STATIC_DIR, filename)):
         raise HTTPException(status_code=404, detail="页面不存在")
     return static_html_response(filename)
+
+@app.get("/api/static-revision", include_in_schema=False)
+async def static_revision():
+    """返回前端源码和模型能力档案修订指纹，供本地页面自动热刷新使用。"""
+    files = []
+    revisions = {}
+    watched_roots = [
+        (STATIC_DIR, ""),
+        (os.path.join(BASE_DIR, "data", "model_capabilities"), "data/model_capabilities"),
+    ]
+    for root_path, prefix in watched_roots:
+        if not os.path.isdir(root_path):
+            continue
+        for root, _dirs, names in os.walk(root_path):
+            for name in names:
+                if prefix and not name.endswith(".json"):
+                    continue
+                if not prefix and not name.endswith((".js", ".css", ".html")):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    stat = os.stat(path)
+                    relative = os.path.relpath(path, root_path).replace(os.sep, "/")
+                    relative = f"{prefix}/{relative}" if prefix else relative
+                    token = f"{stat.st_mtime_ns}:{stat.st_size}"
+                    files.append(f"{relative}:{token}")
+                    revisions[relative] = token
+                except OSError:
+                    continue
+    digest = hashlib.sha256("\n".join(sorted(files)).encode("utf-8")).hexdigest()[:16]
+    return JSONResponse({"revision": digest, "files": revisions}, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
@@ -4246,6 +4279,29 @@ def normalize_canvas_kind(kind="classic"):
 
 # ===== 项目（按项目分类管理画布）=====
 PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
+SMART_CANVAS_PERSONALIZATION_PATH = os.path.join(DATA_DIR, "smart_canvas_personalization.json")
+
+@app.get("/api/smart-canvas/personalization")
+async def get_smart_canvas_personalization():
+    path = Path(SMART_CANVAS_PERSONALIZATION_PATH)
+    if not path.exists():
+        return {"version": 1, "executionLayouts": {}, "parameterOptionOrder": {}, "modelOrder": {}}
+    try:
+        value = read_json_file(path)
+    except (DataFileError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"画布个性化配置读取失败：{exc}") from exc
+    return value if isinstance(value, dict) else {"version": 1}
+
+@app.put("/api/smart-canvas/personalization")
+async def put_smart_canvas_personalization(payload: Dict[str, Any]):
+    allowed = {
+        "version": max(1, int(payload.get("version") or 1)),
+        "executionLayouts": payload.get("executionLayouts") if isinstance(payload.get("executionLayouts"), dict) else {},
+        "parameterOptionOrder": payload.get("parameterOptionOrder") if isinstance(payload.get("parameterOptionOrder"), dict) else {},
+        "modelOrder": payload.get("modelOrder") if isinstance(payload.get("modelOrder"), dict) else {},
+    }
+    atomic_write_json(Path(SMART_CANVAS_PERSONALIZATION_PATH), allowed)
+    return {"ok": True}
 DEFAULT_PROJECT_ID = "default"
 
 def load_projects():
@@ -7187,6 +7243,8 @@ async def generate_jimeng_provider_image(prompt, size, model, reference_images=N
                 f"--resolution_type={resolution}",
                 f"--poll={jimeng_poll_seconds()}",
             ]
+            if requested_ratio:
+                args.append(f"--ratio={requested_ratio}")
             if model_version:
                 args.append(f"--model_version={model_version}")
         else:
@@ -7469,6 +7527,13 @@ def ai_money_video_request_body(model, prompt, seconds, aspect_ratio="", resolut
     images = [str(url or "").strip() for url in (image_urls or []) if str(url or "").strip()]
     videos = [str(url or "").strip() for url in (video_urls or []) if str(url or "").strip()]
     audios = [str(url or "").strip() for url in (audio_urls or []) if str(url or "").strip()]
+    if lower_model == "animate-motion-transfer":
+        if len(images) != 1 or len(videos) != 1:
+            raise HTTPException(status_code=400, detail="Animate 动作迁移需要一张角色图片和一个参考动作视频。")
+        metadata = {"video_url": videos}
+        if capability_parameters:
+            metadata.update({key: value for key, value in capability_parameters.items() if value not in (None, "")})
+        return merge_request_body({"model": model_name, "images": images, "metadata": metadata}, None)
     is_wan_3_reference = bool(re.fullmatch(r"wan-3\.0-(?:global-)?prime-r2v", lower_model))
     if lower_model.endswith("-i2v") and not images:
         raise HTTPException(status_code=400, detail="laohu 图生视频模型需要至少一张参考图片。")
@@ -8119,8 +8184,9 @@ async def generate_ai_money_video(payload, provider, capability_parameters=None)
             seed=payload.seed,
             capability_parameters=capability_parameters,
         )
+        submit_endpoint = "/v1/video/generations" if str(payload.model or "").strip().lower() == "animate-motion-transfer" else "/v1/videos"
         response = await client.post(
-            f"{base_url}/v1/videos",
+            f"{base_url}{submit_endpoint}",
             headers=api_headers(provider=provider, model=body["model"]),
             json=body,
         )
@@ -16771,20 +16837,28 @@ async def fetch_upstream_models_from_payload(payload: TestConnectionPayload):
     return await fetch_models_from_upstream(payload.base_url, api_key, protocol, payload.image_request_mode, payload.region)
 
 @app.get("/api/providers/{provider_id}/fetch-models")
-async def fetch_upstream_models(provider_id: str):
+async def fetch_upstream_models(provider_id: str, region: str = ""):
     """从已保存的上游 OpenAI 兼容接口拉取 /v1/models 列表，按名称智能分类为 image/chat/video。"""
     provider = get_api_provider_exact(provider_id)
     if is_codex_provider(provider):
         return await fetch_models_from_upstream("", "", "codex", provider.get("image_request_mode") or "openai")
     if is_gemini_cli_provider(provider):
         return await fetch_models_from_upstream("", "", "gemini-cli", provider.get("image_request_mode") or "openai")
-    api_key = os.getenv(runninghub_wallet_key_env(), "") if provider["id"] == "runninghub" else ""
+    if provider_protocol(provider) == "jimeng":
+        return await fetch_models_from_upstream("", "", "jimeng", provider.get("image_request_mode") or "openai")
+    selected_region = runninghub_normalize_region(region or provider.get("rh_region")) if provider["id"] == "runninghub" else ""
+    api_key = os.getenv(runninghub_wallet_key_env(selected_region), "") if provider["id"] == "runninghub" else ""
     if not api_key:
         api_key = provider_env_key_value(provider["id"])
-    if not api_key:
+    if not api_key and provider["id"] != "runninghub":
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
-    payload = await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
-    save_provider_catalog_snapshot(Path(BASE_DIR), provider["id"], payload, source=upstream_models_url(provider.get("base_url") or "", provider_protocol(provider)))
+    base_url = provider.get("base_url") or ""
+    if provider["id"] == "runninghub":
+        region_config = (provider.get("rh_regions") or {}).get(selected_region) or {}
+        base_url = region_config.get("base_url") or RUNNINGHUB_REGION_DEFAULTS[selected_region]["base_url"]
+    payload = await fetch_models_from_upstream(base_url, api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai", selected_region)
+    if provider["id"] != "runninghub":
+        save_provider_catalog_snapshot(Path(BASE_DIR), provider["id"], payload, source=upstream_models_url(base_url, provider_protocol(provider)))
     return payload
 
 async def build_online_image_result(payload: OnlineImageRequest):
@@ -19232,6 +19306,8 @@ from hypit_runtime import HypitRuntime
 from studio_execution import StudioExecution
 from studio_app_execution import StudioAppExecution
 from studio_hypit_models import create_hypit_models_router
+import studio_model_selection
+import studio_module_models
 
 
 def studio_canvas_rename(canvas_id, name, expected_revision=None):
@@ -19477,6 +19553,7 @@ async def studio_cancel_node(canvas, node, task_id):
 
 STUDIO_CANVAS = HeadlessCanvas(load_canvas, save_canvas, CANVAS_LOCK, studio_submit_node,
                               studio_cancel_node, studio_validate_model, studio_notify)
+app.include_router(studio_module_models.create_module_models_router(build_model_capability_catalog))
 app.include_router(create_agent_router(BASE_DIR, load_canvas, executor=STUDIO_CANVAS))
 
 @app.get("/api/canvases")

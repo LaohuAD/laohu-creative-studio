@@ -1,0 +1,286 @@
+{
+  "test_only": true,
+  "note": "前后端共享参数校验测试向量（规划 §16 P3 第 5 项、§13.5）。Python 与 Node 必须对每个用例得出相同判定。禁止用于生产目录。",
+  "schema_version": 2,
+  "cases": [
+    {
+      "id": "discrete_enum_legal",
+      "spec": {
+        "type": "integer",
+        "options": [
+          4,
+          8,
+          12
+        ],
+        "default": 8
+      },
+      "value": 8,
+      "expect": "legal"
+    },
+    {
+      "id": "discrete_enum_illegal",
+      "spec": {
+        "type": "integer",
+        "options": [
+          4,
+          8,
+          12
+        ],
+        "default": 8
+      },
+      "value": 5,
+      "expect": "illegal",
+      "why": "离散枚举之外的时长不得出现（C05）"
+    },
+    {
+      "id": "integer_fraction_not_rounded",
+      "spec": {
+        "type": "integer",
+        "min": 4,
+        "max": 30,
+        "step": 1
+      },
+      "value": 5.4,
+      "expect": "illegal",
+      "why": "不得四舍五入成 5 后提交（C07）"
+    },
+    {
+      "id": "out_of_range_not_clamped",
+      "spec": {
+        "type": "integer",
+        "min": 4,
+        "max": 15,
+        "step": 1
+      },
+      "value": 30,
+      "expect": "illegal",
+      "why": "不得静默压到 15（C09）"
+    },
+    {
+      "id": "integer_in_range_legal",
+      "spec": {
+        "type": "integer",
+        "min": 4,
+        "max": 30,
+        "step": 1
+      },
+      "value": 17,
+      "expect": "legal"
+    },
+    {
+      "id": "number_step_illegal",
+      "spec": {
+        "type": "number",
+        "min": 0,
+        "max": 1,
+        "step": 0.5
+      },
+      "value": 0.3,
+      "expect": "illegal"
+    },
+    {
+      "id": "number_step_legal",
+      "spec": {
+        "type": "number",
+        "min": 0,
+        "max": 1,
+        "step": 0.5
+      },
+      "value": 0.5,
+      "expect": "legal"
+    },
+    {
+      "id": "nan_rejected",
+      "spec": {
+        "type": "number",
+        "min": 0,
+        "max": 1
+      },
+      "value": "NaN",
+      "expect": "illegal",
+      "why": "非有限数必须拒绝（C18）"
+    },
+    {
+      "id": "boolean_true_legal",
+      "spec": {
+        "type": "boolean",
+        "default": false
+      },
+      "value": true,
+      "expect": "legal"
+    },
+    {
+      "id": "boolean_false_kept",
+      "spec": {
+        "type": "boolean",
+        "default": true
+      },
+      "value": false,
+      "expect": "legal",
+      "why": "false 不得被默认值替换（C03）"
+    },
+    {
+      "id": "boolean_known_string_rejected",
+      "spec": {
+        "type": "boolean"
+      },
+      "value": "true",
+      "expect": "illegal",
+      "why": "运行路径不做隐式强转；历史字符串布尔值由迁移阶段转换（C18）"
+    },
+    {
+      "id": "enum_without_options_rejected",
+      "spec": {
+        "type": "enum"
+      },
+      "value": "2k",
+      "expect": "illegal",
+      "why": "枚举来源不可靠时阻断，而不是放行任意字符串（§6.2）"
+    },
+    {
+      "id": "integral_float_matches_integer_option",
+      "spec": {
+        "type": "integer",
+        "options": [
+          4,
+          8,
+          12
+        ]
+      },
+      "value": 8.0,
+      "expect": "legal",
+      "why": "前后端枚举比较必须使用同一规范化键"
+    },
+    {
+      "id": "boolean_unknown_string_rejected",
+      "spec": {
+        "type": "boolean"
+      },
+      "value": "maybe",
+      "expect": "illegal",
+      "why": "未知布尔字符串必须拒绝，不做 truthy 转换（C18）"
+    },
+    {
+      "id": "enum_native_value_preserved",
+      "spec": {
+        "type": "enum",
+        "options": [
+          "720p",
+          "1080p",
+          "native1080p"
+        ]
+      },
+      "value": "native1080p",
+      "expect": "legal",
+      "why": "真实枚举值不得被本地化改写（C16）"
+    },
+    {
+      "id": "enum_unknown_rejected",
+      "spec": {
+        "type": "enum",
+        "options": [
+          "720p",
+          "1080p"
+        ]
+      },
+      "value": "4K",
+      "expect": "illegal"
+    },
+    {
+      "id": "zero_kept",
+      "spec": {
+        "type": "integer",
+        "min": 0,
+        "max": 100
+      },
+      "value": 0,
+      "expect": "legal",
+      "why": "0 是已设置的值（C03）"
+    },
+    {
+      "id": "required_missing",
+      "spec": {
+        "type": "enum",
+        "options": [
+          "a",
+          "b"
+        ],
+        "required": true
+      },
+      "value": null,
+      "expect": "required"
+    },
+    {
+      "id": "optional_missing_ok",
+      "spec": {
+        "type": "enum",
+        "options": [
+          "a",
+          "b"
+        ]
+      },
+      "value": null,
+      "expect": "legal"
+    },
+    {
+      "id": "numeric_boolean_rejected",
+      "spec": {
+        "type": "number"
+      },
+      "value": true,
+      "expect": "illegal"
+    },
+    {
+      "id": "numeric_blank_rejected",
+      "spec": {
+        "type": "number"
+      },
+      "value": "",
+      "expect": "illegal"
+    },
+    {
+      "id": "null_bound_is_not_zero",
+      "spec": {
+        "type": "number",
+        "min": null,
+        "max": null
+      },
+      "value": -1,
+      "expect": "legal"
+    },
+    {
+      "id": "required_level_missing",
+      "spec": {
+        "type": "text",
+        "level": "required"
+      },
+      "value": null,
+      "expect": "required"
+    },
+    {
+      "id": "ui_step_does_not_reject_api_default",
+      "spec": {
+        "type": "number",
+        "min": 0.01,
+        "max": 1,
+        "ui_step": 0.05
+      },
+      "value": 0.25,
+      "expect": "legal"
+    },
+    {
+      "id": "numeric_options_obey_bounds",
+      "spec": {
+        "type": "integer",
+        "options": [
+          1,
+          2,
+          3
+        ],
+        "min": 2
+      },
+      "value": 1,
+      "expect": "illegal"
+    }
+  ]
+}

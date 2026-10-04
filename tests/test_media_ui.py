@@ -138,16 +138,18 @@ global.fetch=async(url,opts)=>{calls.push({url,payload:JSON.parse(opts.body)});r
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(result.stdout.strip(),'ok')
 
-    def test_numeric_parameter_input_preserves_zero_clamps_bounds_and_syncs(self):
+    def test_numeric_parameter_input_preserves_values_for_contract_validation_and_syncs(self):
         source=(ROOT/'static/js/smart-canvas.js').read_text()
         helpers=source[source.index('function capabilityInputValue'):source.index('function renderCapabilityParameterEditor')]
         code="const assert=require('node:assert/strict');global.document={activeElement:null};\n"+helpers+"""
 const control={dataset:{capabilityType:'number'},value:'0',min:'0',max:'100'};
 assert.equal(capabilityInputValue(control),0);
-control.value='150';assert.equal(capabilityInputValue(control),100);
+control.value='150';assert.equal(capabilityInputValue(control),150);
 control.value='';assert.equal(capabilityInputValue(control),undefined);
-control.value='-5';assert.equal(capabilityInputValue(control),0);
-control.value='31.8';control.dataset.capabilityType='integer';assert.equal(capabilityInputValue(control),32);
+control.value='-5';assert.equal(capabilityInputValue(control),-5);
+control.value='31.8';control.dataset.capabilityType='integer';assert.equal(capabilityInputValue(control),31.8);
+const contract=require('./static/js/smart-model-capabilities.js');
+assert.equal(contract.parameterIssue({type:'integer',min:0,max:100},capabilityInputValue(control)),'PARAM_INVALID');
 const peer={value:'0'};control.type='number';control.closest=()=>({querySelectorAll:()=>[control,peer]});
 syncCapabilityNumericControls(control,32);assert.equal(peer.value,'32');assert.equal(control.value,'32');
 """
@@ -178,7 +180,7 @@ const definition=externalParameterSpec(field,'rh');assert.equal(definition.type,
 setCapabilityParameter({_externalEngine:'rh',parameters:{mode:definition}},'mode','0');
 assert.equal(settings.rhParams.mode.value,'0');
 const num={type:'number',min:0,max:10};setCapabilityParameter({_externalEngine:'comfy',parameters:{scale:num}},'scale',0);
-assert.equal(settings.comfyParams.scale,0);setCapabilityParameter({_externalEngine:'comfy',parameters:{scale:num}},'scale',20);assert.equal(settings.comfyParams.scale,10);
+assert.equal(settings.comfyParams.scale,0);setCapabilityParameter({_externalEngine:'comfy',parameters:{scale:num}},'scale',20);assert.equal(settings.comfyParams.scale,20);
 setCapabilityParameter({_externalEngine:'comfy',parameters:{flag:{type:'boolean'}}},'flag',false);assert.equal(settings.comfyParams.flag,false);
 assert.equal(settings.capabilityParameters,undefined);assert.equal(writes,4);
 """

@@ -10,7 +10,19 @@
 
 ## 视觉与连接设置边界（2026-09-19）
 
+- 2026-09-24 Hypit 设置只选择各生成用途的模型，不提供固定参数栏。每次复刻任务通过原生工程或请求传入参数，按所选精确模型契约校验；旧模块参数不再覆盖任务，已提交任务保持原快照。画布节点参数控件不受此规则影响。
+- 生成候选必须同时满足用户启用、输入契约完整、输出类型匹配与宿主调用用途。Marble 等尚未接入的 3D 场景、无生成输入的工具不得混入生成列表；Hypit 额外排除放大、增强、查询、下载、字幕等专用工具，并区分音效与语音。隐藏候选不删除能力档案、凭据或用户配置；旧选项不合适时明确提示重新选择，不擅自换模型。
+- Hypit 模型选择保持六块单列、默认收起；每块内部列表固定可滚动高度，外层不保留空参数区。点击另一块必须一次打开并关闭上一块，点击外部收起，不能提前折叠导致目标移位吞掉点击。能力标签由已确认的用途与输入契约派生，中英文同步，不靠名字猜测多图、视频或音频参考能力。
+
+- 画布生成节点的内容与参数输入框使用 Enter 运行当前节点；文本素材的正文和创作说明编辑框使用 Enter 保存；多行框使用 Shift+Enter 换行。复用现有运行/保存校验，不建立第二套提交链路。输入法确认选字和长按重复事件不得触发提交，忙碌状态不得重复运行或保存；搜索、重命名与其他非创作输入保留原行为。修改时同步右上角快捷键说明及中英文文案。
+
+- 2026-09-24 暂不开放 ModelScope 与火山引擎：API 设置的平台菜单、默认详情及画布模型配置的平台选项统一隐藏这两个入口；保留已有凭据、用户配置和能力档案。后续重新接入须按明确需求恢复，不能在刷新或升级时自行显示。
+
 - 参数弹层以有效选项为主体：短标题置于组选项上方，不占独立宽列；模型家族、模式／变体、支持平台按从左到右三栏呈现；优先紧凑列表、等宽网格和简短能力标签，禁止用大标题、重复卡片与过量留白挤压选择区域。尺寸仍须保证可读、可点击，并验证窄屏与滚动。
+- 运行模式名称以帮助用户做出选择为准，不以字数最短为目标。模型栏已表达的模型家族、节点本身已表达的媒体类型，以及所有选项相同的通用能力不得在每个运行模式中重复；保留能区分版本、输入方式、质量、速度、价格渠道、稳定性和适用用途的信息。名称优先采用“版本号 · 特点／用途 · 渠道或质量”的顺序，例如 Qwen 文本节点显示“3.7 · Plus”和“3.7 · Max”，Grok Image 显示“3 · 文生图”和“4 · 文生图”，而不是重复模型名或只显示两个相同的“文生图”。中文与英文界面分别使用自然、完整的本地化名称，不能只翻译单词或把真实差异压缩成相同标签。
+- 同一家族、同一平台的运行模式发生重名时，先核对真实模型 ID、输入契约和能力档案，再用有证据的版本、速度、质量、输入方式或用途区分；禁止按列表顺序追加 `-2/-3/-4`。例如 `minimax-h3-ow-r2v` 与 `minimax-h3-ow-r2v-fast` 应显示“标准版”与“快速版”，不能显示“图生视频 · 3/4”。命名变化不得改变模型 ID、调用参数或用户保存的选择身份。
+- 即梦图片归属现有 Seedream 模型家族；即梦 CLI 的 `3.0`、`5.0Pro` 等模型 ID 是版本，不得据此新建“即梦图片”家族。归类优先核对真实模型 ID 与平台契约，版本和输入方式留在运行模式。
+- 文本模型按豆包（Doubao）、GPT、Grok、Gemini、MiniMax、Kimi、Qwen、GLM、DeepSeek 九类整理。文本 ID 中 `g5/g6` 属于 GPT、`gk` 属于 Grok、`gm` 属于 Gemini；先识别真实 ID，再参考平台别名，版本保留在运行模式。缩写不得残留为单独家族或无意义的 K/M 前缀。此规则不扩散到图片、视频 ID，也不把 Midjourney、Whisper 等专用工具虚假归入九类；保留原模型 ID、调用契约和用户启用清单。
 
 - 设置页面从用户任务与视觉清晰度出发：每个控件、说明和入口都必须帮助用户完成当前配置或判断结果。删除重复导航、重复操作和无须用户处理的内部标识、实现细节；不能仅按按钮名称清理。保留必要的输入说明、保存状态和可行动错误提示，不通过隐藏失败制造简洁；界面精简不删除已有配置或执行能力。
 - 视觉升级保留已有业务、管理分类与主要操作入口；可整理区域内部排版，不借机重写节点调用、连线或迁移媒体目录。素材库输入/输出和分类不变，所有模块共用素材库。
@@ -23,6 +35,7 @@
 - 画布模块模型配置多选控制节点候选，具体节点单选；Hypit 每个已实现能力单选，模块模型设置是唯一配置，所有项目的后续执行跟随。已提交任务保存当次请求，修改设置不得重提或改变在途任务。旧项目快照退出运行读取但保留可追溯文件。
 - 统一暖白、奶油米杏、蓝灰与少量香槟金的语义色、字体、字号、按钮和状态；保留用户浅/深色偏好，不给作品媒体加色彩滤镜。Hypit 原生 Studio 内部也需适配，不能只改外框。
 - 模型、模式、来源合并为层级选择入口，短信息用圆点分隔；参数字段单列、选项横向自适应，短值不拆字。真实参数契约不随统一视觉改变。
+- 参数选项、默认值、前端预检与后端提交必须采用同一精确模型契约。有固定选项时只展示该选项集合；空枚举表示资料缺失，禁止补通用比例或分辨率冒充合法选项。只有已确认自由输入的字段才可提供常用建议。平台控件的滑动步幅与接口离散取值限制必须分开记录，不能因为界面步幅而拒绝官方默认值。更新档案后对全部存量目录执行枚举、默认值和前后端一致性回归，不以当前用户启用清单代替全量检查。
 
 ## 项目列表交互（2026-09-19）
 
@@ -100,6 +113,8 @@
 
 - 修复会影响运行、数据、网络提交或跨平台行为的 bug 时，先建立可复现案例，并把案例保留在 `tests/`；新版功能通过不代表旧功能可以跳过回归。
 - 固定回归必须能在全新检出、没有个人 API 配置或密钥的环境中执行；使用公开档案和明确测试启用清单，模拟网络使用假 Key。不得以维护者本机配置代替测试输入，也不得为测试通过而自动补回用户删除的模型。
+- 测试调用保存、同步或迁移入口时，必须把整条写入链路的路径一起指向测试目录，包括主配置、静态模板、工作流存储和凭据文件；不能只隔离主配置。新增间接写入路径时同步更新测试隔离，并验证回归前后真实配置未变化。
+- 模块新增生成能力时，必须同时核对设置槽位、请求转换、原生入口、运行绑定和结果收集；不能只靠“候选中可见”或声明测试证明支持。使用模拟供应商验证配置后提交与结果收集，Hypit 还需验证原生工程的 check、plan 和 build。
 - 本机统一执行 `tools/check_regression.py`。正式 R2 发布必须等待 Mac/Windows × Python 3.10/3.14 回归矩阵成功；不能因本机通过而宣称 Windows 已验证。浏览器手势、系统剪贴板和外部 CLI 仍需对应平台真实检查。
 - 安装、启动和受管理服务的更新重启共用 `local_runtime.py`。不得重新引入按端口强杀进程、固定延时打开未就绪页面、安装和启动使用不同解释器、失败后仍显示完成等行为。
 - 网络读取可以有界重试；无平台幂等证据的任务提交遇到超时或网关错误不得自动重发。记录请求与任务标识，优先查询原任务，不能将超时解释成上游未接单。
@@ -420,3 +435,28 @@ API 设置中的“推荐 API”属于管理员背书的公开入口，不等同
 - 依赖变化时创建独立环境，禁止在运行中的旧环境执行 pip 升级。只有新版真实就绪才能显示升级成功；失败恢复或未受管理的服务必须明确告知。
 - 旧安装更新器无法识别新目录时，提供独立过渡升级入口并在发布说明指出适用版本，不能只测试新版升级器后宣称所有旧版已兼容。
 - 升级回归必须包含暂存损坏、依赖安装失败、替换中断、启动失败、环境回退与用户数据/素材保留。Mac/Windows CI 不替代 Windows 桌面和具体旧安装实机验证。
+
+
+<!-- astra-luna:begin (managed by astra-luna-command-center; do not remove markers) -->
+## Astra + Luna command-center routing
+
+- GPT-6 Astra (this Codex session) owns requirements, decomposition, root-cause
+  analysis, architecture, integration, final review, and the final answer.
+- Execution of bounded, independently verifiable subtasks is handed to the
+  `gpt-6-luna` worker fleet (reasoning effort `max`) via astra-luna-command-center
+  execution packets (`scripts/astra-luna.ps1` on Windows, `scripts/astra-luna.sh`
+  on macOS/Linux/ARM). When the local worker route is unavailable, manual web
+  paste is the only fallback; never silently substitute another model.
+- Keep trivial or tightly coupled work in Astra. Read-only probes may run in parallel.
+- File-writing tasks must use non-overlapping file scopes (or separate worktrees);
+  otherwise run them sequentially.
+- A Luna worker must not spawn another agent, redefine architecture, make
+  destructive changes, or modify unrelated files.
+- Every handoff packet must include goal, scope, inputs, acceptance criteria,
+  and file boundaries. Every result packet is hash-bound (SHA-256) to its
+  execution packet before Astra accepts it.
+- Astra waits for every worker, inspects each result and diff, re-dispatches
+  failures when useful, and performs the final integration, acceptance, and
+  summary. No silent degradation: if a transport or route cannot be verified,
+  stop and report instead of continuing with an unverified substitute.
+<!-- astra-luna:end -->

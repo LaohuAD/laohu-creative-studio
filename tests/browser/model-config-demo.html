@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>模型配置公共控件 · 假数据验收页（测试专用，不进入产品导航）</title>
+<link rel="stylesheet" href="../../static/css/model-config-control.css">
+<style>
+    body { margin: 0; padding: 16px; background: #f7f3eb; font: 14px/1.5 -apple-system, "PingFang SC", sans-serif; }
+    #host { display: flex; gap: 12px; flex-wrap: wrap; }
+    #host > div { width: 460px; }
+    .fixture-note { margin: 0 0 12px; color: #8a8378; font-size: 12px; }
+</style>
+</head>
+<body>
+<p class="fixture-note">假数据验收页：仅用于浏览器行为验证，不含真实目录、不发任何网络请求。</p>
+<div id="host"></div>
+<script src="../../static/js/model-config-core.js"></script>
+<script src="../../static/js/model-config-control.js"></script>
+<script>
+/* 纯假目录。test_only=true，ID 全部使用 fixture 前缀（规划 §18.1）。 */
+function buildCatalog(scale) {
+    var families = [
+        { id: 'fixture-seedance', label: { zh: 'Seedance', en: 'Seedance' }, tags: ['多模态参考', '首尾帧', '视频参考'] },
+        { id: 'fixture-kling', label: { zh: 'Kling', en: 'Kling' }, tags: ['首尾帧', '图片参考'] },
+        { id: 'fixture-vidu', label: { zh: 'Vidu', en: 'Vidu' }, tags: ['文生视频', '首尾帧'] }
+    ];
+    var platforms = [
+        { key: 'fixture-conn-ai@global', provider: 'fixture-rh', region: 'global' },
+        { key: 'fixture-conn-cn@cn', provider: 'fixture-rh', region: 'cn' },
+        { key: 'fixture-conn-cli@default', provider: 'fixture-cli', region: 'default' }
+    ];
+    var options = [];
+    var index = 0;
+    families.forEach(function (family) {
+        platforms.forEach(function (platform) {
+            ['2.0 · 标准', '2.5 · Fast', '2.5 · Mini'].forEach(function (variant, variantIndex) {
+                index += 1;
+                var blocked = variantIndex === 2;
+                options.push({
+                    option_id: 'opt_' + String(index).padStart(16, '0'),
+                    canonical_family_id: family.id,
+                    canonical_family_label: family.label,
+                    catalog_model_id: family.id.replace('fixture-', '') + '-' + platform.region + '-v' + variantIndex,
+                    request_model_id: 'req-' + index,
+                    endpoint_id: 'ep-' + index,
+                    model_version: variant.split(' · ')[0],
+                    edition_id: variant.split(' · ')[1].toLowerCase(),
+                    operation: variantIndex === 0 ? 'multimodal_to_video' : 'text_to_video',
+                    node_type: 'video_generation',
+                    connection_id: platform.key.split('@')[0],
+                    capability_provider_id: platform.provider,
+                    region_id: platform.region,
+                    platform_label: platform.provider + (platform.region === 'default' ? '' : ' ' + platform.region.toUpperCase()),
+                    capability_tags: family.tags,
+                    profile_ref: 'fixture-profile-' + family.id,
+                    selectable: !blocked,
+                    runnable: !blocked,
+                    reasons: blocked ? [{ code: 'INPUT_REQUIRED', message: { zh: '缺少必要输入', en: 'A required input is missing' } }] : []
+                });
+            });
+        });
+    });
+    if (scale && scale > options.length) {
+        var extra = scale - options.length;
+        for (var i = 0; i < extra; i += 1) {
+            options.push({
+                option_id: 'opt_' + String(900000 + i).padStart(16, '0'),
+                canonical_family_id: 'fixture-scale-family-' + (i % 40),
+                canonical_family_label: { zh: '规模系列 ' + (i % 40), en: 'Scale family ' + (i % 40) },
+                catalog_model_id: 'fixture-scale-' + i,
+                operation: 'text_to_video',
+                node_type: 'video_generation',
+                connection_id: 'fixture-conn-ai',
+                capability_provider_id: 'fixture-rh',
+                region_id: 'global',
+                platform_label: 'fixture-rh GLOBAL',
+                capability_tags: ['文生视频'],
+                profile_ref: 'fixture-profile-scale',
+                selectable: true,
+                runnable: true,
+                reasons: []
+            });
+        }
+    }
+    var profiles = {};
+    ['fixture-seedance', 'fixture-kling', 'fixture-vidu'].forEach(function (family) {
+        profiles[family] = 'fixture-profile-' + family;
+    });
+    return {
+        test_only: true,
+        options: options,
+        profiles: Object.keys(profiles).map(function (family) {
+            return {
+                profile_ref: profiles[family],
+                parameters: {
+                    resolution: { type: 'enum', options: ['720p', '1080p', 'native1080p'], default: '720p', label: '分辨率', level: 'common' },
+                    duration: { type: 'integer', min: 4, max: 12, step: 1, default: 5, unit: 'seconds', label: '时长', level: 'common' },
+                    generate_audio: { type: 'boolean', default: false, label: '生成音频', level: 'common' },
+                    aspect_ratio: { type: 'enum', options: ['16:9', '9:16', '1:1'], default: '16:9', label: '比例', level: 'common' },
+                    seed: { type: 'integer', min: 0, max: 999999, label: '种子', level: 'advanced' },
+                    negative_prompt: { type: 'string', label: '负向提示词', level: 'advanced' }
+                }
+            };
+        })
+    };
+}
+
+var commits = [];
+var previews = [];
+var mounted = [];
+
+window.__demo = {
+    buildCatalog: buildCatalog,
+    commits: commits,
+    previews: previews,
+    mounted: mounted,
+    mount: function (containerId, options) {
+        var config = Object.assign({
+            catalog: buildCatalog(0),
+            selection: { optionId: '', parameters: {} },
+            presentation: 'popover',
+            onPreview: function (payload) { previews.push(payload); },
+            onCommit: function (payload) { commits.push(payload); return Promise.resolve(); }
+        }, options || {});
+        var instance = window.mountModelConfigControl(document.getElementById(containerId), config);
+        mounted.push(instance);
+        return instance;
+    },
+    destroyAll: function () {
+        mounted.forEach(function (instance) { try { instance.destroy(); } catch (error) {} });
+        mounted.length = 0;
+        var portal = document.getElementById('model-config-portal');
+        if (portal) portal.replaceChildren();
+    },
+    inline: null,
+    mountInline: function (containerId, options) {
+        window.__demo.inline = window.__demo.mount(containerId, Object.assign({
+            presentation: 'inline'
+        }, options || {}));
+        return window.__demo.inline;
+    },
+    reset: function () { commits.length = 0; previews.length = 0; }
+};
+</script>
+</body>
+</html>

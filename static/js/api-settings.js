@@ -149,7 +149,7 @@ let apiSettingsSection = 'connections';
 let canvasModelCategory = 'all';
 let runningHubModelRegion = '';
 const API_AUTOSAVE_DELAY = 360;
-const HIDDEN_PROVIDER_IDS = new Set(['agnes', 'openai-compatible']);
+const HIDDEN_PROVIDER_IDS = new Set(['agnes', 'openai-compatible', 'modelscope', 'volcengine']);
 const HIDDEN_RECOMMENDED_API_IDS = HIDDEN_PROVIDER_IDS;
 const apiAutosavePendingByKey = new Map();
 const apiAutosaveTimersByKey = new Map();
@@ -575,8 +575,8 @@ function applyCliProtocolDefaults(item, protocol, seedModels=false){
         item.video_models = [];
         item.audio_models = [];
     } else if(value === 'gemini-cli'){
-        item.image_models = unique([...(item.image_models || []), ...GEMINI_CLI_DEFAULT_IMAGE_MODELS]);
-        item.chat_models = unique([...(item.chat_models || []), ...GEMINI_CLI_DEFAULT_CHAT_MODELS]);
+        item.image_models = unique(seedModels ? [...(item.image_models || []), ...GEMINI_CLI_DEFAULT_IMAGE_MODELS] : (item.image_models || []));
+        item.chat_models = unique(seedModels ? [...(item.chat_models || []), ...GEMINI_CLI_DEFAULT_CHAT_MODELS] : (item.chat_models || []));
         item.video_models = [];
         item.audio_models = [];
     }
@@ -854,7 +854,7 @@ function updateIdPreview(){
     idPreview.textContent = deriveIdFromName(nameInput.value, item.id);
 }
 function provider(){
-    return visibleProviders().find(item => item.id === selectedId) || visibleProviders()[0] || providers[0];
+    return visibleProviders().find(item => item.id === selectedId) || visibleProviders()[0];
 }
 function isProviderTemporarilyHidden(item){
     return HIDDEN_PROVIDER_IDS.has(String(item?.id || '').trim().toLowerCase());
@@ -3344,7 +3344,7 @@ function renderProviderList(){
                     <span class="provider-banner-inner">
                         <span class="provider-logo-wrap provider-logo-ai-money">
                             <img src="/static/images/ai-money.png" alt="" aria-hidden="true" class="ai-money-icon">
-                            <span class="provider-logo-name">laohu</span>
+                            <img src="/static/images/laohu-wordmark.png" alt="laohu" class="laohu-wordmark">
                         </span>
                         <span class="provider-protocol-pill">API</span>
                     </span>

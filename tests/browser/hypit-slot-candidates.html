@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Hypit 槽位候选 · 桩数据验收页（测试专用，不起服务、不碰用户数据）</title>
+<link rel="stylesheet" href="../../static/css/model-config-control.css">
+<style>
+    body { margin: 0; padding: 16px; font: 14px/1.5 -apple-system, "PingFang SC", sans-serif; background: #f7f3eb; }
+    .fixture-note { margin: 0 0 12px; color: #8a8378; font-size: 12px; }
+    .hypit-slot-grid { display: grid; gap: 12px; }
+</style>
+</head>
+<body>
+<p class="fixture-note">桩数据验收页：fetch 全部被拦截并返回本地假数据，不联网、不读真实配置。</p>
+
+<!-- hypit-settings.js 在加载时就按 id 取元素，因此容器必须先存在 -->
+<div id="providerSettingsView">
+  <div class="layout">
+    <div id="hypitSettingsNav"></div>
+    <div id="hypitSettingsBlock">
+      <div id="hypitSlots" class="hypit-slot-grid"></div>
+      <div id="hypitSettingsStatus" role="status"></div>
+    </div>
+    <div id="canvasModelSettingsBlock"></div>
+  </div>
+</div>
+
+<script>
+/* ---- fetch 桩：三个端点各返回一份本地假数据 ---- */
+window.__fixture = { requests: [] };
+const PROJECTED_MODEL = 'fixture-projected-only-model';   // 只在投影里出现
+const FAMILY_TREE_MODEL = 'fixture-family-tree-model';    // 只在家族树里出现
+
+const projectedOptions = [
+    { option_id: 'opt_1111111111111111', node_type: 'image_generation', operation: 'text_to_image',
+      connection_id: 'fixture-conn', capability_provider_id: 'fixture-provider',
+      platform_label: '桩平台', catalog_model_id: PROJECTED_MODEL, canonical_family_id: 'fixture-family',
+      canonical_family_label: { zh: '桩系列', en: 'Fixture family' }, region_id: 'global',
+      readiness: 'ready', runnable: true, validation_mode: 'strict',
+      parameters: { resolution: { type: 'enum', options: ['1k', '2k'], default: '1k' } },
+      inputs: { prompt: { media_type: 'text', min: 1, max: 1 } }, capability_tags: ['文生图'] },
+    { option_id: 'opt_3333333333333333', node_type: 'image_generation', operation: 'text_to_image',
+      connection_id: 'modelscope', capability_provider_id: 'modelscope',
+      platform_label: 'ModelScope', catalog_model_id: 'fixture-modelscope-hidden', canonical_family_id: 'fixture-hidden-family',
+      canonical_family_label: { zh: '不应显示', en: 'Should be hidden' }, region_id: 'global',
+      readiness: 'ready', runnable: true, validation_mode: 'strict', parameters: {}, inputs: {}, capability_tags: [] },
+    { option_id: 'opt_2222222222222222', node_type: 'text_generation', operation: 'chat',
+      connection_id: 'fixture-conn', capability_provider_id: 'fixture-provider',
+      platform_label: '桩平台', catalog_model_id: PROJECTED_MODEL + '-text', canonical_family_id: 'fixture-text',
+      canonical_family_label: { zh: '桩文本系列', en: 'Fixture text family' }, region_id: '',
+      readiness: 'ready', runnable: true, validation_mode: 'strict', parameters: {}, inputs: {},
+      capability_tags: [] }
+];
+
+const familyTreeCatalog = {
+    schema_version: 1,
+    providers: [{
+        id: 'fixture-conn', name: '桩平台', protocol: 'openai',
+        models: [{ model_id: FAMILY_TREE_MODEL, node_type: 'image_generation', family_id: 'fixture-family',
+                   runnable: true, validation_mode: 'strict', parameters: {}, inputs: {} }]
+    }]
+};
+
+const realFetch = window.fetch ? window.fetch.bind(window) : null;
+window.fetch = function (input, init) {
+    const url = String(typeof input === 'string' ? input : (input && input.url) || '');
+    window.__fixture.requests.push(url);
+    const json = body => Promise.resolve(new Response(JSON.stringify(body), {
+        status: 200, headers: { 'Content-Type': 'application/json' }
+    }));
+    if (url.indexOf('/api/model-capabilities') !== -1) {
+        return json({ schema_version: 1, providers: [], options: projectedOptions, catalog_revision: 'rev_fixture00000000' });
+    }
+    if (url.indexOf('/api/studio/hypit/models/settings') !== -1) {
+        return json({ version: 1, revision: 1, created_at: null, updated_at: null, defaults: {
+            text: { provider: '', model: '', region: '', parameters: {} },
+            image: { provider: '', model: '', region: '', parameters: {} },
+            video: { provider: '', model: '', region: '', parameters: {} },
+            audio: { provider: '', model: '', region: '', parameters: {} },
+            voice: { provider: '', model: '', region: '', parameters: {} }
+        } });
+    }
+    if (url.indexOf('/api/studio/hypit/models/capabilities') !== -1) {
+        return json({
+            supported_capabilities: [
+                { slot: 'text', kind: 'text', node_type: 'text_generation' },
+                { slot: 'image', kind: 'image', node_type: 'image_generation' },
+                { slot: 'video', kind: 'video', node_type: 'video_generation' },
+                { slot: 'audio', kind: 'audio', node_type: 'audio_generation' },
+                { slot: 'voice', kind: 'audio', node_type: 'audio_generation' }
+            ],
+            unsupported_capabilities: []
+        });
+    }
+    if (realFetch) return realFetch(input, init);
+    return Promise.resolve(new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } }));
+};
+</script>
+
+<script src="../../static/js/i18n.js"></script>
+<script src="../../static/js/model-config-core.js"></script>
+<script src="../../static/js/model-config-control.js"></script>
+<script src="../../static/js/hypit-settings.js"></script>
+<script>
+window.__fixture.ready = true;
+window.__fixture.forceLoad = function () {
+    return window.reloadHypitSettings ? window.reloadHypitSettings() : null;
+};
+</script>
+</body>
+</html>

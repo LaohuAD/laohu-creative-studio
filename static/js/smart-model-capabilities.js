@@ -72,19 +72,7 @@
             if(value === undefined || value === null || value === '' || value === '__canvas_unset__') return true;
             const spec = specs[key];
             if(!spec) return false;
-            const type = String(spec.type || '').toLowerCase();
-            if(type === 'enum'){
-                const options = Array.isArray(spec.options) ? spec.options.map(String) : [];
-                return !options.length || options.includes(String(value));
-            }
-            if(type === 'integer' || type === 'number'){
-                const numeric = Number(value);
-                if(!Number.isFinite(numeric) || (type === 'integer' && !Number.isInteger(numeric))) return false;
-                if(Number.isFinite(Number(spec.min)) && numeric < Number(spec.min)) return false;
-                if(Number.isFinite(Number(spec.max)) && numeric > Number(spec.max)) return false;
-            }
-            if(type === 'boolean' && !['boolean','number','string'].includes(typeof value)) return false;
-            return true;
+            return !parameterIssue(spec, value);
         });
     }
 
@@ -118,6 +106,7 @@
         if(model?.validation_mode !== 'strict') return false;
         if(model?.readiness && model.readiness !== 'ready') return false;
         if(model?.runnable === false) return false;
+        if(model?.selectable === false) return false;
         if(!modelSupportsExecutionMode(model, parameters?.__execution_mode)) return false;
         if(!modelSupportsParameters(model, parameters)) return false;
         const limits = mediaLimits(model.inputs);
@@ -220,8 +209,8 @@
         );
     }
 
-    // 选择器可以跨平台读取候选，但这里只按能力档案中的真实 family_id 合并。
-    // 不使用 display_name 推断不同平台的模型等价关系，避免把不同协议误合并。
+    // 选择器按用户可见的模型系列合并跨平台条目；平台和真实 model_id
+    // 仍保留在 variants 中，分别由第二、第三栏继续选择。
     function familiesAcrossProviders(catalog, nodeType, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}, region=''){
         const allowed = new Set((Array.isArray(providerIds) ? providerIds : [providerIds])
             .map(value => String(value || '').trim())
@@ -234,7 +223,14 @@
             families.forEach(family => {
                 const familyId = String(family?.family_id || '').trim();
                 if(!familyId) return;
-                const key = `${nodeType}::${familyId}`;
+                const familyLabel = String(
+                    family?.canonical_family_label?.zh || family?.display_name || family?.family_name ||
+                    family?.canonical_family_label?.en || family?.display_name_en || family?.family_name_en || familyId
+                ).trim();
+                // 同名系列跨平台合并；去掉版本、档次等后缀只由能力档案负责，
+                // 这里不根据 model_id 猜测系列，避免把不同系列误合并。
+                const normalizedLabel = familySeriesKey(familyLabel, familyId);
+                const key = `${nodeType}::${normalizedLabel || familyId.toLocaleLowerCase()}`;
                 const variants = (family.compatible_variants || []).map(variant => ({
                     ...variant,
                     provider_id:providerId,
@@ -249,6 +245,11 @@
                 if(!item){
                     item = {
                         ...family,
+                        family_id:familyId,
+                        canonical_family_label:family.canonical_family_label || {
+                            zh:family.display_name || family.family_name || familyId,
+                            en:family.display_name_en || family.family_name_en || familyId
+                        },
                         provider_id:providerId,
                         provider_name:provider.name,
                         protocol:provider.protocol,
@@ -263,6 +264,7 @@
                     item.provider_ids.push(providerId);
                     item.providers.push({id:providerId, name:provider.name, protocol:provider.protocol});
                 }
+                item.family_aliases = [...new Set([...(item.family_aliases || []), familyId])];
                 variants.forEach(variant => {
                     const variantKey = `${variant.provider_id}::${variant.model_id || variant.variant_id || ''}`;
                     if(item.compatible_variants.some(existing => `${existing.provider_id}::${existing.model_id || existing.variant_id || ''}` === variantKey)) return;
@@ -275,14 +277,47 @@
         return [...merged.values()];
     }
 
+    function familySeriesKey(label, familyId=''){
+        let value = String(label || familyId || '').trim().toLocaleLowerCase();
+        const aliases = [
+            [/gpt\s*image|image[-_ ]?g|gpt[-_ ]?img/, 'gpt-image'],
+            [/seedream|jimeng/, 'seedream'], [/seedance/, 'seedance'],
+            [/minimax/, 'minimax'], [/hailuo|全能视频/, 'hailuo'],
+            [/deepseek/, 'deepseek'], [/qwen/, 'qwen'], [/doubao|bytedance/, 'doubao'],
+            [/glm/, 'glm'], [/kimi/, 'kimi'], [/kling/, 'kling'], [/vidu/, 'vidu'],
+            [/nano[-_ ]?banana/, 'nano-banana'], [/wan/, 'wan'], [/suno/, 'suno'],
+            [/mureka/, 'mureka'], [/flowmusic/, 'flowmusic'], [/whisper/, 'whisper']
+        ];
+        const alias = aliases.find(([pattern]) => pattern.test(value));
+        if(alias) return alias[1];
+        // 版本、档次和渠道属于第三栏，不应制造新的模型系列。
+        value = value
+            .replace(/\b(v|ver|version)[ ._-]*\d+(?:\.\d+)*\b/gi, '')
+            .replace(/\b\d+(?:\.\d+)+(?:[- ]?(?:pro|lite|flash|turbo|fast|mini|max|plus|preview|global|standard))?\b/gi, '')
+            .replace(/\s+\d{1,2}(?:\.\d+)*\b/gi, '')
+            .replace(/\b(?:pro|lite|flash|turbo|fast|mini|max|plus|preview|global|standard)\b/gi, '');
+        return value.replace(/[\s·•_./-]+/g, '') || String(familyId || '').toLocaleLowerCase();
+    }
+
     function variantsAcrossProviders(catalog, nodeType, familyId, inputCounts={}, providerIds=[], operation='', inputRoles={}, parameters={}, region=''){
         const family = familiesAcrossProviders(catalog, nodeType, inputCounts, providerIds, operation, inputRoles, parameters, region)
             .find(item => item.family_id === familyId);
         return family ? [...(family.compatible_variants || [])] : [];
     }
 
-    // variant_id 是档案里的机器标识；名称只用于避免同一 variant_id 下的 Fast/Mini 等真实变体被合并。
+    // 稳定机器标识：只使用机器字段，显示名与语言不参与，改文案或切换语言不改选择身份。
     function variantSelectionKey(variant){
+        const providerId = String(variant?.provider_id || '').trim();
+        const modelId = String(variant?.model_id || '').trim();
+        const variantId = String(variant?.variant_id || '').trim();
+        const operation = String(variant?.operation || '').trim();
+        const machine = [providerId, variantId, operation, modelId].filter(Boolean).join('::');
+        // 只有缺少 model_id 的退化数据才回退旧 key，保证同一 variant_id 下的 Fast/Mini 不被合并。
+        return machine && modelId ? machine : (legacyVariantSelectionKey(variant) || machine);
+    }
+
+    // 旧 key：兼容历史数据与缺少 model_id 的退化档案，不得作为新数据的身份来源。
+    function legacyVariantSelectionKey(variant){
         const variantId = String(variant?.variant_id || '').trim();
         const variantName = String(variant?.variant_name || '').trim();
         const variantNameEn = String(variant?.variant_name_en || '').trim();
@@ -314,33 +349,62 @@
             .find(model => model && model.model_id === modelId && (!nodeType || model.node_type === nodeType)) || null;
     }
 
+    // 单字段合法性判定：返回原因码或空串。只判断，不修改用户值。
+    function parameterIssue(spec, value){
+        if(!spec) return 'PARAM_INVALID';
+        if(value === undefined || value === null) return spec.required || spec.level === 'required' ? 'PARAM_REQUIRED' : '';
+        const type = String(spec.type || '').toLowerCase();
+        const options = Array.isArray(spec.options) ? spec.options.map(String) : [];
+        if(type === 'boolean'){
+            // 只接受真实布尔值；已知字面量由迁移阶段转换，运行路径不做隐式强转（C18）。
+            return typeof value === 'boolean' ? '' : 'PARAM_INVALID';
+        }
+        if(type === 'enum'){
+            return options.includes(String(value)) ? '' : 'PARAM_INVALID';
+        }
+        if(options.length && !options.includes(String(value))) return 'PARAM_INVALID';
+        if(type === 'integer' || type === 'number'){
+            if(typeof value === 'boolean' || (typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '') return 'PARAM_INVALID';
+            const numeric = Number(value);
+            if(!Number.isFinite(numeric)) return 'PARAM_INVALID';
+            if(type === 'integer' && !Number.isInteger(numeric)) return 'PARAM_INVALID';
+            const step = Number(spec.step);
+            const base = Number.isFinite(Number(spec.min)) ? Number(spec.min) : 0;
+            if(Number.isFinite(step) && step > 0){
+                const ratio = (numeric - base) / step;
+                if(Math.abs(ratio - Math.round(ratio)) > 1e-9) return 'PARAM_INVALID';
+            }
+            if(spec.min != null && Number.isFinite(Number(spec.min)) && numeric < Number(spec.min)) return 'PARAM_INVALID';
+            if(spec.max != null && Number.isFinite(Number(spec.max)) && numeric > Number(spec.max)) return 'PARAM_INVALID';
+            return '';
+        }
+        return '';
+    }
+
+    // 报出非法或必填缺失的字段，供界面标红与运行前阻断使用。
+    function parameterIssues(profile, values={}){
+        const specs = (profile && profile.parameters) || {};
+        const issues = {};
+        Object.entries(specs).forEach(([key, spec]) => {
+            const value = values?.[key] ?? (spec.ui_hidden ? (spec.type === 'model' ? profile.model_id : spec.default) : undefined);
+            const issue = parameterIssue(spec, value);
+            if(issue) issues[key] = issue;
+        });
+        return issues;
+    }
+
+    // 严格取值：只放行当前契约下本来就合法的值。
+    // 不四舍五入、不裁剪到 min/max、不做字符串 truthy 转换——非法值交给 parameterIssues
+    // 报出并由运行前校验阻断，绝不无提示地改变用户意图（§1.3、§6.6、C07/C09）。
     function effectiveParameters(profile, values={}){
         if(!profile || profile.validation_mode !== 'strict') return {...(values || {})};
         const specs = profile.parameters || {};
         const result = {};
         Object.entries(values || {}).forEach(([key, value]) => {
+            if(value === undefined || value === null || value === '') return;
             const spec = specs[key];
-            if(!spec || value === undefined || value === null || value === '') return;
-            const type = String(spec.type || '').toLowerCase();
-            if(type === 'enum'){
-                const options = Array.isArray(spec.options) ? spec.options.map(String) : [];
-                if(options.length && !options.includes(String(value))) return;
-                result[key] = value;
-                return;
-            }
-            if(type === 'integer' || type === 'number'){
-                let numeric = Number(value);
-                if(!Number.isFinite(numeric)) return;
-                if(type === 'integer') numeric = Math.round(numeric);
-                if(Number.isFinite(Number(spec.min))) numeric = Math.max(Number(spec.min), numeric);
-                if(Number.isFinite(Number(spec.max))) numeric = Math.min(Number(spec.max), numeric);
-                result[key] = numeric;
-                return;
-            }
-            if(type === 'boolean'){
-                result[key] = typeof value === 'boolean' ? value : ['true','1'].includes(String(value).toLowerCase());
-                return;
-            }
+            if(!spec) return;   // 档案未声明的参数一律不提交
+            if(parameterIssue(spec, value)) return;
             result[key] = value;
         });
         return result;
@@ -458,9 +522,12 @@
         familyForModel,
         findModel,
         effectiveParameters,
+        parameterIssue,
+        parameterIssues,
         familiesAcrossProviders,
         variantsAcrossProviders,
         variantSelectionKey,
+        legacyVariantSelectionKey,
         matchesSearch,
         resolveVideoExecutionMode,
         capabilitySnapshot,

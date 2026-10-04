@@ -20,9 +20,34 @@
     const dialog = document.getElementById('canvasAgentDialog');
     const defaultsRoot = document.getElementById('canvasAgentDefaults');
     const feedback = document.getElementById('canvasAgentFeedback');
-    let defaultDraft = {}, defaultKind = 'image';
+    let defaultDraft = {}, defaultKind = 'image', defaultModelControl = null;
     const kindLabels = () => ({text:text('文本 / LLM','Text / LLM'), image:text('图片','Image'), video:text('视频','Video'), audio:text('音频','Audio'), music:text('音乐','Music'), app:text('AI 应用','AI app'), comfy:'ComfyUI'});
     const profilesFor = kind => (modelCapabilityCatalog?.providers || []).flatMap(provider => (provider.models || []).filter(profile => profile.node_type === fields[kind]?.[3] && profile.runnable).map(profile => ({...profile, provider_id:provider.id || provider.provider_id})));
+    function defaultOptionsFor(kind) {
+        const nodeType = fields[kind]?.[3];
+        const projected = Array.isArray(modelCapabilityCatalog?.options) ? modelCapabilityCatalog.options
+            .filter(option => option.node_type === nodeType && option.runnable !== false && option.selectable !== false) : [];
+        if (projected.length) return projected;
+        return profilesFor(kind).map(profile => ({
+            schema_version: 2, option_id: `legacy-${profile.provider_id}-${profile.model_id}`,
+            canonical_family_id: profile.family_id || profile.model_id,
+            canonical_family_label: {zh: profile.family_name || profile.display_name || profile.model_id, en: profile.family_name_en || profile.family_name || profile.display_name || profile.model_id},
+            display_label: {zh: profile.variant_name || profile.display_name || profile.model_id, en: profile.variant_name_en || profile.variant_name || profile.display_name || profile.model_id},
+            operation: profile.operation || '', node_type: nodeType, connection_id: profile.provider_id,
+            capability_provider_id: profile.provider_id, platform_label: apiProviders.find(provider => provider.id === profile.provider_id)?.name || profile.provider_id,
+            region_id: profile.region || '', catalog_model_id: profile.model_id, profile_revision: profile.version || '',
+            readiness: profile.readiness || 'ready', runnable: profile.runnable !== false, selectable: true,
+            capability_tags: profile.capability_tags || [], capability_tags_en: profile.capability_tags_en || [], parameters: profile.parameters || {}, inputs: profile.inputs || {}
+        }));
+    }
+    function defaultOptionFor(current, options) {
+        const optionId = current?.option_id || current?.optionId;
+        if (optionId) { const exact = options.find(option => option.option_id === optionId); if (exact) return exact; }
+        const candidates = options.filter(option => option.connection_id === current?.provider_id && option.catalog_model_id === current?.model
+            && (!current?.region || option.region_id === current.region));
+        return candidates.length === 1 ? candidates[0] : null;
+    }
+    function destroyDefaultModelControl() { if (defaultModelControl?.destroy) defaultModelControl.destroy(); defaultModelControl = null; }
     function defaultProfile(){
         const current = defaultDraft[defaultKind] || {};
         if(fields[defaultKind]) return profilesFor(defaultKind).find(p => p.provider_id === current.provider_id && p.model_id === current.model);
@@ -39,7 +64,34 @@
         return {model_id:source.rhAppId || source.comfyWorkflow || '',parameters};
     }
     function renderDefaultEditor(openKey=''){
+        destroyDefaultModelControl();
         const current = defaultDraft[defaultKind] || {};
+        if(fields[defaultKind]) {
+            const options = defaultOptionsFor(defaultKind);
+            const selected = defaultOptionFor(current, options);
+            defaultsRoot.innerHTML = `<div class="agent-default-heading"><h3>${text('新建节点默认值','New node defaults')}</h3><span>${text('仅当前画布','This canvas')}</span></div><p>${text('先设好每类节点。Agent 创建此类节点时会沿用这里选定的模型和参数；未设置的类型会提示先配置。','Set each node type once. Agents use this model and its parameters when creating nodes; unconfigured types require setup first.')}</p><div class="agent-default-tabs" role="tablist">${Object.entries(kindLabels()).map(([kind,label]) => `<button type="button" role="tab" aria-selected="${kind === defaultKind}" data-agent-kind="${kind}">${label}${defaultDraft[kind] ? ' ·' : ''}</button>`).join('')}</div><div class="agent-default-model-host" data-agent-model-host></div><div class="agent-default-actions"><button type="button" data-agent-save>${text('保存默认设置','Save defaults')}</button></div>`;
+            const host = defaultsRoot.querySelector('[data-agent-model-host]');
+            if(host && options.length && window.mountModelConfigControl) {
+                defaultModelControl = window.mountModelConfigControl(host, {
+                    context:{host:'canvas-agent-defaults',moduleId:'canvas',slotId:fields[defaultKind][3],phase:'template'},
+                    catalog:{options,profiles:[]}, selection:{optionId:selected?.option_id || '',parameters:current.parameters || {}}, presentation:'module',
+                    onCommit: payload => {
+                        const picked = options.find(option => option.option_id === payload.selection.optionId);
+                        if(!picked) return Promise.reject(new Error(text('选择不属于当前节点类型','Selection is not valid for this node type')));
+                        defaultDraft[defaultKind] = {provider_id:picked.connection_id || '',model:picked.catalog_model_id || '',region:picked.region_id || '',option_id:picked.option_id || '',parameters:{...(payload.selection.parameters || {})}};
+                        feedback.textContent = text('设置已修改，请保存。','Changes pending. Save defaults to apply.');
+                        return Promise.resolve();
+                    },
+                    onParametersChange: payload => {
+                        if(!defaultDraft[defaultKind]) defaultDraft[defaultKind]={provider_id:selected?.connection_id || '',model:selected?.catalog_model_id || '',region:selected?.region_id || '',option_id:selected?.option_id || '',parameters:{}};
+                        defaultDraft[defaultKind].parameters = {...(payload.parameters || {})};
+                        feedback.textContent = text('设置已修改，请保存。','Changes pending. Save defaults to apply.');
+                    }
+                });
+            } else if(host) host.innerHTML = `<p>${escapeHtml(text('暂无可用模型，请先在 API 设置中启用模型。','No usable models. Enable a model in API settings first.'))}</p>`;
+            refreshIcons();
+            return;
+        }
         const profiles = profilesFor(defaultKind);
         const profile = defaultProfile();
         const providerIds = [...new Set(profiles.map(p => p.provider_id))];

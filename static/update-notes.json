@@ -1,61 +1,26 @@
 {
-  "version": "2026.09.22",
-  "updated_at": "2026-09-22T15:05:00+08:00",
+  "version": "2026.10.04",
+  "updated_at": "2026-10-04T12:00:00+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "设置页改为自动保存：选择立即保存、文字输入防抖保存，并显示保存状态，失败保留草稿。",
-      "text_en": "Settings now save automatically: selections save immediately, text saves after a debounce, save status is shown, and a failed save keeps your draft."
+      "text": "模型选择统一为家族、运行模式与支持平台，按精确模型契约展示和校验参数。",
+      "text_en": "Model selection groups families, run modes and supported providers, with parameters displayed and validated against exact model contracts."
     },
     {
       "type": "feature",
-      "text": "RunningHub 分为 AI 站与 CN 站并列，可分别开关、分别填 Key；关闭只停新调用，保留已有配置。",
-      "text_en": "RunningHub now shows the AI and CN sites side by side with independent switches and keys; disabling only stops new calls and keeps existing settings."
-    },
-    {
-      "type": "feature",
-      "text": "画布模型改为一个入口内选模型、平台与运行模式，支持按名称搜索，并显示真实模型 ID。",
-      "text_en": "Canvas models now use one picker for model, platform, and run mode, with search by name and the real model ID shown."
-    },
-    {
-      "type": "feature",
-      "text": "常用参数直接铺在参数面板上，冷门的高级参数收进齿轮入口。",
-      "text_en": "Common parameters stay on the panel, while rare advanced parameters move into the gear entry."
-    },
-    {
-      "type": "feature",
-      "text": "Hypit 模型设置对所有项目统一生效；已提交的任务不受之后修改设置的影响。",
-      "text_en": "Hypit model settings now apply to every project, and submitted tasks are unaffected by later setting changes."
-    },
-    {
-      "type": "feature",
-      "text": "Hypit 原生 Studio 内部同步工作台的浅色与深色主题。",
-      "text_en": "The native Hypit Studio now follows the workbench light and dark themes."
+      "text": "画布创作输入支持 Enter 运行或保存、Shift+Enter 换行，并保护输入法确认与忙碌状态。",
+      "text_en": "Canvas creation inputs support Enter to run or save and Shift+Enter for new lines, with IME and busy-state protection."
     },
     {
       "type": "improvement",
-      "text": "统一下拉、按钮与卡片的暖白与香槟金视觉，浅色和深色主题都更协调。",
-      "text_en": "Unify warm-white and champagne-gold styling for menus, buttons and cards in both light and dark themes."
-    },
-    {
-      "type": "improvement",
-      "text": "设置导航固定显示画布模型、Hypit、平台连接、AI 应用、本地工作流与 CLI，去掉重复的返回入口。",
-      "text_en": "Settings navigation always shows canvas models, Hypit, provider connections, AI apps, local workflows and CLI without duplicate back entries."
-    },
-    {
-      "type": "improvement",
-      "text": "软件名称更改为「老胡画梦枋」，安装与更新地址同步更新。",
-      "text_en": "The product is renamed to Laohu Creative Studio, with install and update URLs updated accordingly."
+      "text": "Hypit 按生成用途选择模型，任务参数按请求校验，候选过滤区分语音、音效与音乐。",
+      "text_en": "Hypit selects models by generation purpose, validates task parameters per request and distinguishes speech, sound effects and music."
     },
     {
       "type": "fix",
-      "text": "修复 RunningHub 两个站点的 Key 与工作流互相串用、互相覆盖的问题。",
-      "text_en": "Fixed RunningHub sites mixing up or overwriting each other's keys and workflows."
-    },
-    {
-      "type": "fix",
-      "text": "修复 Hypit 设置页隐藏平台与 CLI、侧栏点击被拦截的问题。",
-      "text_en": "Fixed the Hypit settings page hiding providers and CLI and swallowing sidebar clicks."
+      "text": "完善模型身份归类、候选投影、请求幂等和参数契约回归，保留用户配置与模型真实 ID。",
+      "text_en": "Improve model identity classification, candidate projection, request idempotency and parameter contract regression while preserving user settings and real model IDs."
     }
   ]
 }

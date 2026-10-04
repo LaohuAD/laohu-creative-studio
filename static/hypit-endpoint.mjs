@@ -38,6 +38,7 @@ export const HYPIT_CAPABILITIES = Object.freeze({
   video: capability("video-generation"),
   speech: capability("speech-generation"),
   audio: capability("audio-generation"),
+  music: capability("music-generation"),
 });
 
 export const HYPIT_RETURNS = Object.freeze({
@@ -46,6 +47,7 @@ export const HYPIT_RETURNS = Object.freeze({
   video: generationTypes.videoSet,
   speech: generationTypes.audioSet,
   audio: generationTypes.audioSet,
+  music: generationTypes.audioSet,
 });
 
 const MODEL_PARAMETER_NAMES = new Map([
@@ -214,12 +216,17 @@ async function bytesToDataUrl(value, resources) {
 
 async function projectPorts(ports, resources) {
   const output = {};
-  const parameters = {};
+  let parameters = {};
   let prompt = [];
   let systemPrompt = [];
   for (const [name, rawValues] of Object.entries(object(ports, "constraints.ports"))) {
     const values = asArray(rawValues);
     const normal = normalizePortName(name);
+    if (normal === 'parameters') {
+      if (values.length !== 1 || typeof values[0] !== 'string') throw new Error('parameters requires one JSON object');
+      parameters = { ...parameters, ...object(JSON.parse(values[0]), 'parameters') };
+      continue;
+    }
     if (PROMPT_PORTS.has(name) || PROMPT_PORTS.has(normal)) {
       prompt = prompt.concat(values.filter((item) => String(item).trim()).map(String));
       continue;
@@ -405,7 +412,7 @@ async function collectResult(context, fetcher, baseURL, kind, task) {
     const value = result.text ?? result.value ?? result.content;
     return { status: "completed", result: { value: { kind: "inline", value: sealText(nonEmptyString(value, "text result")) } } };
   }
-  const value = await collectMedia(context, fetcher, baseURL, result, kind === "speech" ? "audio" : kind);
+  const value = await collectMedia(context, fetcher, baseURL, result, kind === "speech" || kind === "music" ? "audio" : kind);
   return { status: "completed", result: { value: {kind: "inline", value} } };
 }
 
@@ -483,6 +490,9 @@ export function createHypitEndpoint(options) {
       { lifecycle: "asynchronous", capability: HYPIT_CAPABILITIES.audio,
         returns: generationTypes.audioSet, endpoint: createAsyncEndpoint({...common, kind:"audio"}),
         supports: request => support("audio", request) },
+      { lifecycle: "asynchronous", capability: HYPIT_CAPABILITIES.music,
+        returns: generationTypes.audioSet, endpoint: createAsyncEndpoint({...common, kind:"music"}),
+        supports: request => support("music", request) },
       {
         lifecycle: "asynchronous",
         capability: HYPIT_CAPABILITIES.text,
@@ -532,6 +542,7 @@ export function createHypitRuntimeProfile(options) {
     [HYPIT_CAPABILITIES.video, instance],
     [HYPIT_CAPABILITIES.speech, instance],
     [HYPIT_CAPABILITIES.audio, instance],
+    [HYPIT_CAPABILITIES.music, instance],
   ].map(([ref, value]) => [refKey(ref), value]));
   return {
     format: "hypit.runtime-local@1",

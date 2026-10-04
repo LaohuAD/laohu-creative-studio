@@ -98,11 +98,12 @@ def create_connection_router(get_project):
                            f'Project binding: GET {models}/projects/{project_id}/binding is a compatibility read of the same module settings; its PUT compatibility route updates that same shared setting with revision protection, not a project snapshot. '
                            'Select one actual model for each supported capability; do not treat a workflow as a model. '
                            'Models must be enabled in API settings and have a confirmed adapter. Never copy keys into the project.\n'
-                           'Use <import as="studio" from="@laohu/studio-models@1"/>. Native surfaces: studio:Image, studio:Video, studio:Speech, studio:Audio. '
+                           'Use <import as="studio" from="@laohu/studio-models@1"/>. Native surfaces: studio:Image, studio:Video, studio:Speech, studio:Audio, studio:Music. '
                            'Each takes id and prompt={textReference}; use text:Value from @hypit/text@1 for text. '
+                           'An optional parameters attribute accepts a JSON object for this task. Read the selected model schema before supplying values; legacy module parameters are not inherited. '
                            'Output references are id.image, id.video or id.audio. Image accepts child studio:images; Video accepts '
                            'studio:referenceImage, studio:referenceVideo, studio:referenceAudio, studio:firstFrame, studio:lastFrame; '
-                           'Speech/Audio accept studio:referenceAudio. Each child uses source={blobReference}. '
+                           'Speech/Audio/Music accept studio:referenceAudio. Each child uses source={blobReference}. '
                            'The runtime command installs the real local adapter files before check/plan/build. '
                            'Run check then plan, inspect model settings, and build only when generation is requested. '
                            'Bridge requests may call paid providers; native local rendering does not imply free model inference.\n')
@@ -111,10 +112,11 @@ def create_connection_router(get_project):
                            '修改模块设置后，所有项目的后续执行使用新设置；已经提交的任务保持提交时记录的原模型；409 时重新读取并合并。'
                            f'项目 binding：GET {models}/projects/{project_id}/binding 只是读取同一模块设置的兼容入口；其 PUT 兼容入口更新同一份共享设置并做 revision 冲突保护，不再形成项目快照。'
                            '每项已支持的实际能力各选择一个模型，不要把工作流当作模型。模型必须在 API 设置启用且具备确认的适配器；工程中不保存密钥。\n'
-                           '工程导入 <import as="studio" from="@laohu/studio-models@1"/>。原生表面为 studio:Image、studio:Video、studio:Speech、studio:Audio；'
+                           '工程导入 <import as="studio" from="@laohu/studio-models@1"/>。原生表面为 studio:Image、studio:Video、studio:Speech、studio:Audio、studio:Music；'
                            '均填写 id 和 prompt={文本引用}，文本由 @hypit/text@1 的 text:Value 提供。输出为 id.image、id.video 或 id.audio。'
+                           '可选 parameters 属性填写本次任务的 JSON 参数对象；先读取已选模型的参数契约再填写，旧模块参数不再继承。'
                            '图片可用子元素 studio:images；视频可用 studio:referenceImage、studio:referenceVideo、studio:referenceAudio、studio:firstFrame、studio:lastFrame；'
-                           '语音/音频可用 studio:referenceAudio。各子元素使用 source={Blob引用}。'
+                           '语音/音频/音乐可用 studio:referenceAudio。各子元素使用 source={Blob引用}。'
                            '运行命令在 check/plan/build 前准备真实本地适配文件。先 check、plan 并核对模型设置；用户要求生成时才 build。'
                            '模型桥接可能调用收费供应商，本地渲染不代表模型推理免费。history 的 source 是输出名称，例如 final.video。\n')
         return PlainTextResponse('# '+('Project integration guide' if lang.startswith('en') else '项目对接文档')+'\n\n'+common, media_type='text/markdown; charset=utf-8')

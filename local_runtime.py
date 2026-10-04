@@ -140,7 +140,9 @@ def launch(root: Path = ROOT, open_browser: bool = True) -> int:
     import canvas_update
     canvas_update.recover(root)
     env = runtime_environment(root)
-    env['INFINITE_CANVAS_AUTO_RELOAD'] = '0'
+    # 本地开发服务开启 Uvicorn 的 Python 自动重载；静态资源仍由
+    # /api/static-revision + live-reload.js 负责无感刷新。
+    env['INFINITE_CANVAS_AUTO_RELOAD'] = '1'
     env['INFINITE_CANVAS_UPDATER_PROTOCOL'] = '1'
     requests = root / 'cache' / 'runtime' / 'restarts'
     requests.mkdir(parents=True, exist_ok=True)

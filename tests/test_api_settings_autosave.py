@@ -380,7 +380,7 @@ class ApiSettingsAutosaveTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, html)
         self.assertIn('onclick="clearKeyOnly()', html)
-        self.assertIn("const HIDDEN_PROVIDER_IDS = new Set(['agnes', 'openai-compatible'])", script)
+        self.assertIn("const HIDDEN_PROVIDER_IDS = new Set(['agnes', 'openai-compatible', 'modelscope', 'volcengine'])", script)
         self.assertIn('HIDDEN_RECOMMENDED_API_IDS', script)
         self.assertNotIn('onboarding-save-btn', html + script)
         self.assertIn('function scheduleProviderAutosave', script)

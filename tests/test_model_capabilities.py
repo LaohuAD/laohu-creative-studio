@@ -338,7 +338,7 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
     def test_runninghub_minimax_audio_functions_share_one_model_family(self):
         fixtures = [
             ("minimax/speech-02-hd", "minimax/speech-02-hd", "Speech 02 · 高清"),
-            ("minimax/speech-2.8-turbo", "minimax/speech-2.8-turbo", "Speech 2.8 · 极速"),
+            ("minimax/speech-2.8-turbo", "minimax/speech-2.8-turbo", "Speech 2.8 · 极速 · Turbo 版"),
             ("minimax/voice-clone", "minimax/voice-clone", "声音克隆"),
             ("minimax/voice-design", "minimax/voice-design", "音色设计"),
         ]
@@ -406,8 +406,8 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
             ("seedance-2.0-mini/image-to-video", "runninghub-seedance-2.0"),
             ("google/veo3.1-fast/text-to-video-official-stable", "runninghub-google-veo3.1"),
             ("google/veo3.1-pro/image-to-video-official-stable", "runninghub-google-veo3.1"),
-            ("wan-2.7-reference-to-video", "runninghub-wan-2.7"),
-            ("wan-2.7/video-edit", "runninghub-wan-2.7"),
+            ("wan-2.7-reference-to-video", "runninghub-wan"),
+            ("wan-2.7/video-edit", "runninghub-wan"),
         ]
         for model_id, expected_family in fixtures:
             profile = runninghub_profile_from_registry_item({
@@ -570,8 +570,20 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
         self.assertEqual({item["family_name"] for item in normalized}, {"Seedance 2.0"})
         self.assertEqual(
             [item["variant_name"] for item in normalized],
-            ["多模态视频", "多模态视频-fast", "多模态视频-mini"],
+            ["多模态视频", "快速版 · 多模态视频", "精简版 · 多模态视频"],
         )
+
+    def test_repeated_minimax_modes_use_id_meaning_instead_of_sequence_numbers(self):
+        profiles = [ai_money_profile_from_model_id(model_id, "video_generation") for model_id in (
+            "minimax-h3-ow-r2v", "minimax-h3-ow-r2v-fast",
+        )]
+        normalized = normalize_model_classifications(profiles, "ai-money")
+        self.assertEqual([item["variant_name"] for item in normalized], [
+            "H3 · 标准版 · 图生视频", "H3 · 快速版 · 图生视频",
+        ])
+        self.assertEqual([item["variant_name_en"] for item in normalized], [
+            "H3 · Standard · Image to Video", "H3 · Fast · Image to Video",
+        ])
 
     def test_ai_money_standard_chat_catalog_model_gets_text_capability(self):
         profile = ai_money_profile_from_model_id("glm-5.2", "text_generation")
@@ -822,11 +834,12 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
                      patch.object(main, "run_jimeng_cli", new=AsyncMock(return_value={"images": []})) as cli, \
                      patch.object(main, "jimeng_prepare_local_media", new=AsyncMock(return_value=(str(ROOT / "cache/reference.png"), []))), \
                      patch.object(main, "jimeng_store_outputs", new=AsyncMock(return_value=["/api/results/mock"])):
-                    await main.generate_jimeng_provider_image("验收", "1024x1024", "5.0Pro", refs, {"id":"jimeng"}, {field:"1.5K"})
+                    await main.generate_jimeng_provider_image("验收", "1024x1024", "5.0Pro", refs, {"id":"jimeng"}, {field:"1.5K", "ratio":"3:4"})
                     args = cli.await_args.args[0]
                     self.assertEqual(args[0], "image2image" if refs else "text2image")
                     self.assertIn("--resolution_type=1.5k", args)
                     self.assertIn("--model_version=5.0Pro", args)
+                    self.assertIn("--ratio=3:4", args)
         catalog = ModelCapabilityRegistry(ROOT).build_catalog([{
             "id":"jimeng", "name":"即梦 CLI", "protocol":"jimeng", "enabled":True,
             "image_models":["5.0Pro"], "chat_models":[], "video_models":[], "audio_models":[],
@@ -2820,13 +2833,14 @@ console.log(JSON.stringify({available:families.map(item=>item.family_id),selecte
     def test_frontend_drops_parameters_not_declared_by_strict_profile(self):
         source = """
 const c=require('./static/js/smart-model-capabilities.js');
-const profile={validation_mode:'strict',parameters:{resolution:{type:'enum'},count:{type:'integer'}}};
+const profile={validation_mode:'strict',parameters:{resolution:{type:'enum',options:['1k','2k']},count:{type:'integer'}}};
 console.log(JSON.stringify(c.effectiveParameters(profile,{resolution:'2k',count:2,quality:'high'})));
 """
 
         self.assertEqual(run_node(source), {"resolution": "2k", "count": 2})
 
-    def test_frontend_normalizes_strict_parameter_values(self):
+    def test_frontend_rejects_invalid_strict_parameters_instead_of_normalizing(self):
+        """新契约：非法值被拒绝并报出，不再取整、裁剪或做字符串 truthy 转换（§1.3、C07/C09）。"""
         source = """
 const c=require('./static/js/smart-model-capabilities.js');
 const profile={validation_mode:'strict',parameters:{
@@ -2834,10 +2848,32 @@ const profile={validation_mode:'strict',parameters:{
   count:{type:'integer',min:1,max:4},
   generate_audio:{type:'boolean'}
 }};
-console.log(JSON.stringify(c.effectiveParameters(profile,{resolution:'8k',count:9,generate_audio:'true'})));
+const values={resolution:'8k',count:9,generate_audio:'true'};
+console.log(JSON.stringify({effective:c.effectiveParameters(profile,values),issues:c.parameterIssues(profile,values)}));
 """
+        result = run_node(source)
+        self.assertEqual(result["effective"], {}, "非法值不得被裁剪或强转后提交")
+        self.assertEqual(result["issues"], {
+            "resolution": "PARAM_INVALID",
+            "count": "PARAM_INVALID",
+            "generate_audio": "PARAM_INVALID",
+        }, "每个非法字段都必须被明确报出，供界面标红与运行前阻断")
 
-        self.assertEqual(run_node(source), {"count": 4, "generate_audio": True})
+    def test_frontend_keeps_legal_strict_parameter_values_unchanged(self):
+        source = """
+const c=require('./static/js/smart-model-capabilities.js');
+const profile={validation_mode:'strict',parameters:{
+  resolution:{type:'enum',options:['1k','2k','native1080p']},
+  count:{type:'integer',min:1,max:4},
+  generate_audio:{type:'boolean'}
+}};
+console.log(JSON.stringify(c.effectiveParameters(profile,{resolution:'native1080p',count:4,generate_audio:false})));
+"""
+        self.assertEqual(run_node(source), {
+            "resolution": "native1080p",
+            "count": 4,
+            "generate_audio": False,
+        }, "合法值必须原样通过，false 与真实枚举值不得被改写")
 
     def test_frontend_builds_traceable_capability_snapshot(self):
         source = """
@@ -3248,11 +3284,13 @@ console.log(JSON.stringify(c.buildVideoRequest(profile,{
   prompt:'测试',provider_id:'jimeng',model:'seedance2.0',
   images:[{url:'/assets/a.png'}],videos:[],audios:[],multimodal:true,trusted_asset:false
 },{
-  duration:30,aspect_ratio:'16:9',resolution:'4k',generate_audio:true,
+  duration:8,aspect_ratio:'16:9',resolution:'4k',generate_audio:true,
   enhance_prompt:true,enable_upsample:true,watermark:true,camerafixed:true,multimodal:true
 })));
 """
 
+        # 只有档案声明的参数进入请求：未声明的 resolution/enhance_prompt 等被丢弃；
+        # 越界值在新契约下被拒绝而不是裁剪。见 test_model_input_evaluation.py。
         self.assertEqual(run_node(source), {
             "prompt": "测试",
             "provider_id": "jimeng",
@@ -3262,7 +3300,7 @@ console.log(JSON.stringify(c.buildVideoRequest(profile,{
             "audios": [],
             "multimodal": True,
             "trusted_asset": False,
-            "duration": 10,
+            "duration": 8,
             "aspect_ratio": "16:9",
             "generate_audio": True,
         })
@@ -3392,10 +3430,12 @@ console.log(JSON.stringify(c.buildAudioRequest(profile,{
   prompt:'测试',provider_id:'ai-money',model:'audio-model',reference_audio:''
 },{
   speaker:'voice-a',format:'wav',sample_rate:24000,
-  speech_rate:30,loudness_rate:20,pitch_rate:99
+  speech_rate:30,loudness_rate:20,pitch_rate:12
 })));
 """
 
+        # 未声明的 speaker / speech_rate / loudness_rate 一律不提交；
+        # 越界值（如 pitch_rate:99）在新契约下被拒绝而不是裁剪到 12。见 test_model_input_evaluation.py。
         self.assertEqual(run_node(source), {
             "prompt": "测试",
             "provider_id": "ai-money",

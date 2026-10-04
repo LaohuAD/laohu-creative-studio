@@ -87,15 +87,20 @@
             return {number:spec.order,script:describe(node),sourceStatus:!spec.sourceNodeId?'unlinked':!source?'missing':slice===textOf(node)?'current':'changed',images:cells('imageNodeIds'),audio:cells('audioNodeIds'),videos:cells('videoNodeIds')};
         });
     }
-    function mount({container,button,getNodes,getConnections,focus,registerSelected,text,bindPosters}){
-        const el=document.createElement('aside');el.className='canvas-production-panel';el.hidden=true;
-        el.innerHTML='<div class="production-head"><button type="button" class="production-drawer-grip" data-pin><svg viewBox="0 0 32 24" aria-hidden="true"><path class="production-grip-lines" d="M7 9h18M7 15h18"/><circle class="production-grip-ring" cx="16" cy="12" r="6"/></svg></button><strong data-heading></strong><span data-count></span><button type="button" data-register></button><button type="button" data-close>×</button></div><div class="production-table-scroll"><table><thead></thead><tbody></tbody></table><p data-empty></p></div>';
-        container.appendChild(el);const body=el.querySelector('tbody');let signature='',seen=false,pinned=true,leaveTimer=0;
+    function registerSegments(nodes,nodeIds,connections){
+        const eligible=[...new Set(nodeIds)].map(id=>nodes.find(node=>node.id===id)).filter(node=>node&&kind(node)==='text'&&!['script','segment'].includes(node.production?.role));
+        let order=Math.max(0,...rows(nodes,connections).map(row=>row.number));
+        eligible.forEach(node=>update(node,{role:'segment',order:++order},nodes));
+        return eligible;
+    }
+    function mount({container,button,getNodes,getConnections,focus,text,bindPosters}){
+        const el=document.createElement('div');el.className='canvas-production-panel';el.setAttribute('role','dialog');el.setAttribute('aria-modal','true');el.setAttribute('aria-hidden','true');
+        el.innerHTML='<section class="production-dialog"><div class="production-head"><strong data-heading></strong><span data-count></span></div><div class="production-table-scroll"><table><thead></thead><tbody></tbody></table><p data-empty></p></div></section>';
+        container.appendChild(el);const body=el.querySelector('tbody');
+        let signature='';
         const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         const labels=()=>({ready:text('已生成','Ready'),running:text('生成中','Running'),failed:text('失败','Failed'),not_generated:text('未生成','Not generated')});
-        function pinLabel(){const control=el.querySelector('[data-pin]');control.setAttribute('aria-pressed',String(pinned));control.title=pinned?text('已固定 · 点击解锁','Pinned · Click to unpin'):text('自动收起 · 点击固定','Auto-hide · Click to pin');}
-        function setPinned(value){clearTimeout(leaveTimer);pinned=value;el.classList.toggle('is-auto-hide',!value);el.classList.toggle('is-peeking',!value&&el.matches(':hover'));pinLabel();}
-        function open(value){if(value)setPinned(true);el.hidden=!value;button.classList.toggle('active',value);button.setAttribute('aria-expanded',String(value));if(value)refresh();}
+        function open(value){el.classList.toggle('open',value);el.setAttribute('aria-hidden',String(!value));button.classList.toggle('active',value);button.setAttribute('aria-expanded',String(value));if(value)refresh();}
         function icon(kind){return kind==='audio'?'<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 13v6M10 7v18M16 3v26M22 8v16M27 13v6"/></svg>':kind==='video'?'▷':kind==='text'?'≡':'◇';}
         function chip(item){
             const caption=`${item.title} · ${labels()[item.status]}`;
@@ -106,28 +111,20 @@
             return `<button type="button" class="production-chip is-${item.status}" data-node-id="${escape(item.id)}" title="${escape(caption+(item.error?'\n'+item.error:''))}" aria-label="${escape(caption)}"><span class="production-thumb">${content}<span class="production-status" aria-hidden="true">${item.status==='running'?'…':item.status==='failed'?'!':item.status==='ready'?'✓':''}</span></span><span class="production-chip-name">${escape(item.title)}</span></button>`;
         }
         function refresh(){
-            const data=rows(getNodes(),getConnections?.());if(data.length&&!seen){seen=true;el.hidden=false;button.classList.add('active');button.setAttribute('aria-expanded','true');}
-            el.querySelector('[data-pin]').setAttribute('aria-label',text('固定或自动收起创作进度','Pin or auto-hide production'));pinLabel();
+            const data=rows(getNodes(),getConnections?.());
             const label=text('创作进度','Production');button.querySelector('span').textContent=label;button.title=label;
             el.querySelector('[data-heading]').textContent=label;el.querySelector('[data-count]').textContent=text(`${data.length} 段`,`${data.length} segments`);
-            el.querySelector('[data-register]').textContent=text('登记所选分段','Add selected segments');
-            el.querySelector('[data-close]').setAttribute('aria-label',text('收起创作进度','Collapse production'));
-            el.querySelector('[data-empty]').textContent=text('分段后，由 Agent 登记已有节点；也可选中文本节点后点击“登记所选分段”。','After segmentation, ask your agent to register the nodes, or select text nodes and add them here.');
+            el.querySelector('[data-empty]').textContent=text('登记文本节点后，创作分段会显示在这里。','Registered text segments appear here.');
             el.querySelector('[data-empty]').hidden=!!data.length;
             const next=JSON.stringify([data,label]);if(next===signature)return;signature=next;
             el.querySelector('thead').innerHTML='<tr>'+[text('序号','No.'),text('分段剧本','Segment script'),text('图片资产','Image assets'),text('音频 / 音色','Audio / voice'),text('视频','Video')].map(v=>`<th scope="col">${escape(v)}</th>`).join('')+'</tr>';
             body.innerHTML=data.map(row=>`<tr><td>${row.number}</td><td><button type="button" class="production-script" data-node-id="${escape(row.script.id)}">${escape(row.script.title)}</button>${['changed','missing'].includes(row.sourceStatus)?`<small class="production-source-warning">${escape(text('源剧本有变化，请复核分段','Source changed; review segment'))}</small>`:''}</td>${[row.images,row.audio,row.videos].map(items=>`<td><div class="production-chips">${items.length?items.map(chip).join(''):'<span class="production-none">—</span>'}</div></td>`).join('')}</tr>`).join('');
             bindPosters?.(body);
         }
-        el.querySelector('[data-pin]').addEventListener('click',event=>{setPinned(!pinned);event.currentTarget.blur();});
-        el.addEventListener('pointerenter',()=>{clearTimeout(leaveTimer);if(!pinned)el.classList.add('is-peeking');});
-        el.addEventListener('pointerleave',()=>{leaveTimer=setTimeout(()=>{if(!pinned&&!el.matches(':focus-within'))el.classList.remove('is-peeking');},220);});
-        el.addEventListener('focusout',()=>{if(!pinned)leaveTimer=setTimeout(()=>{if(!el.matches(':hover,:focus-within'))el.classList.remove('is-peeking');},220);});
-        button.addEventListener('click',()=>open(el.hidden));el.querySelector('[data-close]').addEventListener('click',()=>open(false));
-        el.querySelector('[data-register]').addEventListener('click',registerSelected);
-        body.addEventListener('click',event=>{const target=event.target.closest('[data-node-id]');if(target)focus(target.dataset.nodeId,el.offsetHeight+16);});
+        button.addEventListener('click',()=>{const next=!el.classList.contains('open');if(next) window.closeSmartTopPanels?.('production');open(next);});
+        body.addEventListener('click',event=>{const target=event.target.closest('[data-node-id]');if(target)focus(target.dataset.nodeId,0);});
         ['pointerdown','mousedown','dblclick','wheel'].forEach(type=>el.addEventListener(type,event=>event.stopPropagation()));
         return {refresh,open,element:el};
     }
-    return {textOf,kind,update,rows,summary,migrateRelations,mount};
+    return {textOf,kind,update,rows,summary,migrateRelations,registerSegments,mount};
 });

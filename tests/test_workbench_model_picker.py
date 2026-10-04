@@ -19,7 +19,7 @@ def run_node(script):
 
 
 class WorkbenchModelPickerTests(unittest.TestCase):
-    def test_capability_candidates_cross_enabled_providers_without_display_name_merge(self):
+    def test_same_series_merges_across_platforms_without_losing_model_ids(self):
         script = r'''
 const c = require('./static/js/smart-model-capabilities.js');
 const profile = (provider, model, family, variant, name='Fast') => ({
@@ -52,10 +52,10 @@ console.log(JSON.stringify({
 }));
 '''
         result = run_node(script)
-        self.assertEqual(result["familyCount"], 2)
-        self.assertEqual(result["mergedProviders"], ["p1", "p2"])
-        self.assertEqual(result["mergedModels"], ["p1-fast", "p2-fast"])
-        self.assertEqual(result["sameLabelFamilyIds"], ["seedance-2", "other-seedance-2"])
+        self.assertEqual(result["familyCount"], 1)
+        self.assertEqual(result["mergedProviders"], ["p1", "p2", "p3"])
+        self.assertEqual(result["mergedModels"], ["p1-fast", "p2-fast", "p3-fast"])
+        self.assertEqual(result["sameLabelFamilyIds"], ["seedance-2"])
         self.assertNotEqual(result["variantKeys"][0], result["variantKeys"][1])
 
     def test_generation_renderers_use_one_family_variant_platform_picker_and_one_bundle(self):
@@ -86,7 +86,9 @@ console.log(JSON.stringify({
         # 常用参数直接铺开为 markup，仅 level=advanced 的高级参数进入齿轮弹层。
         self.assertIn("inlineEntries", bundle)
         self.assertIn("advancedEntries", bundle)
-        self.assertIn("renderCapabilityParameterControl(", bundle)
+        self.assertIn("capability-summary-control", bundle)
+        self.assertIn("capability-summary-popover", bundle)
+        self.assertIn("${entry.body}", bundle)
         self.assertIn("renderCapabilitySettingsControl(advancedEntries", bundle)
 
     def test_parameter_popover_keeps_scroll_inside_canvas(self):

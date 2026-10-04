@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "static/js/hypit-settings.js"
 STYLES = ROOT / "static/css/hypit-settings.css"
+PAGE = ROOT / "static/api-settings.html"
 
 
 class HypitSettingsUiTests(unittest.TestCase):
@@ -14,6 +15,7 @@ class HypitSettingsUiTests(unittest.TestCase):
     def setUpClass(cls):
         cls.script = SCRIPT.read_text(encoding="utf-8")
         cls.styles = STYLES.read_text(encoding="utf-8")
+        cls.page = PAGE.read_text(encoding="utf-8")
 
     def test_hypit_navigation_keeps_sidebar_and_handles_section_route(self):
         self.assertIn("new URLSearchParams(location.search).get('section') === 'hypit'", self.script)
@@ -23,6 +25,12 @@ class HypitSettingsUiTests(unittest.TestCase):
         self.assertIn("#canvasModelSettingsBlock", self.styles)
         self.assertNotIn(".layout.hypit-settings-mode .provider-list", self.styles)
         self.assertNotIn(".layout.hypit-settings-mode .cli-quick-group", self.styles)
+
+    def test_hypit_loads_the_shared_model_control_before_mounting(self):
+        self.assertIn("/static/js/model-config-core.js", self.page)
+        self.assertIn("/static/js/model-config-control.js", self.page)
+        self.assertIn("/static/css/model-config-control.css", self.page)
+        self.assertIn("data-hypit-slot=\"${escapeHtml(slot)}\"", self.script)
 
     def test_autosave_race_keeps_latest_draft_and_server_revision(self):
         node = __import__("shutil").which("node")
@@ -96,7 +104,9 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
   await Promise.all((listeners.load || []).map(handler => handler()));
   await wait(0);
-  if (!element('hypitSlots').innerHTML.includes('RunningHub · AI') || !element('hypitSlots').innerHTML.includes('RunningHub · CN')) throw new Error('both RunningHub sites were not rendered');
+  const candidateLabels = window.hypitSlotCandidates('image').map(item => item.label);
+  if (!candidateLabels.some(label => label.includes('AI')) || !candidateLabels.some(label => label.includes('CN'))) throw new Error('both RunningHub sites were not offered: ' + JSON.stringify(candidateLabels));
+  if (!window.hypitSlotCandidates('image').some(item => item.region === 'cn')) throw new Error('cn 站点候选缺失');
   const otherNav = {id:'canvasModelsNav', closest: selector => selector === '#hypitSettingsNav' ? null : otherNav};
   let prevented = false;
   let stopped = false;

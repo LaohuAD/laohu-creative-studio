@@ -397,6 +397,25 @@ console.log(JSON.stringify({
         self.assertNotIn("pickMediaForSmartNode(created.id)", menu)
         self.assertIn("clipboardData?.getData('text/plain')", paste)
         self.assertIn("createTextMaterialNodeAt", paste)
+
+    def test_recent_canvas_node_copy_beats_stale_external_image_and_never_replaces_selection(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        paste_start = source.index("window.addEventListener('paste'")
+        paste = source[paste_start:source.index("window.addEventListener('copy'", paste_start)]
+        node_intent = paste.index("intent?.kind === 'nodes'")
+        external_image = paste.index("const externalImageItems")
+        self.assertLess(node_intent, external_image)
+        self.assertIn("pasteNodes();", paste)
+        self.assertIn("handleFiles(externalImageItems, '')", paste)
+        self.assertIn("handleFiles(files, '')", paste)
+        self.assertNotIn("handleFiles(externalImageItems, selectedId)", paste)
+
+    def test_canvas_node_copy_updates_shared_recent_intent(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        copy = source[source.index("function copySelectedNodes"):source.index("function selectedClipboardMedia")]
+        self.assertIn("saveSmartClipboardIntent({kind:'nodes'", copy)
+        self.assertNotIn("navigator.clipboard.write", copy)
+        self.assertIn("Do not overwrite the OS media", copy)
         self.assertIn("isSupportedTextFile", source)
         self.assertIn("await file.text()", source)
 
@@ -563,7 +582,7 @@ const profile={model_id:'m',parameters:{
  task_id:{level:'required',type:'text'}
 }};
 const values=capabilityParameterSubmissionValues(profile,{capabilityParameters:{m:{resolution:CAPABILITY_PARAMETER_UNSET}}});
-assert.deepEqual(values,{resolution:'1K',audio:false,strength:0});
+assert.deepEqual(values,{audio:false,strength:0});
 const image={id:'old-image',type:SMART_NODE_TYPES.imageGenerator};
 const original={engine:'api',provider_id:'chosen-platform',model:'chosen',imageFamilyId:'family',count:3,
  capabilityParameters:{chosen:{resolution:'2K',audio:false,strength:0,prompt:'do not copy',task_id:'old-run'}},
@@ -602,6 +621,16 @@ console.log(JSON.stringify({ok:true}));
         self.assertIn("data-capability-unset", source)
         self.assertNotIn("spec.options.length <= 12", renderer)
         self.assertIn("capabilityParameterSubmissionValues(textCapabilitySelection.profile, runSettings)", source)
+
+    def test_required_parameters_do_not_invent_defaults(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        defaults = source[source.index("function capabilityParameterDefaultValue"):source.index("function capabilityProfileHasParameterDefaults")]
+        editor = source[source.index("function renderCapabilityParameterEditor"):source.index("function renderCapabilitySettingsControl")]
+        self.assertNotIn("options[0]", defaults)
+        self.assertNotIn("Number(spec.min)", defaults)
+        self.assertIn("保持未设置", defaults)
+        self.assertIn("storedValue ?? spec?.default ?? ''", editor)
+        self.assertNotIn("spec?.default ?? spec?.min ?? ''", editor)
 
     def test_new_model_candidates_do_not_inherit_previous_model_parameter_constraints(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -643,9 +672,10 @@ console.log(JSON.stringify({ok:true}));
         self.assertIn("ensureExecutionSelectionDefaults(node.runSettings, node)", load)
         self.assertIn("capabilitySafeDefaultProfileForFamily", source)
         self.assertIn("if(spec.ui_hidden === true && capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET", defaults)
-        self.assertIn("if(options.length) return options[0]", defaults)
-        self.assertIn("if(type === 'boolean') return false", defaults)
-        self.assertIn("Number(spec.min)", defaults)
+        self.assertNotIn("if(options.length) return options[0]", defaults)
+        self.assertNotIn("if(type === 'boolean') return false", defaults)
+        default_fn = defaults[defaults.index("function capabilityParameterDefaultValue"):defaults.index("function capabilityProfileHasParameterDefaults")]
+        self.assertNotIn("Number(spec.min)", default_fn)
         self.assertIn("value !== CAPABILITY_PARAMETER_UNSET", defaults)
 
     def test_model_family_and_platform_changes_persist_the_default_run_mode(self):
@@ -667,6 +697,8 @@ console.log(JSON.stringify({ok:true}));
 
         self.assertIn("function renderCapabilityParameterControl", source)
         self.assertIn("smart-control capability-param-control", source)
+        self.assertIn("smart-control capability-summary-control", source)
+        self.assertIn("smart-popover capability-summary-popover", source)
         self.assertIn("smart-pill capability-param-pill", source)
         self.assertIn("smart-popover capability-param-popover", source)
         self.assertIn("capability-param-label", source)
@@ -677,6 +709,13 @@ console.log(JSON.stringify({ok:true}));
         self.assertNotIn("capability-pill-copy", parameter_control)
         self.assertNotIn('<div class="capability-field"', renderer)
         self.assertIn(".capability-fields .capability-param-control", css)
+        self.assertIn(".capability-summary-control", css)
+        self.assertIn("grid-column:1 / -1", css[css.index(".capability-summary-control"):css.index(".capability-summary-control") + 240])
+        self.assertIn(".capability-summary-popover", css)
+        self.assertIn(".execution-config-grid > .smart-control { grid-column:1 / -1; width:100%; }", css)
+        self.assertIn("max-height:none", css[css.index(".composer:not(.ai-app-composer) .dynamic-params {"):css.index(".composer:not(.ai-app-composer) .dynamic-params {") + 260])
+        self.assertIn("scrollbar-width:none", css[css.index(".composer:not(.ai-app-composer) .dynamic-params {"):css.index(".composer:not(.ai-app-composer) .dynamic-params {") + 260])
+        self.assertIn("text-align:center", css[css.index(".capability-model-name {"):css.index(".capability-model-name {") + 320])
         self.assertIn("grid-template-columns:repeat(3,minmax(0,1fr))", css)
         self.assertIn(".smart-popover { position:absolute; left:50%; bottom:calc(100% + 8px)", css)
         self.assertIn("renderCapabilityParameters(profile, 'image')", source)
@@ -2009,6 +2048,197 @@ console.log(JSON.stringify({
         ]
         self.assertIn("variant?.variant_name_en", variant_label)
 
+    def test_video_picker_does_not_expose_input_purpose_as_model_parameter(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        start = source.index("function renderVideoInputModeControl")
+        end = source.index("\nfunction optionHtml", start)
+        control = source[start:end]
+        self.assertIn("return '';", control)
+        self.assertNotIn("图片用途", control)
+        self.assertNotIn("data-video-input-mode", control)
+        self.assertIn("function videoShouldUseFrameRoles", source)
+        self.assertIn("videoShouldUseFrameRoles([...refImages", source)
+        roles_start = source.index("function videoCapabilityInputRoles")
+        roles_end = source.index("\nfunction capabilityInputCounts", roles_start)
+        self.assertNotIn("videoUseFrameRoles", source[roles_start:roles_end])
+
+    def test_text_material_toolbar_exposes_segment_registration_action(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        start = source.index("function smartNodeToolbarHtml(node)")
+        end = source.index("function duplicateSmartNodeMediaToCanvas", start)
+        toolbar = source[start:end]
+        self.assertIn("key:'register-segment'", toolbar)
+        self.assertIn("if(action === 'register-segment')", source)
+        self.assertIn("CanvasProduction.registerSegments", source)
+
+    def test_video_series_aliases_merge_vidu_kling_versions_and_pixverse_c1(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        start = source.index("function capabilitySelectionIdentity")
+        end = source.index("function resolveCapabilityFamilySelection", start)
+        identity = source[start:end]
+        self.assertIn("reviewedVideoFamilies", identity)
+        identity_literal = json.dumps(identity)
+        data = run_node(f"""
+const vm=require('node:vm');
+const identity=vm.runInNewContext('('+{identity_literal}+')',{{window:{{}}}});
+const resolve=(model_id,family_name)=>identity({{provider_id:'runninghub',model_id,family_name}},'video_generation');
+console.log(JSON.stringify({{
+  viduA:resolve('Vidu-reference-to-video-q2-pro','Vidu'),
+  viduB:resolve('vidu-text-to-video-q3-pro','Vidu Q3'),
+  klingO1:resolve('kling-video-o1/text-to-video','可灵 O1'),
+  klingO3:resolve('kling-video-o3-pro/text-to-video','可灵 O3'),
+  pixverse:resolve('pixverse-v6/text-to-video','PixVerse'),
+  pixverseC1:resolve('pixverse-c1/text-to-video','PixVerse C1')
+}}));
+""")
+        for actual, expected in (("viduA", "viduB"), ("klingO1", "klingO3"), ("pixverse", "pixverseC1")):
+            self.assertEqual(data[actual]["canonical_family_id"], data[expected]["canonical_family_id"])
+
+    def test_model_id_repairs_only_incomplete_or_wrong_family_mappings(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        start = source.index("function capabilitySelectionIdentity")
+        end = source.index("function resolveCapabilityFamilySelection", start)
+        identity = source[start:end]
+        identity_literal = json.dumps(identity)
+        data = run_node(f"""
+const vm=require('vm');
+const identity=vm.runInNewContext('('+{identity_literal}+')',{{window:{{}}}});
+const resolve=(model_id,family_name,node_type='image_generation')=>identity({{provider_id:'laohu',model_id,family_name}},node_type);
+console.log(JSON.stringify({{
+  jimeng:resolve('bytedance/jimeng-4.6/text-to-image','Seedream'),
+  jimengCli:identity({{provider_id:'jimeng-cli',model_id:'5.0Pro',family_id:'jimeng-image-5.0-pro',family_name:'即梦图片 5.0 Pro'}},'image_generation'),
+  banana:resolve('nano-banana-pro/text-to-image','全能图片 G'),
+  grok:resolve('xai/grok-imagine-image/text-to-image','海螺'),
+  qwen:resolve('Qwen/Qwen-Image-2512','Qwen Image'),
+  hailuo:resolve('hailuo-h3-global-i2v','MiniMax H3','video_generation'),
+  minimax:resolve('minimax-h3-ow-i2v','MiniMax H3','video_generation'),
+  horse:resolve('happyhorse-1.1-t2v','HappyHorse','video_generation'),
+  grokVideo:resolve('xai/grok-imagine-video-v1.5/text-to-video','MiniMax','video_generation')
+}}));
+""")
+        expected = {
+            "jimeng": "series-image-seedream",
+            "jimengCli": "series-image-seedream",
+            "banana": "series-image-nano-banana",
+            "grok": "series-image-grok-image",
+            "qwen": "series-image-qwen-image",
+            "hailuo": "series-video-minimax",
+            "minimax": "series-video-minimax",
+            "horse": "series-video-happyhorse",
+            "grokVideo": "series-video-grok",
+        }
+        for key, family_id in expected.items():
+            self.assertEqual(data[key]["canonical_family_id"], family_id, key)
+
+    def test_canvas_picker_uses_reviewed_identity_before_provider_family(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        block = source[source.index("function capabilitySelectionIdentity"):source.index("function resolveCapabilityFamilySelection")]
+        script = f"""
+const vm=require('vm');
+const options=[
+ {{capability_provider_id:'runninghub',catalog_model_id:'xai/rhart-imagine-image-quality/text-to-image-official-stable',node_type:'image_generation',operation:'text_to_image',canonical_family_id:'series-image-grok-image',canonical_family_label:{{zh:'Grok Image',en:'Grok Image'}},display_mode:'高质量 · 文生图'}},
+ {{capability_provider_id:'runninghub',catalog_model_id:'Luma uni-1-max Text to Image',node_type:'image_generation',operation:'text_to_image',canonical_family_id:'series-image-luma',canonical_family_label:{{zh:'Luma',en:'Luma'}},display_mode:'Uni-1 · Max · 文生图'}},
+ {{capability_provider_id:'ai-money',catalog_model_id:'laohu-image-nb-pro',node_type:'image_generation',operation:'text_to_image',canonical_family_id:'series-image-nano-banana',canonical_family_label:{{zh:'Nano Banana',en:'Nano Banana'}},display_mode:'Pro · 文生图'}},
+ {{capability_provider_id:'jimeng-cli',catalog_model_id:'5.0Pro',node_type:'image_generation',operation:'text_to_image_or_image_to_image',canonical_family_id:'series-image-seedream',canonical_family_label:{{zh:'Seedream',en:'Seedream'}},display_mode:'5.0 · Pro · 文生图／图生图'}}
+];
+const identity=vm.runInNewContext('('+{json.dumps(block)}+')',{{window:{{}},modelCapabilityCatalog:{{options}}}});
+console.log(JSON.stringify([
+ identity({{provider_id:'runninghub',model_id:options[0].catalog_model_id,family_name:'全能图片X 高质量',operation:'text_to_image'}},'image_generation'),
+ identity({{provider_id:'runninghub',model_id:options[1].catalog_model_id,family_name:'Luma Uni max',operation:'text_to_image'}},'image_generation'),
+ identity({{provider_id:'ai-money',model_id:options[2].catalog_model_id,family_name:'Nano Banana Pro',operation:'text_to_image'}},'image_generation'),
+ identity({{provider_id:'jimeng',model_id:options[3].catalog_model_id,family_name:'即梦图片 Pro',operation:'text_to_image_or_image_to_image'}},'image_generation')
+]));
+"""
+        result = run_node(script)
+        self.assertEqual([item["canonical_family_id"] for item in result], [
+            "series-image-grok-image", "series-image-luma", "series-image-nano-banana", "series-image-seedream",
+        ])
+        self.assertEqual(result[-1]["display_mode"], "5.0 · Pro · 文生图／图生图")
+
+    def test_mixed_image_mode_remains_available_with_and_without_reference(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        block = source[source.index("function capabilityProfileMatchesCurrentInput"):source.index("function resolveCapabilityFamilyPickerSelection")]
+        script = f"""
+const vm=require('vm');
+const matches=vm.runInNewContext('('+{json.dumps(block)}+')');
+const mixed={{node_type:'image_generation',operation:'text_to_image_or_image_to_image'}};
+const imageOnly={{node_type:'image_generation',operation:'image_to_image'}};
+console.log(JSON.stringify([matches(mixed,'image_generation',{{image:0}}),matches(mixed,'image_generation',{{image:1}}),matches(imageOnly,'image_generation',{{image:0}})]));
+"""
+        self.assertEqual(run_node(script), [True, True, False])
+
+    def test_jimeng_seedream_identity_modes_are_concise_and_keep_mixed_input(self):
+        identities = json.loads((ROOT / "data/model_capabilities/model-identities.json").read_text(encoding="utf-8"))
+        bindings = [item for item in identities["bindings"] if (
+            item["match"].get("capability_provider_id") == "jimeng-cli"
+            and item["match"].get("node_type") == "image_generation"
+        )]
+        self.assertTrue(bindings)
+        self.assertTrue(all(item["canonical_family_id"] == "series-image-seedream" for item in bindings))
+        by_model = {item["match"]["model_id"]:item["display_mode"] for item in bindings}
+        self.assertEqual(by_model["5.0Pro"], "5.0 · Pro · 文生图／图生图")
+        self.assertEqual(by_model["5.0"], "5.0 · 文生图／图生图")
+        self.assertNotIn("5.0 · Pro · 图生图 / 5.0 · Pro · 文生图", by_model.values())
+
+    def test_text_model_aliases_are_grouped_into_the_nine_requested_families(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        block = source[source.index("function capabilitySelectionIdentity"):source.index("function resolveCapabilityFamilySelection")]
+        identity_literal = json.dumps(block)
+        script = f"""
+const vm=require('vm');
+const identity=vm.runInNewContext('('+{identity_literal}+')',{{window:{{}},modelCapabilityCatalog:{{options:[]}}}});
+const resolve=(model_id,family_name)=>identity({{provider_id:'ai-money',model_id,family_name}},'text_generation');
+console.log(JSON.stringify({{
+  g5:resolve('laohu/g5.6-sol','provider-local-g5'),
+  g6:resolve('laohu/g6-astra','provider-local-g6'),
+  gk:resolve('laohu/gk-4.6','provider-local-gk'),
+  gm:resolve('laohu/gm-3.8-flash','provider-local-gm'),
+  doubao:resolve('bytedance/doubao-seed-2.1-pro','provider-local-doubao'),
+  minimax:resolve('minmax-h3-context-ir-text','provider-local-minmax'),
+  kimi:resolve('moonshotai/kimi-k3','provider-local-kimi'),
+  qwen:resolve('Qwen/Qwen3.8-Max','provider-local-qwen'),
+  glm:resolve('glm-5.3-flash','provider-local-glm'),
+  deepseek:resolve('deepseek/deepseek-v4.1-flash','provider-local-deepseek')
+}}));
+"""
+        result = run_node(script)
+        expected = {
+            "g5": "series-text-gpt", "g6": "series-text-gpt", "gk": "series-text-grok",
+            "gm": "series-text-gemini", "doubao": "series-text-doubao-seed",
+            "minimax": "series-text-minimax", "kimi": "series-text-kimi",
+            "qwen": "series-text-qwen", "glm": "series-text-glm", "deepseek": "series-text-deepseek",
+        }
+        for key, family_id in expected.items():
+            self.assertEqual(result[key]["canonical_family_id"], family_id, key)
+
+    def test_text_alias_mode_labels_keep_versions_without_alias_fragments(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        block = source[source.index("function capabilityVariantLabel"):source.index("function renderCapabilityVariantControl")]
+        result = run_node(f"""
+const vm=require('vm');
+const context={{window:{{StudioI18n:{{lang:()=> 'zh'}}}},capabilityUiText:(zh,en)=>zh}};
+const label=vm.runInNewContext('('+{json.dumps(block)}+')',context);
+console.log(JSON.stringify(['laohu/g5.6-sol','laohu/g6-astra','laohu/gk-4.6','laohu/gm-3.8-flash'].map(model_id=>label({{node_type:'text_generation',model_id}}))));
+""")
+        self.assertEqual(result, ["5.6 · Sol", "6 · Astra", "4.6", "3.8 · Flash"])
+
+    def test_text_picker_excludes_specialized_tools(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        block = source[source.index("function capabilityProfileMatchesCurrentInput"):source.index("function resolveCapabilityFamilyPickerSelection")]
+        script = f"""
+const vm=require('vm');
+const matches=vm.runInNewContext('('+{json.dumps(block)}+')');
+console.log(JSON.stringify([
+  matches({{operation:'chat'}},'text_generation',{{text:1}}),
+  matches({{operation:'multimodal_chat'}},'text_generation',{{text:1,image:1}}),
+  matches({{operation:'prompt_enhancement'}},'text_generation',{{text:1}}),
+  matches({{operation:'image_description'}},'text_generation',{{text:1}}),
+  matches({{operation:'transcription'}},'text_generation',{{text:1}}),
+  matches({{operation:'text_to_3d'}},'text_generation',{{text:1}})
+]));
+"""
+        self.assertEqual(run_node(script), [True, True, True, False, False, False])
+
     def test_result_connections_have_dedicated_layout_and_visual_semantics(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
 
@@ -2582,6 +2812,12 @@ console.log(JSON.stringify({
         self.assertIn("positionComposerForNode(active)", dynamic)
         self.assertIn("window.addEventListener('resize', () =>", source)
 
+    def test_toolbar_double_click_does_not_open_canvas_create_menu(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        handler = source[source.index("shell.ondblclick = e =>"):source.index("shell.onclick = e =>", source.index("shell.ondblclick = e =>"))]
+        for selector in (".smart-production-toggle", ".smart-agent-toggle", ".smart-price-toggle", ".smart-log-toggle", ".smart-shortcut-toggle", ".smart-workflow-toggle"):
+            self.assertIn(selector, handler)
+
     def test_port_drop_uses_whole_target_node_including_controls(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         port_drop = source[source.index("function handlePortDrop"):source.index("function pickMediaForSmartNode")]
@@ -2605,12 +2841,62 @@ console.log(JSON.stringify({
         self.assertIn("navigator.clipboard.write", source)
         self.assertIn("e.shiftKey && key === 'c'", source)
         clipboard = source[source.index("function selectedClipboardMedia"):source.index("function pasteNodes")]
-        self.assertIn(".filter(node => isSmartImageNode(node))", clipboard)
+        self.assertIn(".filter(entry => isSmartImageNode(entry.node))", clipboard)
         self.assertIn("entries.length > 1", clipboard)
         self.assertIn("StudioMedia.copy(entries.map", clipboard)
         self.assertIn("window.addEventListener('copy', event =>", source)
         self.assertIn("event.defaultPrevented || isEditableTarget(event.target)", source)
         self.assertNotIn("已复制第 1 个素材", clipboard)
+
+    def test_recent_clipboard_intent_selects_node_or_external_media(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        paste = source[source.index("window.addEventListener('paste'"):source.index("window.addEventListener('copy'")]
+
+        image_file_branch = paste.index("const externalImageItems =")
+        node_branch = paste.index("if(hasNodeClipboard && intent?.kind === 'nodes'")
+        self.assertLess(node_branch, image_file_branch)
+        self.assertIn("e.preventDefault();\n        pasteNodes();\n        return;", paste)
+        self.assertIn("loadSmartClipboardIntent()", paste)
+        self.assertIn("invalidateCanvasNodeClipboardOnFocusLoss", source)
+        self.assertIn("!value.invalidatedAt", source)
+        self.assertIn("saveSmartClipboardIntent({kind:'nodes', source:'canvas'", source)
+        self.assertIn("handleFiles(externalImageItems, '')", paste)
+        self.assertNotIn("handleFiles(externalImageItems, selectedId)", paste)
+
+    def test_display_numbers_reuse_current_canvas_sequence_after_deletion(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        allocator = source[source.index("function allocateCanvasNodeDisplayNumber"):source.index("function mergeSmartImageLists")]
+        self.assertIn("used.size ? Math.max(...used) + 1 : 1", allocator)
+        self.assertIn("canvas.nextNodeNumber = next", allocator)
+        self.assertNotIn("Number(canvas?.nextNodeNumber) || 1, ...used", allocator)
+
+    def test_clipboard_media_paste_preserves_mixed_media_kinds_and_counts(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        asset_paste = source[source.index("function pasteMediaItemsToCanvas"):source.index("function duplicateForAltDrag")]
+        copy_selection = source[source.index("function selectedClipboardMedia"):source.index("function copySelectedMediaToSystemClipboard")]
+
+        self.assertIn("kind:mediaKindForItem(item)", copy_selection)
+        self.assertIn("item.kind === 'text'", asset_paste)
+        self.assertIn("createImageNodeAt(point, [assetNodeImageFromItem(item)]", asset_paste)
+        self.assertIn("mediaKindForItem(item)", asset_paste)
+        self.assertIn("count:entries.length", source)
+
+    def test_asset_library_copy_marks_the_latest_clipboard_intent(self):
+        source = (ROOT / "static/js/asset-manager.js").read_text(encoding="utf-8")
+        copy = source[source.index("function copySelectedAssetsToCanvas"):source.index("async function downloadSelectedAssets")]
+
+        self.assertIn("SMART_CANVAS_CLIPBOARD_INTENT_KEY", copy)
+        self.assertIn("source:'asset-library'", copy)
+        self.assertIn("count:items.length", copy)
+
+    def test_legacy_provider_names_are_removed_from_family_labels(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        labels = source[source.index("function laohuDisplayText"):source.index("function renderCapabilityFamilyControl")]
+
+        self.assertIn("laohuaimoney", labels)
+        self.assertIn("ai[-_ ]?money", labels)
+        self.assertIn("zhenzhen", labels)
+        self.assertIn("capabilityFamilyLabel", labels)
 
     def test_group_bounds_and_dragging_use_every_member_type(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")

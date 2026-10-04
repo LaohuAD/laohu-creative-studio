@@ -21,6 +21,7 @@
     <script src="/static/js/touch-mouse.js?v=2026.08.17.1786430759"></script>
     <script src="/static/js/i18n.js?v=2026.08.17.1787068901"></script>
     <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.08.17.1787813528">
+    <link rel="stylesheet" href="/static/css/model-config-control.css?v=2026.09.23.1">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
 </head>
 <body>
@@ -56,7 +57,6 @@
                 </div>
             </div>
         </div>
-        <button class="smart-back" type="button" onclick="backToCanvasList()"><i data-lucide="arrow-left"></i><span data-i18n="canvas.backToList">返回画布列表</span></button>
         <div id="smartTitle" class="smart-title" data-i18n="smart.title">智能画布</div>
         <div id="createMenu" class="create-menu">
             <div class="create-menu-section">
@@ -239,6 +239,9 @@
                 </div>
                 <div class="shortcut-list">
                     <div class="shortcut-platform-head"><span>Windows</span><span>Mac</span><span>操作</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Enter</kbd></span><span class="shortcut-keys"><kbd>Return</kbd></span><span data-i18n="smart.shortcutInputRun">生成节点输入框：运行当前节点</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Enter</kbd></span><span class="shortcut-keys"><kbd>Return</kbd></span><span data-i18n="smart.shortcutInputSave">文本素材编辑框：保存正文和创作说明</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>Shift</kbd><kbd>Enter</kbd></span><span class="shortcut-keys"><kbd>Shift</kbd><kbd>Return</kbd></span><span data-i18n="smart.shortcutInputNewline">多行输入框：换行，不运行或保存</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd></span><span>按住并拖拽框选节点</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>G</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>G</kbd></span><span>合并选中节点为分组</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>G</kbd></span><span class="shortcut-keys"><kbd>Cmd</kbd><kbd>Shift</kbd><kbd>G</kbd></span><span>解散选中的分组</span></div>
@@ -475,8 +478,13 @@
     <script src="/static/js/smart-node-contract.js?v=2026.08.17.1787802614"></script>
     <script src="/static/js/smart-director-core.js?v=2026.08.29.1"></script>
     <script src="/static/js/smart-model-capabilities.js?v=2026.08.17.1787829684"></script>
+    <script src="/static/js/model-config-core.js"></script>
+    <script src="/static/js/model-config-control.js"></script>
+    <script src="/static/js/canvas-input-bindings.js"></script>
+    <script src="/static/js/canvas-model-config-host.js"></script>
 <script src="/static/js/canvas-sync.js"></script>
-<script src="/static/js/smart-canvas.js?v=2026.08.17.1787814085"></script>
+<script src="/static/js/live-reload.js"></script>
+<script src="/static/js/smart-canvas.js"></script>
 <script src="/static/js/canvas-agent.js"></script>
 </body>
 </html>
