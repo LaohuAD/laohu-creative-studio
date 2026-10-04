@@ -43,7 +43,7 @@ class LocalRuntimeTests(unittest.TestCase):
 
     def test_probe_recognizes_own_service_and_rejects_other_http_server(self):
         class Handler(BaseHTTPRequestHandler):
-            repo = 'https://github.com/LaohuAD/laohu-Infinite-Canvas'
+            repo = 'https://github.com/LaohuAD/laohu-creative-studio'
             def log_message(self, *args):
                 pass
             def do_GET(self):
@@ -118,7 +118,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(json.dumps({'repo_url': 'https://github.com/LaohuAD/laohu-Infinite-Canvas', 'version': 'fixture'}).encode())
+        self.wfile.write(json.dumps({'repo_url': 'https://github.com/LaohuAD/laohu-creative-studio', 'version': 'fixture'}).encode())
         if count == 2 and not getattr(self.server, 'stopping', False):
             self.server.stopping = True
             threading.Timer(1.2, self.server.shutdown).start()
@@ -160,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args): pass
     def do_GET(self):
         self.send_response(200); self.end_headers()
-        self.wfile.write(json.dumps({'repo_url':'https://github.com/LaohuAD/laohu-Infinite-Canvas','version':'1.0'}).encode())
+        self.wfile.write(json.dumps({'repo_url':'https://github.com/LaohuAD/laohu-creative-studio','version':'1.0'}).encode())
         if count == 2 and not getattr(self.server, 'stopping', False):
             self.server.stopping = True
             threading.Timer(1.2, self.server.shutdown).start()

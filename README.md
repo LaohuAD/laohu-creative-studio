@@ -1,4 +1,4 @@
-# 老胡创意工作台 · laohu-creative-studio
+# 老胡画梦枋 · laohu-creative-studio
 
 这是我给自己做图、做视频、跑模型用的本地 AI 创作工作台。画布和 Hypit 分别管理作品，共用已有平台配置、任务与素材服务；每个项目在独立浏览器标签中打开。
 
@@ -6,7 +6,7 @@
 
 这意味着你的创作流程不再绑死在某一个原生云平台上。想本地出图，就接本机或局域网 ComfyUI；想调用云端模型，就换对应 API；想用已经封装好的应用，就接 RunningHub。平台可以换，模型可以换，画布、素材和历史结果仍然在你自己的电脑里。一次跑通的流程，下次打开还能继续用。
 
-当前版本：`v2026.09.19`
+当前版本：`v2026.10.04`
 
 [快速开始](#快速开始) · [主要能力](#主要能力) · [支持的平台](#支持的平台) · [本地数据](#本地数据怎么保存) · [项目边界](#使用前知道这些)
 
@@ -90,8 +90,8 @@ Mac 和 Windows 的安装、启动共用同一环境管理入口。启动器会�
 ### 获取项目
 
 ```bash
-git clone https://github.com/LaohuAD/laohu-Infinite-Canvas.git
-cd laohu-Infinite-Canvas
+git clone https://github.com/LaohuAD/laohu-creative-studio.git
+cd laohu-creative-studio
 ```
 
 ### macOS
@@ -173,7 +173,7 @@ python\python.exe tools\data_manager.py restore "backups\备份文件.zip"
 
 ## 更新
 
-页面里的“项目主页”会打开 [GitHub 项目主页](https://github.com/LaohuAD/laohu-Infinite-Canvas)。项目根据根目录的 `VERSION` 检查版本；更新前会创建恢复点，更新程序文件时不应覆盖本地 API Key、画布、素材和生成结果。
+页面里的“项目主页”会打开 [GitHub 项目主页](https://github.com/LaohuAD/laohu-creative-studio)。项目根据根目录的 `VERSION` 检查版本；更新前会创建恢复点，更新程序文件时不应覆盖本地 API Key、画布、素材和生成结果。
 
 ## 使用前知道这些
 
@@ -191,7 +191,7 @@ python\python.exe tools\data_manager.py restore "backups\备份文件.zip"
 | [老胡的审美起源](https://github.com/LaohuAD/laohu-taste-genesis) | 把自己判断作品好坏的方法、修改意见和经验整理成 Agent 能调用的规则与 Skill | 给其他创作项目建立和改进专业能力，让反馈不只停在一次聊天里 |
 | [老胡 AI 视觉](https://github.com/LaohuAD/laohu-ai-visual) | 推敲故事、写剧本、设计角色与场景，再拆分镜、写视频提示词 | 处理影视短片、MV 和其他视觉内容的创作方案；当前主要交付文本，不直接替你生成整部影片 |
 | [老胡音乐 V4](https://github.com/LaohuAD/laohu-music) | 从歌曲想法开始，讨论歌词、曲式、演唱与声音方案，再做歌名、封面和发布准备 | 处理歌曲创作，也给 MV 提供歌词、音乐方向和创作背景 |
-| [老胡无限画布](https://github.com/LaohuAD/laohu-Infinite-Canvas) | 在本地画布中连接素材、模型调用和生成结果，保存参数与工作流 | 承接图片、视频、音乐等生成任务；基于 Infinite-Canvas 继续开发 |
+| [老胡无限画布](https://github.com/LaohuAD/laohu-creative-studio) | 在本地画布中连接素材、模型调用和生成结果，保存参数与工作流 | 承接图片、视频、音乐等生成任务；基于 Infinite-Canvas 继续开发 |
 | [CapMotion](https://github.com/LaohuAD/laohu-CapMotion) | 在 Cap 产品基础上继续开发录屏、口播剪辑、字幕和讲解动画工作流 | 把教学录屏和讲解素材整理成视频；涉及桌面编译和环境配置，先看本项目的开发说明 |
 
 比如做一支歌曲 MV，可以先在音乐项目里打磨歌词和声音方向，再用 AI 视觉整理故事与镜头，最后在无限画布里调用模型、保存素材。做软件教程时，CapMotion 则更相关。它们之间可以传递方案和素材，但还不是安装一次就能全自动跑完的产品。
@@ -267,7 +267,7 @@ python\python.exe tools\data_manager.py restore "backups\备份文件.zip"
 
 2026.09.13 更新包含融合创作节点、外部 Agent 接入、创作进度、共享参数与媒体时间轴，以及安全升级流程。
 
-**2026.09.10 等旧安装请先做一次过渡升级。** 旧更新器不认识新版核心目录，不要反复点击旧版在线更新。先保存画布、等待生成任务完成并关闭服务，将仓库根目录的 [canvas_update.py](https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/main/canvas_update.py) 下载到原安装目录，在该目录运行：
+**2026.09.10 等旧安装请先做一次过渡升级。** 旧更新器不认识新版核心目录，不要反复点击旧版在线更新。先保存画布、等待生成任务完成并关闭服务，将仓库根目录的 [canvas_update.py](https://raw.githubusercontent.com/LaohuAD/laohu-creative-studio/main/canvas_update.py) 下载到原安装目录，在该目录运行：
 
 - macOS：`.venv/bin/python canvas_update.py --source github`；没有 `.venv` 时使用 `python3 canvas_update.py --source github`。
 - Windows：`python\python.exe canvas_update.py --source github`；没有内置 Python 时使用 `.venv\Scripts\python.exe` 或已安装的 `python` 运行同一脚本。

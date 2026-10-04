@@ -12,6 +12,7 @@
     "bytedance/doubao-seed-evolving",
     "deepseek/deepseek-v4-flash",
     "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4.1-flash",
     "glm-5",
     "glm-5-turbo",
     "glm-5.1",
@@ -85,6 +86,7 @@
     "qwen-image-3.0-pro-i2i",
     "qwen-image-3.0-pro-t2i",
     "qwen-image-3.0-t2i",
+    "qwen-image-global-2.1",
     "seedream-v5-pro-i2i",
     "seedream-v5-pro-layer-decomposition",
     "seedream-v5-pro-t2i",
@@ -96,6 +98,7 @@
   "video_models": [
     "FlashVSR_video_upscale",
     "MiniMax-H3",
+    "animate-motion-transfer",
     "flux-3-video-draft-enhance",
     "flux-3-video-global-draft-enhance",
     "flux-3-video-global-i2v",

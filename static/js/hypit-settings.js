@@ -1,12 +1,13 @@
 (function () {
     'use strict';
 
-    const SLOTS = ['text', 'image', 'video', 'audio', 'voice'];
+    const SLOTS = ['text', 'image', 'video', 'audio', 'music', 'voice'];
     const NODE_TYPES = {
         text: 'text_generation',
         image: 'image_generation',
         video: 'video_generation',
         audio: 'audio_generation',
+        music: 'music_generation',
         voice: 'audio_generation'
     };
     const SLOT_LABELS = {
@@ -14,18 +15,21 @@
         image: 'hypit.slotImage',
         video: 'hypit.slotVideo',
         audio: 'hypit.slotAudio',
+        music: 'hypit.slotMusic',
         voice: 'hypit.slotVoice'
     };
     const API = '/api/studio/hypit/models';
-    const projectId = new URLSearchParams(location.search).get('hypit_project');
-    const settingsURL = projectId ? `${API}/projects/${encodeURIComponent(projectId)}/binding` : `${API}/settings`;
+    // 画布模型选择器目前不提供这两个平台的生成节点；Hypit 默认设置必须与画布候选保持同一白名单。
+    const CANVAS_EXCLUDED_PROVIDERS = new Set(['modelscope', 'volcengine']);
+    const settingsURL = `${API}/settings`;
     const root = document.getElementById('providerSettingsView');
     const layout = document.querySelector('.layout');
     const block = document.getElementById('hypitSettingsBlock');
     const nav = document.getElementById('hypitSettingsNav');
+    const canvasModelSettingsBlock = document.getElementById('canvasModelSettingsBlock');
     const slotsEl = document.getElementById('hypitSlots');
-    const summaryEl = document.getElementById('hypitCapabilitySummary');
     const statusEl = document.getElementById('hypitSettingsStatus');
+    const AUTOSAVE_DELAY = 320;
     const state = {
         catalog: { providers: [] },
         capabilities: [],
@@ -33,83 +37,68 @@
         settings: { defaults: {} },
         loaded: false,
         loading: false,
-        saving: false
+        saving: false,
+        saveTimer: null,
+        savePromise: null,
+        draftVersion: 0,
+        savedVersion: 0,
+        dirty: false
     };
 
     const translations = {
         zh: {
             'hypit.navTitle': 'Hypit 设置',
             'hypit.navLabel': 'Hypit',
-            'hypit.navMeta': '绑定工作台共享模型',
+            'hypit.navMeta': '生成模型',
             'hypit.title': 'Hypit 设置',
-            'hypit.description': '为 Hypit 项目选择工作台共享模型。这里不保存 API Key，项目首次接入时会固定一份默认模型快照。',
-            'hypit.back': '返回平台设置',
-            'hypit.noKeys': 'Hypit 使用工作台后端执行；外部平台 Key 只由后端读取，不会写入 Hypit 设置或 Endpoint 配置。',
+            'hypit.description': '选择各类生成任务使用的模型；参数由每次复刻任务按模型要求配置。',
             'hypit.reload': '重新读取',
-            'hypit.save': '保存 Hypit 默认模型',
             'hypit.slotText': '文本生成',
             'hypit.slotImage': '图片生成',
             'hypit.slotVideo': '视频生成',
-            'hypit.slotAudio': '音频生成',
+            'hypit.slotAudio': '音效生成',
+            'hypit.slotMusic': '音乐生成',
             'hypit.slotVoice': '语音生成',
-            'hypit.slotTextHint': 'Hypit Text 输入映射到工作台文本生成。',
-            'hypit.slotImageHint': '只显示当前用户已启用且有确认适配的图片模型。',
-            'hypit.slotVideoHint': '只显示当前用户已启用且有确认适配的视频模型。',
-            'hypit.slotAudioHint': '音频生成用于音效或其他非音乐音频输出。',
-            'hypit.slotVoiceHint': '语音生成独立使用语音槽位，不把音乐模型当作语音。',
             'hypit.family': '模型',
             'hypit.variant': '模式',
             'hypit.provider': '平台',
             'hypit.parameters': '参数',
-            'hypit.noModels': '当前用户启用白名单中没有可运行模型。请先在平台设置中启用模型。',
-            'hypit.noCatalog': '暂时无法读取模型能力目录。',
+            'hypit.noModels': '暂无可用模型，请先配置对应平台。',
             'hypit.unavailable': '未接入',
-            'hypit.modelsCount': '{count} 个可用模型',
-            'hypit.selectedUnavailable': '当前默认模型不在此能力的已确认候选中；不会自动替换。',
+            'hypit.selectedUnavailable': '已选模型暂不可用，请检查平台或重新选择。',
             'hypit.loading': '正在读取 Hypit 模型设置…',
             'hypit.saving': '正在保存…',
-            'hypit.saved': 'Hypit 默认模型已保存。',
-            'hypit.loaded': '已读取 Hypit 模型目录与默认设置。',
+            'hypit.saved': '已保存',
+            'hypit.loaded': '',
             'hypit.loadError': '读取 Hypit 设置失败：{message}',
             'hypit.saveError': '保存 Hypit 设置失败：{message}',
-            'hypit.noImplementation': '当前桥接未实现此能力。'
         },
         en: {
             'hypit.navTitle': 'Hypit settings',
             'hypit.navLabel': 'Hypit',
-            'hypit.navMeta': 'Bind shared Studio models',
+            'hypit.navMeta': 'Generation models',
             'hypit.title': 'Hypit settings',
-            'hypit.description': 'Choose the shared workbench model for Hypit. API keys are not stored here; the first project binding keeps a default-model snapshot.',
-            'hypit.back': 'Back to platform settings',
-            'hypit.noKeys': 'Hypit executes through the workbench backend. External platform keys are read only by the backend and never written to Hypit settings or the Endpoint config.',
+            'hypit.description': 'Choose generation models. Each recreation task supplies parameters supported by its model.',
             'hypit.reload': 'Reload',
-            'hypit.save': 'Save Hypit defaults',
             'hypit.slotText': 'Text generation',
             'hypit.slotImage': 'Image generation',
             'hypit.slotVideo': 'Video generation',
-            'hypit.slotAudio': 'Audio generation',
+            'hypit.slotAudio': 'Sound effects',
+            'hypit.slotMusic': 'Music generation',
             'hypit.slotVoice': 'Speech generation',
-            'hypit.slotTextHint': 'Hypit Text input is mapped to the workbench text generator.',
-            'hypit.slotImageHint': 'Only enabled image models with a confirmed adapter are shown.',
-            'hypit.slotVideoHint': 'Only enabled video models with a confirmed adapter are shown.',
-            'hypit.slotAudioHint': 'Audio generation is for effects and non-music audio output.',
-            'hypit.slotVoiceHint': 'Speech has its own slot; music models are never treated as speech.',
             'hypit.family': 'Model',
             'hypit.variant': 'Variant',
             'hypit.provider': 'Platform',
             'hypit.parameters': 'Parameters',
-            'hypit.noModels': 'No runnable model is enabled for this capability. Enable one in platform settings first.',
-            'hypit.noCatalog': 'The model capability catalog is temporarily unavailable.',
+            'hypit.noModels': 'No models available. Configure a platform first.',
             'hypit.unavailable': 'Not implemented',
-            'hypit.modelsCount': '{count} available model(s)',
-            'hypit.selectedUnavailable': 'The current default is not a confirmed candidate for this capability; it will not be replaced automatically.',
+            'hypit.selectedUnavailable': 'The selected model is unavailable. Check the platform or choose another.',
             'hypit.loading': 'Loading Hypit model settings…',
             'hypit.saving': 'Saving…',
-            'hypit.saved': 'Hypit defaults saved.',
-            'hypit.loaded': 'Hypit catalog and defaults loaded.',
+            'hypit.saved': 'Saved',
+            'hypit.loaded': '',
             'hypit.loadError': 'Could not load Hypit settings: {message}',
             'hypit.saveError': 'Could not save Hypit settings: {message}',
-            'hypit.noImplementation': 'This capability is not implemented by the bridge.'
         }
     };
 
@@ -118,6 +107,7 @@
     }
 
     function t(key, values) {
+        if (translations[currentLang()][key] === '') return '';
         const base = window.StudioI18n ? window.StudioI18n.t(key) : (translations.zh[key] || key);
         return String(base).replace(/\{(\w+)\}/g, (_, name) => values && values[name] !== undefined ? String(values[name]) : `{${name}}`);
     }
@@ -150,7 +140,32 @@
     }
 
     function emptySlot() {
-        return { provider: '', model: '', parameters: {} };
+        return { provider: '', model: '', region: '', parameters: {} };
+    }
+
+    function normalizeRegion(value) {
+        const region = String(value || '').trim().toLowerCase();
+        return region === 'global' || region === 'cn' ? region : '';
+    }
+
+    function regionLabel(region) {
+        return normalizeRegion(region) === 'cn' ? 'CN' : 'AI';
+    }
+
+    function selectionKey(model) {
+        return `${String(model?.provider_id || '')}::${normalizeRegion(model?.region)}`;
+    }
+
+    function selectionKeyForValues(provider, region) {
+        return `${String(provider || '')}::${normalizeRegion(region)}`;
+    }
+
+    function modelLabel(model) {
+        const provider = String(model?.provider_id || '');
+        const name = String(model?.provider_name || provider);
+        return provider === 'runninghub' && normalizeRegion(model?.region)
+            ? `${name} · ${regionLabel(model.region)}`
+            : name;
     }
 
     function ensureDefaults() {
@@ -159,6 +174,7 @@
         SLOTS.forEach(slot => {
             const value = state.settings.defaults[slot];
             if (!value || typeof value !== 'object') state.settings.defaults[slot] = emptySlot();
+            state.settings.defaults[slot].region = normalizeRegion(state.settings.defaults[slot].region);
             if (!state.settings.defaults[slot].parameters || typeof state.settings.defaults[slot].parameters !== 'object') {
                 state.settings.defaults[slot].parameters = {};
             }
@@ -169,21 +185,103 @@
         return state.capabilities.find(item => item.slot === slot) || null;
     }
 
+    function expandModel(model, provider) {
+        const providerId = String(model?.provider_id || provider?.id || '');
+        const providerName = String(model?.provider_name || provider?.name || providerId);
+        if (providerId !== 'runninghub') {
+            return [{ ...model, provider_id: providerId, provider_name: providerName, region: normalizeRegion(model?.region) }];
+        }
+        const modelRegions = Array.isArray(model?.regions)
+            ? model.regions.map(normalizeRegion).filter(Boolean)
+            : [];
+        const providerRegions = Array.isArray(provider?.regions)
+            ? provider.regions.filter(item => item?.enabled === true).map(item => normalizeRegion(item.region)).filter(Boolean)
+            : [];
+        const regions = [...new Set(modelRegions.length ? modelRegions : providerRegions)];
+        if (!regions.length) {
+            return [{ ...model, provider_id: providerId, provider_name: providerName, region: normalizeRegion(model?.region) }];
+        }
+        return regions.map(region => ({
+            ...model,
+            ...(model?.region_profiles?.[region] || {}),
+            provider_id: providerId,
+            provider_name: providerName,
+            region
+        }));
+    }
+
+    // 槽位候选优先取自目录选项投影（§9.4、§10.5）：与画布共用同一份可执行选项，
+    // 不再在这里各写一套 strict/runnable/节点类型规则，避免两处规则慢慢漂移。
+    function slotOptions(slot) {
+        const slotCatalog = state.catalog?.slot_options;
+        const projected = slotCatalog && Array.isArray(slotCatalog[slot]) ? slotCatalog[slot]
+            : (Array.isArray(state.catalog?.options) ? state.catalog.options : []);
+        if (slotCatalog && !projected.length) return [];
+        if (!projected.length) {
+            // 投影缺失会安静地退回旧推导，曾经导致“以为接上了其实没生效”。
+            // 这里留下可观测痕迹，便于在页面控制台与状态里发现。
+            if (!state.projectionWarningShown) {
+                state.projectionWarningShown = true;
+                state.projectionAvailable = false;
+                console.warn('[hypit-settings] 目录缺少 options 投影，槽位候选回退到旧推导');
+            }
+            return null;
+        }
+        state.projectionAvailable = true;
+        const nodeType = NODE_TYPES[slot];
+        const scoped = projected.filter(option => option.node_type === nodeType
+            && option.runnable === true
+            && option.selectable !== false
+            && !CANVAS_EXCLUDED_PROVIDERS.has(String(option.connection_id || '').trim().toLowerCase()));
+        if (!scoped.length) return [];
+        return scoped.map(option => ({
+            ...option,
+            option_id: option.option_id,
+            provider_id: option.connection_id,
+            provider_name: option.platform_label || option.capability_provider_id || option.connection_id,
+            model_id: option.catalog_model_id,
+            model: option.catalog_model_id,
+            node_type: option.node_type,
+            family_id: option.canonical_family_id,
+            family_name: (option.canonical_family_label || {}).zh || option.canonical_family_id,
+            region: normalizeRegion(option.region_id),
+            runnable: option.runnable,
+            readiness: option.readiness,
+            validation_mode: option.validation_mode,
+            parameters: option.parameters || {},
+            inputs: option.inputs || {},
+            capability_tags: option.capability_tags || []
+        }));
+    }
+
     function enabledModels(slot) {
+        const projected = slotOptions(slot);
+        if (projected) return projected;
         const capability = capabilityFor(slot);
-        if (Array.isArray(capability?.models)) return capability.models.filter(model => model && model.model_id && model.runnable === true && model.validation_mode === 'strict');
+        if (Array.isArray(capability?.models)) {
+            return capability.models
+                .filter(model => model && model.model_id && model.runnable === true && model.validation_mode === 'strict'
+                    && !CANVAS_EXCLUDED_PROVIDERS.has(String(model.provider_id || '').trim().toLowerCase()))
+                .flatMap(model => expandModel(model, (state.catalog.providers || []).find(provider => provider.id === model.provider_id)));
+        }
         const nodeType = NODE_TYPES[slot];
         return (state.catalog.providers || []).flatMap(provider => (provider.models || [])
-            .filter(model => model.node_type === nodeType && model.runnable === true && model.validation_mode === 'strict')
-            .map(model => ({
-                ...model,
-                provider_id: provider.id,
-                provider_name: provider.name || provider.id
-            })));
+            .filter(model => model.node_type === nodeType && model.runnable === true && model.validation_mode === 'strict'
+                && !CANVAS_EXCLUDED_PROVIDERS.has(String(provider.id || '').trim().toLowerCase()))
+            .flatMap(model => expandModel({ ...model, provider_id: provider.id, provider_name: provider.name || provider.id }, provider)));
+    }
+
+    function modelForSelection(models, current) {
+        const exact = models.find(model => model.provider_id === current.provider
+            && model.model_id === current.model
+            && normalizeRegion(model.region) === normalizeRegion(current.region));
+        if (exact || current.region) return exact || null;
+        const compatible = models.filter(model => model.provider_id === current.provider && model.model_id === current.model);
+        return compatible.length === 1 ? compatible[0] : null;
     }
 
     function modelKey(model) {
-        return `${String(model?.provider_id || '')}::${String(model?.model_id || '')}`;
+        return `${String(model?.provider_id || '')}::${String(model?.model_id || '')}::${normalizeRegion(model?.region)}`;
     }
 
     function exactProfile(slot, providerId, modelId) {
@@ -196,48 +294,37 @@
     function candidateFamilies(slot) {
         const models = enabledModels(slot);
         const allowed = new Set(models.map(modelKey));
-        const helper = window.SmartModelCapabilities;
-        const providerIds = [...new Set(models.map(model => String(model.provider_id || '')).filter(Boolean))];
-        const families = helper?.familiesAcrossProviders?.(
-            state.catalog,
-            NODE_TYPES[slot],
-            { text: 1 },
-            providerIds,
-            '',
-            {},
-            {}
-        ) || [];
-        const output = families.map(family => ({
-            ...family,
-            variants: (family.compatible_variants || family.variants || []).filter(model => allowed.has(modelKey(model)))
-        })).filter(family => family.variants.length);
-        const covered = new Set(output.flatMap(family => family.variants.map(modelKey)));
-        // 能力目录可能没有 family 资料；此时仍按精确 family_id/model_id 展示，
-        // 但不通过显示名猜测跨平台等价关系。
+        const output = [];
         models.forEach(model => {
-            if (covered.has(modelKey(model))) return;
             const familyId = String(model.family_id || model.model_id);
-            let family = output.find(item => item.family_id === familyId && item.provider_ids?.includes(model.provider_id));
+            let family = output.find(item => item.family_id === familyId);
             if (!family) {
                 family = {
                     family_id: familyId,
                     family_name: model.family_name || model.display_name || familyId,
-                    provider_ids: [model.provider_id],
-                    providers: [{ id: model.provider_id, name: model.provider_name || model.provider_id }],
+                    provider_ids: [],
+                    providers: [],
                     variants: []
                 };
                 output.push(family);
             }
-            family.variants.push(model);
+            if (!family.provider_ids.includes(model.provider_id)) family.provider_ids.push(model.provider_id);
+            const providerKey = selectionKey(model);
+            if (!family.providers.some(item => `${String(item.id || '')}::${normalizeRegion(item.region)}` === providerKey)) {
+                family.providers.push({ id: model.provider_id, name: modelLabel(model), region: model.region });
+            }
+            if (allowed.has(modelKey(model)) && !family.variants.some(item => modelKey(item) === modelKey(model))) {
+                family.variants.push(model);
+            }
         });
-        return output;
+        return output.filter(family => family.variants.length);
     }
 
     function familyLabel(family) {
         const name = currentLang() === 'en'
             ? (family.family_name_en || family.display_name_en || family.family_name || family.display_name)
             : (family.family_name || family.display_name || family.family_name_en || family.display_name_en);
-        return String(name || family.family_id || '—');
+        return String(name || family.family_id || '-');
     }
 
     function variantLabel(model) {
@@ -246,7 +333,7 @@
             : (model.variant_name || model.display_name || model.variant_name_en || model.display_name_en);
         const modelId = String(model.model_id || model.variant_id || '').trim();
         const display = String(name || '').trim();
-        return display && display !== modelId ? `${display} · ${modelId}` : (modelId || display || '—');
+        return display && display !== modelId ? `${display} · ${modelId}` : (modelId || display || '-');
     }
 
     function statusFor(slot, model) {
@@ -301,15 +388,33 @@
         const familyId = familySelect?.value || '';
         const family = candidateFamilies(slot).find(item => String(item.family_id) === familyId);
         const variants = family?.variants || [];
-        const selectedVariant = variants.find(item => String(item.model_id) === String(variantSelect?.value || '')) || variants[0];
-        const providerId = providerSelect?.value || selectedVariant?.provider_id || '';
-        const model = variants.find(item => item.provider_id === providerId && item.model_id === selectedVariant?.model_id) || selectedVariant;
-        if (!model) return;
+        const selectedVariants = variants.filter(item => String(item.model_id) === String(variantSelect?.value || ''));
         const current = state.settings.defaults[slot];
+        const selectedVariant = selectedVariants.find(item => normalizeRegion(item.region) === normalizeRegion(current.region)) || selectedVariants[0] || variants[0];
+        const providerKey = providerSelect?.value || selectionKey(selectedVariant);
+        const model = variants.find(item => selectionKey(item) === providerKey && item.model_id === selectedVariant?.model_id) || selectedVariant;
+        if (!model) return;
         const helper = window.SmartModelCapabilities;
-        const retained = current.provider === model.provider_id && current.model === model.model_id ? current.parameters || {} : {};
+        const retained = current.provider === model.provider_id && current.model === model.model_id && normalizeRegion(current.region) === normalizeRegion(model.region)
+            ? current.parameters || {}
+            : {};
         const parameters = helper?.effectiveParameters?.(model, retained) || retained;
-        state.settings.defaults[slot] = { provider: model.provider_id || '', model: model.model_id || '', parameters };
+        state.settings.defaults[slot] = {
+            provider: model.provider_id || '',
+            model: model.model_id || '',
+            region: normalizeRegion(model.region),
+            parameters
+        };
+    }
+
+    function variantOptions(variants, selected) {
+        const seen = new Set();
+        return variants.filter(model => {
+            const key = String(model.model_id || model.variant_id || '');
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        }).map(model => `<option value="${escapeHtml(String(model.model_id || model.variant_id || ''))}"${String(model.model_id || model.variant_id || '') === String(selected || '') ? ' selected' : ''}>${escapeHtml(variantLabel(model))}</option>`).join('');
     }
 
     function renderSlot(slot) {
@@ -317,46 +422,131 @@
         const models = enabledModels(slot);
         const families = candidateFamilies(slot);
         const current = state.settings.defaults[slot] || emptySlot();
-        const selectedModel = models.find(model => model.provider_id === current.provider && model.model_id === current.model) || null;
+        const selectedModel = modelForSelection(models, current);
         const selectedFamily = families.find(family => family.variants.some(model => modelKey(model) === modelKey(selectedModel)));
         const variants = selectedFamily?.variants || [];
-        const selectedVariant = variants.find(model => model.provider_id === current.provider && model.model_id === current.model) || variants[0];
-        const providers = variants.filter((item, index, list) => list.findIndex(other => other.provider_id === item.provider_id) === index);
-        const selectedProvider = providers.find(item => item.provider_id === current.provider) || selectedVariant;
-        const activeModel = variants.find(item => item.provider_id === selectedProvider?.provider_id && item.model_id === selectedVariant?.model_id) || selectedVariant;
+        const selectedVariant = variants.find(model => modelKey(model) === modelKey(selectedModel)) || variants[0];
+        const providers = variants.filter((item, index, list) => list.findIndex(other => selectionKey(other) === selectionKey(item)) === index);
+        const selectedProvider = providers.find(item => selectionKey(item) === selectionKey(selectedModel)) || selectedVariant;
+        const activeModel = variants.find(item => selectionKey(item) === selectionKey(selectedProvider) && item.model_id === selectedVariant?.model_id) || selectedVariant;
         const status = current.model ? statusFor(slot, selectedModel) : {text:currentLang() === 'en' ? 'Not set' : '未设置',className:''};
         const unavailable = Boolean(current.provider && current.model && !selectedModel);
         const familyOptions = `<option value="">${currentLang() === 'en' ? 'Choose' : '选择'}</option>` + families.map(item => `<option value="${escapeHtml(item.family_id)}"${item === selectedFamily ? ' selected' : ''}>${escapeHtml(familyLabel(item))}</option>`).join('');
-        const variantOptions = optionsHtml(variants, selectedVariant?.model_id, variantLabel, 'model_id');
-        const providerOptions = providers.map(item => `<option value="${escapeHtml(item.provider_id)}"${item.provider_id === (selectedProvider?.provider_id || '') ? ' selected' : ''}>${escapeHtml(item.provider_name || item.provider_id)}</option>`).join('');
+        const variantOptionsHtml = variantOptions(variants, selectedVariant?.model_id);
+        const providerOptions = providers.map(item => {
+            const value = selectionKey(item);
+            return `<option value="${escapeHtml(value)}"${value === selectionKey(selectedProvider) ? ' selected' : ''}>${escapeHtml(modelLabel(item))}</option>`;
+        }).join('');
         const title = t(SLOT_LABELS[slot]);
-        const hint = t(`hypit.slot${slot.charAt(0).toUpperCase()}${slot.slice(1)}Hint`);
-        const modelNote = unavailable ? `<div class="hypit-slot-description">${escapeHtml(t('hypit.selectedUnavailable'))}<br><code>${escapeHtml(current.provider)} / ${escapeHtml(current.model)}</code></div>` : '';
+        const providerName = current.provider === 'ai-money' ? 'laohu' : current.provider;
+        const modelNote = unavailable ? `<div class="hypit-slot-description">${escapeHtml(t('hypit.selectedUnavailable'))}<br><code>${escapeHtml(providerName)} / ${escapeHtml(current.model)}${current.region ? ` · ${escapeHtml(regionLabel(current.region))}` : ''}</code></div>` : '';
         if (!models.length || !families.length) {
-            return `<section class="hypit-slot-card is-disabled" data-hypit-slot-card="${escapeHtml(slot)}"><div class="hypit-slot-head"><div><div class="hypit-slot-title">${escapeHtml(title)}</div><div class="hypit-slot-description">${escapeHtml(hint)}</div></div><span class="hypit-slot-status is-warning">${escapeHtml(t('hypit.unavailable'))}</span></div><div class="hypit-empty">${escapeHtml(t('hypit.noModels'))}${modelNote}</div></section>`;
+            return `<section class="hypit-slot-card is-disabled" data-hypit-slot-card="${escapeHtml(slot)}"><div class="hypit-slot-head"><div><div class="hypit-slot-title">${escapeHtml(title)}</div></div><span class="hypit-slot-status is-warning">${escapeHtml(t('hypit.unavailable'))}</span></div><div class="hypit-empty">${escapeHtml(t('hypit.noModels'))}${modelNote}</div></section>`;
         }
-        return `<section class="hypit-slot-card" data-hypit-slot-card="${escapeHtml(slot)}"><div class="hypit-slot-head"><div><div class="hypit-slot-title">${escapeHtml(title)}</div><div class="hypit-slot-description">${escapeHtml(hint)}</div></div><span class="hypit-slot-status ${status.className}">${escapeHtml(status.text)}</span></div><div class="hypit-model-fields"><label class="hypit-field"><span class="hypit-field-label">${escapeHtml(t('hypit.family'))}</span><select data-hypit-family data-hypit-slot="${escapeHtml(slot)}">${familyOptions}</select></label><label class="hypit-field"><span class="hypit-field-label">${escapeHtml(t('hypit.variant'))}</span><select data-hypit-variant data-hypit-slot="${escapeHtml(slot)}">${variantOptions}</select></label><label class="hypit-field"><span class="hypit-field-label">${escapeHtml(t('hypit.provider'))}</span><select data-hypit-provider data-hypit-slot="${escapeHtml(slot)}">${providerOptions}</select></label></div>${modelNote}${renderParameters(slot, activeModel)}</section>`;
+        const fallbackControls = `<div class="hypit-model-config-fallback" data-model-config-slot="${escapeHtml(slot)}"><label><span>${escapeHtml(currentLang() === 'en' ? 'Model' : '模型')}</span><select data-hypit-slot="${escapeHtml(slot)}" data-hypit-family="${escapeHtml(slot)}">${familyOptions}</select></label><label><span>${escapeHtml(currentLang() === 'en' ? 'Platform' : '平台')}</span><select data-hypit-slot="${escapeHtml(slot)}" data-hypit-provider="${escapeHtml(slot)}">${providerOptions}</select></label><label><span>${escapeHtml(currentLang() === 'en' ? 'Run mode' : '运行模式')}</span><select data-hypit-slot="${escapeHtml(slot)}" data-hypit-variant="${escapeHtml(slot)}">${variantOptionsHtml}</select></label></div>`;
+        // 公共控件自身包含参数面板；旧的槽位级参数渲染只在公共控件尚未加载时保留，
+        // 避免同一组分辨率、画幅、数量在卡片里出现两次。
+        const legacyParameters = '';
+        return `<section class="hypit-slot-card" data-hypit-slot-card="${escapeHtml(slot)}"><div class="hypit-slot-head"><div><div class="hypit-slot-title">${escapeHtml(title)}</div></div><span class="hypit-slot-status ${status.className}">${escapeHtml(status.text)}</span></div><div class="hypit-model-config" data-model-config-slot="${escapeHtml(slot)}">${fallbackControls}</div>${modelNote}${legacyParameters}</section>`;
     }
 
-    function renderSummary() {
-        const supported = state.capabilities || [];
-        const chips = supported.map(item => {
-            const models = Array.isArray(item.models) ? item.models.filter(m=>m.runnable === true && m.validation_mode === 'strict') : [];
-            const label = item.label?.[currentLang()] || item.label?.zh || item.kind || item.slot;
-            return `<div class="hypit-capability-chip${models.length ? '' : ' is-unavailable'}"><div class="hypit-capability-chip-title">${escapeHtml(label)}</div><div class="hypit-capability-chip-meta">${escapeHtml(models.length ? t('hypit.modelsCount', { count: models.length }) : t('hypit.unavailable'))}</div></div>`;
+    // Hypit 槽位使用内联公共控件（§16 P6 第 3 项、§9.4）：
+    // 与画布共用同一套三栏选择与参数面板，不维护第二套模型下拉。
+    let slotControls = [];
+
+    function destroySlotControls() {
+        slotControls.forEach(instance => { try { instance.destroy(); } catch (_) {} });
+        slotControls = [];
+    }
+
+    function optionIdForSlot(slot, model, current) {
+        const models = enabledModels(slot);
+        const exact = models.find(item => item.provider_id === current.provider
+            && item.model_id === current.model
+            && normalizeRegion(item.region) === normalizeRegion(current.region));
+        if (exact?.option_id) return exact.option_id;
+        const sameModel = models.filter(item => item.provider_id === current.provider && item.model_id === current.model);
+        if (sameModel.length === 1 && sameModel[0].option_id) return sameModel[0].option_id;
+        return '';
+    }
+
+    function slotOptionsForControl(slot) {
+        return enabledModels(slot).map(model => ({
+            ...model,
+            option_id: model.option_id || '',
+            node_type: NODE_TYPES[slot],
+            operation: model.operation || '',
+            connection_id: model.provider_id,
+            capability_provider_id: model.provider_id,
+            platform_label: model.provider_name || model.provider_id,
+            region_id: normalizeRegion(model.region),
+            catalog_model_id: model.model_id,
+            canonical_family_id: model.family_id || model.model_id,
+            canonical_family_label: {
+                zh: model.family_name || model.family_id || model.model_id,
+                en: model.canonical_family_label?.en || model.family_name_en || model.family_name || model.model_id
+            },
+            readiness: model.readiness || 'ready',
+            runnable: model.runnable !== false,
+            selectable: true,
+            capability_tags: model.capability_tags || [],
+            parameters: model.parameters || {},
+            inputs: model.inputs || {}
+        })).filter(option => option.option_id);
+    }
+
+    function mountSlotControls() {
+        destroySlotControls();
+        if (!slotsEl || !window.mountModelConfigControl) return;
+        SLOTS.forEach(slot => {
+            const host = slotsEl.querySelector(`[data-model-config-slot="${slot}"]`);
+            if (!host) return;
+            const options = slotOptionsForControl(slot);
+            if (!options.length) return;
+            // 挂载公共控件前清空兼容下拉，避免两套选择器重叠并拦截点击。
+            host.replaceChildren();
+            const current = state.settings.defaults[slot] || emptySlot();
+            const instance = window.mountModelConfigControl(host, {
+                context: { host: 'module-settings', moduleId: 'hypit', slotId: slot, phase: 'template' },
+                catalog: { options, profiles: [] },
+                selection: { optionId: optionIdForSlot(slot, options[0], current), parameters: current.parameters || {} },
+                presentation: 'module',
+                modelOnly: true,
+                onCommit: payload => {
+                    const picked = options.find(option => option.option_id === payload.selection.optionId);
+                    if (!picked) return Promise.reject(new Error('选择不属于当前槽位'));
+                    state.settings.defaults[slot] = {
+                        provider: picked.connection_id || '',
+                        model: picked.catalog_model_id || '',
+                        region: normalizeRegion(picked.region_id),
+                        parameters: {}
+                    };
+                    const card = host.closest('.hypit-slot-card');
+                    const status = card?.querySelector('.hypit-slot-status');
+                    if (status) { status.textContent = currentLang() === 'en' ? 'Ready' : '可运行'; status.className = 'hypit-slot-status is-ready'; }
+                    card?.querySelector('.hypit-slot-description')?.remove();
+                    markDirty();
+                    return Promise.resolve();
+                },
+                onParametersChange: payload => {
+                    const latest = state.settings.defaults[slot] || emptySlot();
+                    state.settings.defaults[slot] = {
+                        ...latest,
+                        parameters: Object.assign({}, payload?.parameters || {})
+                    };
+                    markDirty();
+                }
+            });
+            if (instance) slotControls.push(instance);
         });
-        (state.unsupported || []).forEach(item => {
-            const label = item.label?.[currentLang()] || item.name || '';
-            chips.push(`<div class="hypit-capability-chip is-unavailable"><div class="hypit-capability-chip-title">${escapeHtml(label)}</div><div class="hypit-capability-chip-meta">${escapeHtml(t('hypit.noImplementation'))}</div></div>`);
-        });
-        if (!chips.length) chips.push(`<div class="hypit-empty">${escapeHtml(t('hypit.noCatalog'))}</div>`);
-        if (summaryEl) summaryEl.innerHTML = chips.join('');
     }
 
     function render() {
         ensureDefaults();
-        renderSummary();
-        if (slotsEl) slotsEl.innerHTML = SLOTS.map(renderSlot).join('');
+        if (slotsEl) {
+            slotsEl.innerHTML = SLOTS.map(renderSlot).join('');
+            mountSlotControls();
+        }
         refreshIcons();
     }
 
@@ -367,18 +557,43 @@
         return body;
     }
 
+    function clone(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    function markDirty() {
+        state.draftVersion += 1;
+        state.dirty = true;
+        scheduleAutosave();
+    }
+
+    function scheduleAutosave(delay = AUTOSAVE_DELAY) {
+        if (state.saveTimer) clearTimeout(state.saveTimer);
+        state.saveTimer = setTimeout(() => {
+            state.saveTimer = null;
+            save();
+        }, delay);
+    }
+
     async function load() {
         if (state.loading) return;
         state.loading = true;
         setStatus(t('hypit.loading'));
         try {
-            const [capabilityResponse, settingsResponse] = await Promise.all([
+            const [capabilityResponse, settingsResponse, catalogResponse] = await Promise.all([
                 fetch(`${API}/capabilities`),
-                fetch(settingsURL)
+                fetch(settingsURL),
+                // 统一可执行选项投影（§9.4）：槽位候选与画布共用同一份，不在这里重算规则。
+                fetch('/api/model-capabilities', { cache:'no-store' })
             ]);
             const capabilities = await responseJSON(capabilityResponse);
             state.settings = await responseJSON(settingsResponse);
-            state.catalog = capabilities;
+            const catalogOptions = await responseJSON(catalogResponse);
+            state.catalog = {
+                ...capabilities,
+                options: Array.isArray(catalogOptions?.options) ? catalogOptions.options : [],
+                catalog_revision: catalogOptions?.catalog_revision || ''
+            };
             state.capabilities = Array.isArray(capabilities.supported_capabilities) ? capabilities.supported_capabilities : [];
             state.unsupported = Array.isArray(capabilities.unsupported_capabilities) ? capabilities.unsupported_capabilities : [];
             state.loaded = true;
@@ -393,28 +608,61 @@
     }
 
     async function save() {
-        if (state.saving) return;
+        if (state.savePromise) return state.savePromise;
         ensureDefaults();
+        const snapshot = {
+            defaults: clone(state.settings.defaults),
+            expectedRevision: state.settings.revision || 1,
+            draftVersion: state.draftVersion
+        };
         state.saving = true;
         setStatus(t('hypit.saving'));
-        try {
-            const response = await fetch(settingsURL, {
-                method: 'PUT',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ defaults: state.settings.defaults, ...(projectId ? {expected_revision:state.settings.revision || 1} : {}) })
-            });
-            state.settings = await responseJSON(response);
-            render();
-            setStatus(t('hypit.saved'), 'success');
-        } catch (error) {
-            setStatus(t('hypit.saveError', { message: error?.message || error }), 'error');
-        } finally {
-            state.saving = false;
-        }
+        state.savePromise = (async () => {
+            try {
+                const response = await fetch(settingsURL, {
+                    method: 'PUT',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        defaults: snapshot.defaults,
+                        parameter_mode: 'per_request',
+                        expected_revision: snapshot.expectedRevision
+                    })
+                });
+                const saved = await responseJSON(response);
+                const localDefaults = state.settings.defaults;
+                const changedDuringRequest = state.draftVersion !== snapshot.draftVersion;
+                state.settings = {
+                    ...saved,
+                    defaults: changedDuringRequest ? localDefaults : saved.defaults
+                };
+                ensureDefaults();
+                if (!changedDuringRequest) {
+                    state.dirty = false;
+                    state.savedVersion = snapshot.draftVersion;
+                    setStatus(t('hypit.saved'), 'success');
+                } else {
+                    // 响应只确认了旧快照；最新草稿仍在队列中，不能提前显示已保存。
+                    state.dirty = true;
+                    setStatus(t('hypit.saving'));
+                }
+            } catch (error) {
+                // 失败时保留本地草稿和修订号，避免错误响应抹掉用户输入或伪装成成功。
+                state.dirty = true;
+                setStatus(t('hypit.saveError', { message: error?.message || error }), 'error');
+            } finally {
+                state.saving = false;
+                state.savePromise = null;
+                if (state.dirty && state.draftVersion !== snapshot.draftVersion) scheduleAutosave(0);
+            }
+        })();
+        return state.savePromise;
     }
 
     function open() {
         if (typeof window.closeComfyUiSettings === 'function') window.closeComfyUiSettings();
+        if (typeof window.setApiSettingsSection === 'function') window.setApiSettingsSection('connections');
+        root?.removeAttribute('hidden');
+        canvasModelSettingsBlock?.setAttribute('hidden', 'hidden');
         layout?.classList.add('hypit-settings-mode');
         block?.removeAttribute('hidden');
         nav?.classList.add('active');
@@ -426,14 +674,16 @@
         if (!state.loaded) load();
     }
 
-    function close() {
+    function close(options = {}) {
         layout?.classList.remove('hypit-settings-mode');
         block?.setAttribute('hidden', 'hidden');
         nav?.classList.remove('active');
         nav?.setAttribute('aria-current', 'false');
         document.querySelector('.api-page-delete-btn')?.removeAttribute('hidden');
         document.querySelector('.api-page-save-btn')?.removeAttribute('hidden');
-        if (typeof window.renderEditor === 'function') window.renderEditor();
+        if (options.deferEditor) return;
+        if (typeof window.setApiSettingsSection === 'function') window.setApiSettingsSection('connections');
+        else if (typeof window.renderEditor === 'function') window.renderEditor();
     }
 
     function onSlotChange(event) {
@@ -445,23 +695,24 @@
             if (!card) return;
             if (target.matches('[data-hypit-family]')) {
                 const families = candidateFamilies(slot);
-                if(!target.value){state.settings.defaults[slot]=emptySlot();renderSlotInPlace(slot);return;}
+                if(!target.value){state.settings.defaults[slot]=emptySlot();renderSlotInPlace(slot);markDirty();return;}
                 const family = families.find(item => item.family_id === target.value);
                 const variants = family?.variants || [];
                 const variantSelect = card.querySelector('[data-hypit-variant]');
                 const providerSelect = card.querySelector('[data-hypit-provider]');
-                if (variantSelect) variantSelect.innerHTML = optionsHtml(variants, variants[0]?.model_id, variantLabel, 'model_id');
-                const providers = variants.filter((item, index, list) => list.findIndex(other => other.provider_id === item.provider_id) === index);
-                if (providerSelect) providerSelect.innerHTML = providers.map(item => `<option value="${escapeHtml(item.provider_id)}">${escapeHtml(item.provider_name || item.provider_id)}</option>`).join('');
+                if (variantSelect) variantSelect.innerHTML = variantOptions(variants, variants[0]?.model_id);
+                const providers = variants.filter((item, index, list) => list.findIndex(other => selectionKey(other) === selectionKey(item)) === index);
+                if (providerSelect) providerSelect.innerHTML = providers.map(item => `<option value="${escapeHtml(selectionKey(item))}">${escapeHtml(modelLabel(item))}</option>`).join('');
             } else if (target.matches('[data-hypit-variant]')) {
                 const families = candidateFamilies(slot);
                 const family = families.find(item => item.family_id === card.querySelector('[data-hypit-family]')?.value);
                 const selected = family?.variants.find(item => item.model_id === target.value);
                 const providerSelect = card.querySelector('[data-hypit-provider]');
-                if (providerSelect && selected) providerSelect.value = selected.provider_id;
+                if (providerSelect && selected) providerSelect.value = selectionKey(selected);
             }
             syncSelection(slot, card);
             renderSlotInPlace(slot);
+            markDirty();
             return;
         }
         if (target.matches('[data-hypit-parameter]')) {
@@ -471,10 +722,19 @@
             if (value === '' || value === undefined) delete current.parameters[target.dataset.hypitParameter];
             else current.parameters[target.dataset.hypitParameter] = value;
             state.settings.defaults[slot] = current;
+            markDirty();
         }
     }
 
     function renderSlotInPlace(slot) {
+        const active = document.activeElement;
+        const focusState = active && slotsEl?.contains?.(active) ? {
+            slot: active.dataset?.hypitSlot || '',
+            parameter: active.dataset?.hypitParameter || '',
+            choice: active.dataset?.hypitChoice || '',
+            selectionStart: active.selectionStart,
+            selectionEnd: active.selectionEnd
+        } : null;
         const currentCard = [...(slotsEl?.querySelectorAll('[data-hypit-slot-card]') || [])]
             .find(item => item.dataset.hypitSlotCard === slot);
         if (!currentCard) return render();
@@ -483,11 +743,43 @@
         const next = wrapper.firstElementChild;
         if (next) currentCard.replaceWith(next);
         refreshIcons();
+        if (!focusState) return;
+        const candidates = [...(slotsEl?.querySelectorAll('[data-hypit-slot], [data-hypit-choice]') || [])];
+        const focused = candidates.find(item => item.dataset?.hypitSlot === focusState.slot
+            && item.dataset?.hypitParameter === focusState.parameter
+            && item.dataset?.hypitChoice === focusState.choice);
+        if (focused?.focus) {
+            focused.focus();
+            if (focusState.selectionStart !== undefined && focused.setSelectionRange) {
+                focused.setSelectionRange(focusState.selectionStart, focusState.selectionEnd);
+            }
+        }
+    }
+
+    function handleHypitNavigationCapture(event) {
+        if (!layout?.classList.contains('hypit-settings-mode')) return;
+        const target = event.target?.closest?.('.sidebar button, .sidebar [role="button"], .sidebar .provider-card, .sidebar a');
+        if (!target || target.id === 'hypitSettingsNav' || target.closest?.('#hypitSettingsNav')) return;
+        // 捕获阶段只退出 Hypit，不阻止目标按钮自己的 onclick，保证左侧导航仍能继续执行。
+        close({ deferEditor: true });
     }
 
     registerTranslations();
-    if(projectId) window.addEventListener('load', ()=>{open(); const title=document.querySelector('#hypitSettingsBlock [data-i18n="hypit.title"]');if(title)title.textContent=currentLang()==='en'?'Project models':'项目模型';});
     if (window.StudioI18n) window.StudioI18n.apply(document);
+
+    // 诊断/测试用只读查询：让用例断言“候选数据”而不是渲染出来的 HTML，
+    // 这样槽位 UI 换成公共控件时不会因为标记变化而误报。
+    window.hypitSlotCandidates = slot => enabledModels(slot).map(model => ({
+        option_id: model.option_id || '',
+        provider_id: model.provider_id || '',
+        model_id: model.model_id || '',
+        region: normalizeRegion(model.region),
+        label: modelLabel(model),
+        parameters: model.parameters || {},
+        inputs: model.inputs || {}
+    }));
+    window.hypitSlotSelection = slot => clone(state.settings.defaults[slot] || emptySlot());
+    window.hypitProjectionAvailable = () => state.projectionAvailable === true;
 
     window.openHypitSettings = open;
     window.closeHypitSettings = close;
@@ -500,16 +792,20 @@
         if(target.dataset.value==='')delete current.parameters[target.dataset.hypitChoice];
         else current.parameters[target.dataset.hypitChoice]=JSON.parse(target.dataset.value);
         renderSlotInPlace(target.dataset.hypitSlot);
+        markDirty();
     });
     slotsEl?.addEventListener('change', onSlotChange);
     slotsEl?.addEventListener('input', onSlotChange);
-    document.getElementById('localComfyuiNav')?.addEventListener('click', close);
-    document.getElementById('runningHubComfyuiNav')?.addEventListener('click', close);
+    document.addEventListener('click', handleHypitNavigationCapture, true);
     window.addEventListener('studio-lang-change', () => {
         if (state.loaded || layout?.classList.contains('hypit-settings-mode')) render();
         syncEditorHeader();
     });
     window.addEventListener('load', () => {
+        if (new URLSearchParams(location.search).get('section') === 'hypit') {
+            open();
+            return;
+        }
         if (layout?.classList.contains('hypit-settings-mode')) load();
     });
 })();

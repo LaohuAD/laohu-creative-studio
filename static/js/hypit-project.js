@@ -5,7 +5,23 @@
   const prefix = `/api/studio/hypit/projects/${encodeURIComponent(id || '')}`;
   const el = name => document.getElementById(name);
   const text = (zh,en) => String(window.StudioI18n?.lang?.() || document.documentElement.lang).startsWith('en') ? en : zh;
-  let openedSource = '', failedSource = '', refreshing = false;
+  let openedSource = '', failedSource = '', nativeOrigin = '', refreshing = false;
+  function currentTheme(fallback) {
+    if (fallback === 'dark' || fallback === 'light') return fallback;
+    return document.documentElement.classList.contains('studio-theme-dark') || document.body.classList.contains('studio-theme-dark') ? 'dark' : 'light';
+  }
+  function notifyNativeTheme(event) {
+    const frame = el('nativeStudio');
+    if (!frame?.contentWindow || !nativeOrigin) return;
+    frame.contentWindow.postMessage({type: 'laohu-theme', theme: currentTheme(event?.detail?.theme)}, nativeOrigin);
+  }
+  function themedStudioUrl(value) {
+    const url = new URL(value);
+    if (!['localhost','127.0.0.1'].includes(url.hostname) || url.protocol !== 'http:') throw new Error('Invalid Studio URL');
+    url.searchParams.set('laohu_theme', currentTheme());
+    nativeOrigin = url.origin;
+    return url;
+  }
   async function api(url,body){
     const response=await fetch(url,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
     const data=await response.json();
@@ -24,8 +40,7 @@
     if(!source || source===openedSource || source===failedSource)return;
     try{
       const value=await api(prefix+'/studio',{source});
-      const url=new URL(value.url);
-      if(!['localhost','127.0.0.1'].includes(url.hostname)||url.protocol!=='http:')throw new Error('Invalid Studio URL');
+      const url=themedStudioUrl(value.url);
       el('nativeStudio').src=url.href;el('nativeStudio').hidden=false;el('empty').hidden=true;openedSource=source;
     }catch(error){failedSource=source;throw error;}
   }
@@ -50,7 +65,9 @@
   }
   el('refresh').onclick=()=>{failedSource='';if(openedSource){el('nativeStudio').src=el('nativeStudio').src;}refresh();};
   el('run').onchange=()=>{failedSource='';openSource(el('run').value).catch(error=>{el('status').textContent=error.message;});};
+  el('nativeStudio').addEventListener('load', notifyNativeTheme);
   labels();window.addEventListener('studio-lang-change',labels);
+  window.addEventListener('studio-theme-change', notifyNativeTheme);
   refresh();const timer=setInterval(()=>{if(!document.hidden)refresh();},5000);
   window.addEventListener('pagehide',()=>clearInterval(timer),{once:true});
 })();

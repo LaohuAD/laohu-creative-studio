@@ -1,17 +1,123 @@
 :root {
-    --studio-accent:#315fe8;
-    --studio-accent-soft:rgba(49,95,232,.09);
+    --studio-font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
+    --studio-font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --studio-bg:#f7f3eb;
+    --studio-surface:#fffaf2;
+    --studio-card:#fffdf8;
+    --studio-soft:#f0ebe2;
+    --studio-soft-strong:#e4ddd2;
+    --studio-line:#ded8ce;
+    --studio-line-strong:#c7beb1;
+    --studio-text:#30363b;
+    --studio-muted:#6f7b83;
+    --studio-faint:#98a0a3;
+    --studio-accent:#b48a5a;
+    --studio-accent-strong:#916a43;
+    --studio-accent-soft:rgba(180,138,90,.14);
+    --studio-accent-line:rgba(180,138,90,.38);
+    --studio-info:#7891a4;
+    --studio-info-soft:rgba(120,145,164,.14);
+    --studio-danger:#b85c62;
+    --studio-danger-soft:rgba(184,92,98,.12);
+    --studio-strong-text:#30363b;
+    --studio-shadow-color:rgba(74,60,44,.10);
+    --studio-shadow-soft:0 10px 26px var(--studio-shadow-color);
+    --studio-shadow-strong:0 20px 48px rgba(74,60,44,.14);
+    --studio-scrollbar:rgba(113,128,137,.48);
+    --studio-scrollbar-hover:rgba(113,128,137,.70);
+    --studio-control-height:36px;
+    --studio-control-gap:8px;
     --studio-radius-control:10px;
-    --studio-radius-panel:14px;
-    --studio-shadow-soft:0 10px 26px rgba(15,23,42,.07);
+    --studio-radius-panel:16px;
+    --studio-radius-modal:18px;
+    --page:var(--studio-bg);
+    --bg:var(--studio-bg);
+    --bg-base:var(--studio-bg);
+    --panel:var(--studio-surface);
+    --card:var(--studio-card);
+    --card-solid:var(--studio-card);
+    --soft:var(--studio-soft);
+    --soft-2:var(--studio-soft-strong);
+    --line:var(--studio-line);
+    --line-2:var(--studio-line-strong);
+    --text:var(--studio-text);
+    --text-main:var(--studio-text);
+    --muted:var(--studio-muted);
+    --faint:var(--studio-faint);
+    --accent:var(--studio-accent);
+    --strong:var(--studio-accent);
+    --strong-text:var(--studio-strong-text);
+    --shadow:var(--studio-shadow-color);
 }
 
-.theme-dark,
+html.studio-theme-dark,
+html.theme-dark,
 body.studio-theme-dark,
-html.studio-theme-dark body {
-    --studio-accent:#9db5ff;
-    --studio-accent-soft:rgba(157,181,255,.12);
-    --studio-shadow-soft:0 12px 30px rgba(0,0,0,.25);
+body.theme-dark,
+.theme-dark {
+    --studio-bg:#202528;
+    --studio-surface:#282d2f;
+    --studio-card:#303638;
+    --studio-soft:#252a2d;
+    --studio-soft-strong:#3a4245;
+    --studio-line:#465055;
+    --studio-line-strong:#627078;
+    --studio-text:#f2eee7;
+    --studio-muted:#bec5c4;
+    --studio-faint:#929da1;
+    --studio-accent:#d4b47a;
+    --studio-accent-strong:#ecd29b;
+    --studio-accent-soft:rgba(212,180,122,.16);
+    --studio-accent-line:rgba(212,180,122,.42);
+    --studio-info:#a7bac4;
+    --studio-info-soft:rgba(167,186,196,.14);
+    --studio-danger:#ed9a96;
+    --studio-danger-soft:rgba(237,154,150,.16);
+    --studio-strong-text:#272b2c;
+    --studio-shadow-color:rgba(0,0,0,.28);
+    --studio-shadow-soft:0 12px 30px var(--studio-shadow-color);
+    --studio-shadow-strong:0 24px 56px rgba(0,0,0,.36);
+    --studio-scrollbar:rgba(167,186,196,.46);
+    --studio-scrollbar-hover:rgba(167,186,196,.72);
+    --page:var(--studio-bg);
+    --bg:var(--studio-bg);
+    --bg-base:var(--studio-bg);
+    --panel:var(--studio-surface);
+    --card:var(--studio-card);
+    --card-solid:var(--studio-card);
+    --soft:var(--studio-soft);
+    --soft-2:var(--studio-soft-strong);
+    --line:var(--studio-line);
+    --line-2:var(--studio-line-strong);
+    --text:var(--studio-text);
+    --text-main:var(--studio-text);
+    --muted:var(--studio-muted);
+    --faint:var(--studio-faint);
+    --accent:var(--studio-accent);
+    --strong:var(--studio-accent);
+    --strong-text:var(--studio-strong-text);
+    --shadow:var(--studio-shadow-color);
+}
+
+body {
+    --page:var(--studio-bg);
+    --bg:var(--studio-bg);
+    --bg-base:var(--studio-bg);
+    --panel:var(--studio-surface);
+    --card:var(--studio-card);
+    --card-solid:var(--studio-card);
+    --soft:var(--studio-soft);
+    --soft-2:var(--studio-soft-strong);
+    --line:var(--studio-line);
+    --line-2:var(--studio-line-strong);
+    --text:var(--studio-text);
+    --text-main:var(--studio-text);
+    --muted:var(--studio-muted);
+    --faint:var(--studio-faint);
+    --accent:var(--studio-accent);
+    --strong:var(--studio-accent);
+    --strong-text:var(--studio-strong-text);
+    --shadow:var(--studio-shadow-color);
 }
 
 html,
@@ -25,7 +131,8 @@ button,
 input,
 select,
 textarea {
-    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
+    font-family:var(--studio-font-ui);
+    line-height:1.35;
 }
 
 button,
@@ -52,13 +159,13 @@ textarea:focus-visible,
 }
 
 ::selection {
-    color:#fff;
+    color:var(--studio-strong-text);
     background:var(--studio-accent);
 }
 
 * {
     scrollbar-width:thin !important;
-    scrollbar-color:rgba(100,116,139,.48) transparent !important;
+    scrollbar-color:var(--studio-scrollbar) transparent !important;
 }
 
 *::-webkit-scrollbar {
@@ -75,12 +182,12 @@ textarea:focus-visible,
     min-height:28px;
     border:2px solid transparent !important;
     border-radius:999px !important;
-    background:rgba(100,116,139,.48) !important;
+    background:var(--studio-scrollbar) !important;
     background-clip:padding-box !important;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-    background:rgba(71,85,105,.72) !important;
+    background:var(--studio-scrollbar-hover) !important;
     background-clip:padding-box !important;
 }
 
@@ -138,7 +245,7 @@ textarea:focus-visible,
 .ws-side-title,
 .ws-board-name,
 .smart-title {
-    font-family:"Space Grotesk",-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    font-family:var(--studio-font-ui);
 }
 
 .api-settings-page .content-head,
@@ -188,7 +295,7 @@ textarea:focus-visible,
 }
 
 .content-head {
-    min-height:64px;
+    min-height:var(--studio-control-height);
     padding:16px 18px !important;
 }
 

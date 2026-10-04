@@ -38,6 +38,22 @@ def comfy_fields():
 
 
 class RequestProjectionTests(unittest.TestCase):
+    def test_runninghub_region_is_preserved_for_regular_model_requests(self):
+        canvas = {
+            'id': 'project',
+            'nodes': [{
+                'id': 'run', 'type': 'smart-image-generator', 'promptDraftText': '一只猫',
+                'runSettings': {
+                    'provider_id': 'runninghub', 'model': 'cn-model', 'region': 'cn',
+                },
+            }],
+            'connections': [],
+        }
+
+        request = request_for(canvas, canvas['nodes'][0])
+
+        self.assertEqual(request['region'], 'cn')
+
     def test_runninghub_app_projects_prompt_bound_media_and_parameters(self):
         canvas = {
             'id': 'project',

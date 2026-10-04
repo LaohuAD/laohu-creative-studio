@@ -18,6 +18,10 @@ from canvas_core.json_store import read_json, write_json
 HYPIT_VERSION = '0.2.7'
 HYPIT_COMMIT = 'a45224c32da6e25bd641e403920ab17d48838417'
 HYPIT_INTEGRITY = 'sha512-nUUkzZ9rhnN8BT/G2OXDNu+ktHkn04RE3i/KxXvrHeaqd72AVaGzoPpsYQI7mYOWkCo6zAxeU9711tGzyxJxUw=='
+NATIVE_THEME_START = '/* laohu-native-theme:start */'
+NATIVE_THEME_END = '/* laohu-native-theme:end */'
+NATIVE_THEME_HTML_START = '<!-- laohu-native-theme:start -->'
+NATIVE_THEME_HTML_END = '<!-- laohu-native-theme:end -->'
 
 
 class HypitRuntime:
@@ -178,7 +182,7 @@ class HypitRuntime:
             profile['endpoints']['studio.models'] = {'use': '@laohu/studio-models',
                 'config': {'projectId': project_id, 'baseURL': self.base_url, 'pollIntervalMs': 1000}}
             profile['bindings'].update({f'@laohu/studio-models@1#{name}': 'studio.models'
-                for name in ('text-generation', 'image-generation', 'video-generation', 'speech-generation', 'audio-generation')})
+                for name in ('text-generation', 'image-generation', 'video-generation', 'speech-generation', 'audio-generation', 'music-generation')})
         if self.profile_provider:
             extra = self.profile_provider(project_id)
             profile['endpoints'].update(extra.get('endpoints', {}))
@@ -230,12 +234,73 @@ class HypitRuntime:
             pass
         return {'output': output, 'operation': operation}
 
+    @staticmethod
+    def _without_native_theme(content, start, end):
+        pattern = re.compile(r'\n?' + re.escape(start) + r'.*?' + re.escape(end) + r'\n?', re.S)
+        return pattern.sub('', content)
+
+    def _ensure_native_theme(self):
+        """把工作台主题以可重复的受管补丁注入原生 Studio，不改制作流程。"""
+        theme_path = self.root / 'static' / 'css' / 'hypit-native-theme.css'
+        distribution = self.distribution
+        style_path = distribution / 'packages' / 'studio' / 'src' / 'style.css'
+        index_path = distribution / 'packages' / 'studio' / 'index.html'
+        if not theme_path.is_file() or not style_path.is_file() or not index_path.is_file():
+            raise RuntimeError('Hypit 原生 Studio 主题资源不完整，未启动 Studio')
+        if any(path.is_symlink() for path in (theme_path, style_path, index_path)):
+            raise RuntimeError('Hypit 原生 Studio 主题资源不允许使用符号链接')
+
+        backup_dir = self.root / 'backups' / 'hypit' / 'native-studio' / HYPIT_VERSION
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_style = backup_dir / 'style.css'
+        backup_index = backup_dir / 'index.html'
+        if not backup_style.exists():
+            shutil.copyfile(style_path, backup_style)
+        if not backup_index.exists():
+            shutil.copyfile(index_path, backup_index)
+
+        theme = theme_path.read_text(encoding='utf-8').strip()
+        original_style = style_path.read_text(encoding='utf-8')
+        base_style = self._without_native_theme(original_style, NATIVE_THEME_START, NATIVE_THEME_END).rstrip()
+        patched_style = f'{base_style}\n\n{NATIVE_THEME_START}\n{theme}\n{NATIVE_THEME_END}\n'
+        if original_style != patched_style:
+            style_path.write_text(patched_style, encoding='utf-8')
+
+        theme_script = '''<script>
+(() => {
+  const validTheme = value => value === 'dark' || value === 'light' ? value : '';
+  const setTheme = value => {
+    const theme = validTheme(value);
+    if (!theme) return;
+    document.documentElement.dataset.laohuTheme = theme;
+    document.documentElement.style.colorScheme = theme;
+  };
+  const queryTheme = validTheme(new URLSearchParams(window.location.search).get('laohu_theme'));
+  const systemTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  setTheme(queryTheme || systemTheme);
+  window.addEventListener('message', event => {
+    if (event.source !== window.parent || !event.data || event.data.type !== 'laohu-theme') return;
+    setTheme(event.data.theme);
+  });
+})();
+</script>'''
+        original_index = index_path.read_text(encoding='utf-8')
+        base_index = self._without_native_theme(original_index, NATIVE_THEME_HTML_START, NATIVE_THEME_HTML_END).rstrip()
+        marker = f'{NATIVE_THEME_HTML_START}\n{theme_script}\n{NATIVE_THEME_HTML_END}'
+        if '</head>' not in base_index:
+            raise RuntimeError('Hypit 原生 Studio index.html 缺少 head，未启动 Studio')
+        patched_index = base_index.replace('</head>', f'\n{marker}\n</head>', 1).rstrip() + '\n'
+        if original_index != patched_index:
+            index_path.write_text(patched_index, encoding='utf-8')
+        return {'style': str(style_path), 'index': str(index_path), 'backup': str(backup_dir)}
+
     def studio(self, project_id, source):
         with self.lock:
             project = self.configure(project_id)
             run = self.source(project_id, source)
             if not run.is_file() or run.suffix != '.svrun':
                 raise ValueError('请选择存在的 .svrun 文件')
+            self._ensure_native_theme()
             key = (project_id, str(run))
             existing = self.sessions.get(key)
             if existing and existing['process'].poll() is None:

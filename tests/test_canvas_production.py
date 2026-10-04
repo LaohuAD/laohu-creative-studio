@@ -22,6 +22,25 @@ class ProductionTests(unittest.TestCase):
     def test_story_edges_are_authoritative_and_migrate_once(self):
         self.run_js("""const s={id:'s',type:'smart-material',images:[{kind:'text',text:'原文'}],production:{role:'segment',order:1,imageNodeIds:['a']}},a={id:'a',type:'smart-image-generator'},v={id:'v',type:'smart-video-generator'};const ns=[s,a,v],edges=[];assert.equal(p.migrateRelations(ns,edges),true);assert.equal(p.migrateRelations(ns,edges),false);assert.equal(s.production.imageNodeIds,undefined);assert.deepEqual(edges,[{from:'s',to:'a',kind:'story'}]);assert.equal(p.rows(ns,edges)[0].images[0].id,'a');edges.push({from:'s',to:'a',kind:'input'},{from:'a',to:'v',kind:'input'});edges.splice(0,1);assert.equal(p.rows(ns,edges)[0].images.length,0);p.update(s,{imageNodeIds:['a'],videoNodeIds:['v']},ns,edges);assert.equal(p.rows(ns,edges)[0].videos[0].id,'v');p.update(s,{imageNodeIds:[]},ns,edges);assert.equal(p.rows(ns,edges)[0].images.length,0);assert.ok(edges.some(c=>c.from==='s'&&c.to==='a'&&c.kind==='input'));assert.equal(s.production.imageNodeIds,undefined);""")
 
+    def test_text_segment_registration_assigns_next_order_and_skips_ineligible_nodes(self):
+        self.run_js("""const a={id:'a',type:'smart-material',images:[{kind:'text',text:'A'}]},b={id:'b',type:'smart-material',images:[{kind:'text',text:'B'}],production:{role:'segment',order:4}},script={id:'s',type:'smart-material',images:[{kind:'text',text:'Script'}],production:{role:'script'}},image={id:'i',type:'smart-material',images:[{kind:'image',url:'/i.png'}]};const ns=[a,b,script,image];assert.deepEqual(p.registerSegments(ns,['a','b','s','i'],[]),[a]);assert.equal(a.production.order,5);assert.equal(b.production.order,4);assert.deepEqual(p.registerSegments(ns,['a'],[]),[]);""")
+
+    def test_progress_view_is_a_center_modal_without_panel_actions_or_auto_restore(self):
+        source = (ROOT / "static/js/canvas-production.js").read_text(encoding="utf-8")
+        css = (ROOT / "static/css/smart-canvas.css").read_text(encoding="utf-8")
+        self.assertIn("setAttribute('aria-modal','true')", source)
+        self.assertIn("button.addEventListener('click',()=>{const next=!el.classList.contains('open')", source)
+        self.assertNotIn("data-pin", source)
+        self.assertNotIn("data-register", source)
+        self.assertNotIn("data-close", source)
+        self.assertNotIn("localStorage", source)
+        panel = css.split('/* 创作进度沿用价格对比', 1)[1].split('}', 1)[0]
+        for layout in ('left:16px', 'right:16px', 'bottom:16px', 'height:min(70vh,680px)'):
+            self.assertIn(layout, panel)
+        self.assertIn(".canvas-production-panel.open", css)
+        self.assertIn(".canvas-production-panel.open {opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0);}", css)
+        self.assertNotIn("place-items:center", css[css.index("/* 创作进度沿用价格对比"):])
+
 class ModelClientTests(unittest.TestCase):
     run_js = ProductionTests.run_js
     def test_batch_keeps_successes_and_failed_request_is_not_retried(self):

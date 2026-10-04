@@ -42,6 +42,18 @@
                 </div>
             </section>
 
+            <section id="studioCanvasTools" class="studio-legacy-tools">
+                <div class="studio-legacy-copy">
+                    <div class="studio-section-kicker" data-copy="canvasTools">画布工具</div>
+                    <strong data-copy="canvasToolsTitle">导入工程与回收站</strong>
+                    <span data-copy="canvasToolsHint">导入与导出使用同一套工程 ZIP 结构；打开画布后可在工作流工具中导入工程，删除的画布可从回收站恢复。</span>
+                </div>
+                <div class="studio-legacy-actions">
+                    <button id="studioImportGuide" class="studio-secondary-button" type="button"><i data-lucide="file-input" aria-hidden="true"></i><span>导入工程</span></button>
+                    <button id="studioTrashButton" class="studio-secondary-button" type="button"><i data-lucide="trash-2" aria-hidden="true"></i><span>回收站</span><b id="studioTrashBadge" hidden>0</b></button>
+                </div>
+            </section>
+
             <section id="studioProjectState" class="studio-project-state" aria-live="polite">
                 <div class="studio-state-icon"><i data-lucide="loader-circle" aria-hidden="true"></i></div>
                 <strong>正在读取项目</strong>
@@ -49,17 +61,6 @@
             </section>
             <section id="studioProjectGrid" class="studio-project-grid" aria-live="polite"></section>
 
-            <section id="studioCanvasTools" class="studio-legacy-tools">
-                <div class="studio-legacy-copy">
-                    <div class="studio-section-kicker" data-copy="canvasTools">画布工具</div>
-                    <strong data-copy="canvasToolsTitle">保留原有画布导出与回收站入口</strong>
-                    <span data-copy="canvasToolsHint">ZIP 导入仍在打开画布后的工作流工具中完成，不会在项目列表重复一套画布数据。</span>
-                </div>
-                <div class="studio-legacy-actions">
-                    <button id="studioImportGuide" class="studio-secondary-button" type="button"><i data-lucide="file-input" aria-hidden="true"></i><span>导入 ZIP</span></button>
-                    <button id="studioTrashButton" class="studio-secondary-button" type="button"><i data-lucide="trash-2" aria-hidden="true"></i><span>回收站</span><b id="studioTrashBadge" hidden>0</b></button>
-                </div>
-            </section>
         </main>
 
         <div id="studioOpenFallback" class="studio-open-fallback" hidden>

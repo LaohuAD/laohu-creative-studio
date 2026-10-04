@@ -2111,6 +2111,7 @@ function downloadAssetItem(id){
     setStatus('已开始下载');
 }
 const SMART_CANVAS_ASSET_INBOX_KEY = 'smart_canvas_asset_inbox';
+const SMART_CANVAS_CLIPBOARD_INTENT_KEY = 'smart_canvas_clipboard_intent';
 function canvasInboxAssetFromItem(item){
     const out = {url:item?.url || '', name:item?.name || '素材', kind:item?.kind || ''};
     ['natural_w','natural_h','width','height','w','h','layout_w','layout_h'].forEach(key => {
@@ -2126,8 +2127,10 @@ function copySelectedAssetsToCanvas(){
         .map(canvasInboxAssetFromItem);
     if(!items.length){ setStatus('没有可复制的素材'); return; }
     try {
-        // 写入跨页剪贴板，画布页按 Ctrl+V 读取并批量粘贴
-        localStorage.setItem(SMART_CANVAS_ASSET_INBOX_KEY, JSON.stringify({items, ts: Date.now()}));
+        // 跨页复制也更新最近剪贴板意图，旧节点缓存不能盖过这次素材复制。
+        const ts = Date.now();
+        localStorage.setItem(SMART_CANVAS_ASSET_INBOX_KEY, JSON.stringify({items, ts}));
+        localStorage.setItem(SMART_CANVAS_CLIPBOARD_INTENT_KEY, JSON.stringify({kind:'media', source:'asset-library', count:items.length, kinds:[...new Set(items.map(item => item.kind || 'image'))], ts}));
     } catch(err){
         setStatus('复制失败：' + (err?.message || err));
         return;
@@ -2234,7 +2237,9 @@ function copySelectedLocalUploadsToCanvas(){
     const items = [...selectedLocalUploadIds].map(id => findLocalUpload(id)).filter(it => it?.url).map(canvasInboxAssetFromItem);
     if(!items.length){ setStatus('没有可复制的素材'); return; }
     try {
-        localStorage.setItem(SMART_CANVAS_ASSET_INBOX_KEY, JSON.stringify({items, ts: Date.now()}));
+        const ts = Date.now();
+        localStorage.setItem(SMART_CANVAS_ASSET_INBOX_KEY, JSON.stringify({items, ts}));
+        localStorage.setItem(SMART_CANVAS_CLIPBOARD_INTENT_KEY, JSON.stringify({kind:'media', source:'asset-library', count:items.length, kinds:[...new Set(items.map(item => item.kind || 'image'))], ts}));
     } catch(err){
         setStatus('复制失败：' + (err?.message || err));
         return;

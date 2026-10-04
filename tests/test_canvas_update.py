@@ -141,7 +141,7 @@ class UpgradeTests(unittest.TestCase):
         source=b'''from fastapi import FastAPI
 app=FastAPI()
 @app.get('/api/app-info')
-def info(): return {'version':'2.0','repo_url':'https://github.com/LaohuAD/laohu-Infinite-Canvas'}
+def info(): return {'version':'2.0','repo_url':'https://github.com/LaohuAD/laohu-creative-studio'}
 '''
         job=self.job({'main.py':source})
         updater.probe_program(job/'program',sys.executable,job/'probe.log')

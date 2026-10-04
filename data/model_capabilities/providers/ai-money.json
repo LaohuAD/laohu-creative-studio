@@ -3,7 +3,7 @@
   "provider_id": "ai-money",
   "provider_name": "laohu",
   "status": "maintained",
-  "updated_at": "2026-09-12",
+  "updated_at": "2026-09-23",
   "sources": [
     {
       "url": "https://api.lao-hu.com/v1/models",
@@ -1935,6 +1935,56 @@
       }
     },
     {
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "family_id": "ai-money-deepseek-deepseek-v4-1-flash",
+      "family_name": "deepseek/deepseek-v4.1-flash",
+      "display_name": "deepseek/deepseek-v4.1-flash",
+      "variant_id": "default",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-09-23"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
       "model_id": "deepseek/deepseek-v4-flash-vision-exp",
       "family_id": "ai-money-deepseek-deepseek-v4-flash-vision-exp",
       "family_name": "deepseek/deepseek-v4-flash-vision-exp",
@@ -2679,7 +2729,7 @@
       "status": "confirmed",
       "readiness": "ready",
       "runnable": true,
-      "version": 2,
+      "version": 3,
       "evidence_level": "official_documented",
       "sources": [
         {
@@ -2695,6 +2745,12 @@
           "min": 1,
           "max": 1,
           "max_chars": 5000
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 0,
+          "max": 1
         }
       },
       "parameters": {
@@ -2708,14 +2764,29 @@
           ],
           "default": "v6"
         },
-        "instrumental": {
+        "custom": {
           "level": "optional",
-          "type": "boolean"
+          "type": "boolean",
+          "default": false
         },
-        "tags": {
+        "style": {
           "level": "optional",
           "type": "text",
           "max_length": 1000
+        },
+        "instrumental": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false
+        },
+        "vocal_gender": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "Male",
+            "Female"
+          ],
+          "default": "Male"
         },
         "title": {
           "level": "optional",
@@ -2727,6 +2798,24 @@
           "type": "integer",
           "min": 10,
           "max": 360
+        },
+        "audio_weight": {
+          "level": "advanced",
+          "type": "number",
+          "min": 0,
+          "max": 1
+        },
+        "style_weight": {
+          "level": "advanced",
+          "type": "number",
+          "min": 0,
+          "max": 1
+        },
+        "weirdness_constraint": {
+          "level": "advanced",
+          "type": "number",
+          "min": 0,
+          "max": 1
         },
         "variety": {
           "level": "advanced",
@@ -2750,24 +2839,37 @@
             "mp3",
             "m4a",
             "wav"
-          ]
+          ],
+          "default": "mp3"
         },
-        "custom": {
-          "level": "optional",
-          "type": "boolean"
+        "custom_model_id": {
+          "level": "advanced",
+          "type": "text",
+          "max_length": 128
+        },
+        "persona_id": {
+          "level": "advanced",
+          "type": "text",
+          "max_length": 128
         }
       },
       "request_mapping": {
         "prompt": "prompt",
         "version": "version",
+        "custom": "custom",
+        "style": "style",
         "instrumental": "instrumental",
-        "tags": "style",
+        "vocal_gender": "vocal_gender",
         "title": "title",
         "duration": "duration",
+        "audio_weight": "audio_weight",
+        "style_weight": "style_weight",
+        "weirdness_constraint": "weirdness_constraint",
         "variety": "variety",
         "max_mode": "max_mode",
         "audio_format": "audio_format",
-        "custom": "custom",
+        "custom_model_id": "custom_model_id",
+        "persona_id": "persona_id",
         "reference_audio": "audio_url"
       },
       "output": {
@@ -3485,6 +3587,98 @@
         "endpoint": "/v1/3d/generations"
       },
       "note": "该接口输出 GLB 3D 文件；当前画布素材契约仅支持文本、图片、视频和音频，尚无 3D 结果适配，禁止误发到聊天或图片接口。"
+    },
+    {
+      "model_id": "animate-motion-transfer",
+      "family_id": "ai-money-animate-motion-transfer",
+      "family_name": "Animate",
+      "family_name_en": "Animate",
+      "display_name": "animate-motion-transfer",
+      "variant_id": "motion-transfer",
+      "variant_name": "动作迁移",
+      "variant_name_en": "Motion Transfer",
+      "node_type": "video_generation",
+      "operation": "motion_transfer",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 1,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "reference_image": {
+          "media_type": "image",
+          "min": 1,
+          "max": 1,
+          "role": "reference_image"
+        },
+        "motion_video": {
+          "media_type": "video",
+          "min": 1,
+          "max": 1,
+          "role": "motion_video"
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "9:16",
+            "1:1"
+          ],
+          "default": "adaptive",
+          "source_field": "metadata.ratio"
+        },
+        "frame_rate": {
+          "level": "optional",
+          "type": "integer",
+          "options": [
+            24,
+            30
+          ],
+          "default": 30,
+          "source_field": "metadata.frame_rate"
+        },
+        "pose_method": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "vitpose"
+          ],
+          "default": "vitpose",
+          "source_field": "metadata.pose_method"
+        }
+      },
+      "request_mapping": {
+        "reference_image": "images",
+        "motion_video": "metadata.video_url",
+        "resolution": "metadata.resolution",
+        "ratio": "metadata.ratio",
+        "frame_rate": "metadata.frame_rate",
+        "pose_method": "metadata.pose_method"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
     }
   ]
 }

@@ -1,0 +1,463 @@
+/* 公共模型配置控件样式（P4）。
+ *
+ * 依据《老胡创意工作台_统一模型选择与参数配置_V2_执行规划.md》§5.3、§6.3、§13.3、§19.6。
+ * 命名空间统一为 .model-config-*，不依赖宿主页面的宽泛 .button/.grid 规则（§19.6）。
+ * 尺寸是目标区间，不硬编码字号；按真实字体、缩放与可点击性验证。
+ */
+
+.model-config-portal {
+    position: fixed;
+    inset: 0;
+    z-index: 9400;
+    pointer-events: none;
+}
+
+.model-config-portal > * {
+    pointer-events: auto;
+}
+
+/* ------------------------------------------------------------- 节点常态布局 */
+
+.model-config-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.model-config-trigger,
+.model-config-summary,
+.model-config-gear {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--border, rgba(0, 0, 0, .14));
+    border-radius: 8px;
+    background: var(--studio-card, #fffdf8);
+    color: var(--text, #2c2a26);
+    font-size: 13px;
+    line-height: 1.2;
+    cursor: pointer;
+}
+
+.model-config-trigger {
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: space-between;
+}
+
+.model-config-trigger-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.model-config-trigger.is-invalid {
+    border-color: var(--studio-danger, #b85c62);
+}
+
+.model-config-caret {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg) translate(-1px, -1px);
+    opacity: .6;
+}
+
+.model-config-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.model-config-summary {
+    max-width: 260px;
+}
+
+.model-config-summary-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.model-config-gear[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ 弹层 */
+
+.model-config-popover {
+    position: fixed;
+    width: min(820px, calc(100vw - 24px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border, rgba(0, 0, 0, .14));
+    border-radius: 12px;
+    background: var(--studio-surface, #fffaf2);
+    box-shadow: 0 18px 44px rgba(24, 20, 14, .18);
+    color: var(--text, #2c2a26);
+}
+
+.model-config-popover[hidden] { display: none; }
+
+.model-config-head {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--border, rgba(0, 0, 0, .1));
+}
+
+.model-config-id-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.model-config-id-label {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-muted, #8a8378);
+}
+
+.model-config-id-value {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px;
+}
+
+.model-config-id-kind {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--text-muted, #8a8378);
+}
+
+.model-config-id-row.is-previewing .model-config-id-value {
+    color: var(--studio-accent-strong, #916a43);
+    font-weight: 600;
+}
+
+.model-config-copy {
+    flex: 0 0 auto;
+    min-height: 22px;
+    padding: 0 8px;
+    border: 1px solid var(--border, rgba(0, 0, 0, .14));
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.model-config-copy.is-copied {
+    border-color: var(--studio-success, #5f8a5f);
+    color: var(--studio-success, #5f8a5f);
+}
+
+.model-config-search input {
+    width: 100%;
+    min-height: 28px;
+    padding: 0 9px;
+    border: 1px solid var(--border, rgba(0, 0, 0, .14));
+    border-radius: 7px;
+    background: var(--studio-card, #fffdf8);
+    color: inherit;
+    font-size: 12.5px;
+}
+
+.model-config-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.model-config-tag {
+    min-height: 20px;
+    padding: 0 8px;
+    border: 1px solid var(--border, rgba(0, 0, 0, .14));
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.model-config-tag.is-on {
+    border-color: var(--studio-accent, #b48a5a);
+    background: color-mix(in srgb, var(--studio-accent, #b48a5a) 16%, transparent);
+}
+
+/* 三栏：模型 26% / 平台 25% / 运行模式 49% */
+.model-config-stages {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: minmax(150px, 26fr) minmax(150px, 25fr) minmax(250px, 49fr);
+    gap: 8px;
+    padding: 8px 12px 12px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.model-config-stage {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    border: 1px solid var(--border, rgba(0, 0, 0, .08));
+    border-radius: 9px;
+    background: var(--studio-card, #fffdf8);
+    overflow: hidden;
+}
+
+.model-config-stage-title {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 6px 9px;
+    border-bottom: 1px solid var(--border, rgba(0, 0, 0, .08));
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted, #8a8378);
+}
+
+.model-config-stage-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--studio-accent, #b48a5a) 18%, transparent);
+    font-size: 10px;
+}
+
+.model-config-stage-title strong {
+    font-weight: 600;
+    color: var(--text, #2c2a26);
+}
+
+.model-config-stage-options {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.model-config-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 34px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.model-config-option:hover { background: color-mix(in srgb, var(--studio-accent, #b48a5a) 10%, transparent); }
+
+.model-config-option.is-current {
+    border-color: var(--studio-accent, #b48a5a);
+    background: color-mix(in srgb, var(--studio-accent, #b48a5a) 14%, transparent);
+}
+
+.model-config-option.is-previewing {
+    border-color: var(--studio-accent-strong, #916a43);
+    background: color-mix(in srgb, var(--studio-accent, #b48a5a) 18%, transparent);
+}
+
+.model-config-option.is-blocked { opacity: .55; cursor: not-allowed; }
+
+.model-config-leaf {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    min-height: 48px;
+    padding: 6px 8px;
+}
+
+.model-config-option-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.model-config-leaf .model-config-option-label {
+    white-space: normal;
+    width: 100%;
+    font-size: 13px;
+}
+
+.model-config-option-count {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-muted, #8a8378);
+}
+
+.model-config-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.model-config-badge {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--studio-info, #7891a4) 18%, transparent);
+    font-size: 11px;
+    line-height: 18px;
+}
+
+.model-config-option-note {
+    font-size: 11px;
+    color: var(--studio-danger, #b85c62);
+}
+
+.model-config-option.is-pending .model-config-option-note { color: var(--text-muted, #8a8378); }
+
+.model-config-empty {
+    padding: 18px 12px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--text-muted, #8a8378);
+}
+
+/* -------------------------------------------------------------- 参数面板 */
+
+.model-config-parameters {
+    flex: 0 0 auto;
+    max-height: 280px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 12px 12px;
+    border-top: 1px solid var(--border, rgba(0, 0, 0, .1));
+}
+
+.model-config-parameters[hidden] { display: none; }
+
+.model-config-param-title {
+    margin-bottom: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted, #8a8378);
+}
+
+.model-config-param-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+    gap: 5px;
+}
+
+.model-config-param-option {
+    min-height: 28px;
+    padding: 0 6px;
+    border: 1px solid var(--border, rgba(0, 0, 0, .14));
+    border-radius: 7px;
+    background: var(--studio-card, #fffdf8);
+    color: inherit;
+    font-size: 12.5px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.model-config-param-option.is-on {
+    border-color: var(--studio-accent, #b48a5a);
+    background: color-mix(in srgb, var(--studio-accent, #b48a5a) 18%, transparent);
+    font-weight: 600;
+}
+
+.model-config-param-input {
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 30px;
+    padding: 4px 8px;
+    border: 1px solid var(--border, rgba(0, 0, 0, .14));
+    border-radius: 7px;
+    background: var(--studio-card, #fffdf8);
+    color: inherit;
+    font: inherit;
+}
+
+.model-config-param-range { min-width: 0; width: 100%; }
+.model-config-param-unavailable { grid-column: 1 / -1; font-size: 12px; }
+
+.model-config-copy-area {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    width: 1px;
+    height: 1px;
+}
+
+/* ------------------------------------------------------------------ 窄屏 */
+
+@media (max-width: 720px) {
+    .model-config-popover { width: calc(100vw - 16px); }
+
+    /* 同一弹层内逐层导航，不横向溢出（§5.3） */
+    .model-config-stages {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+    }
+
+    .model-config-stage { max-height: 220px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .model-config-option,
+    .model-config-param-option { transition: none; }
+}
+
+/* ---------------------------------------------------------------- 内联表现 */
+
+.model-config-inline {
+    display: block;
+    width: 100%;
+}
+
+/* 同一套弹层内容就地展开（§16 P4 第 4 项）：不挂 portal、不遮挡、不漂浮 */
+.model-config-popover.is-inline {
+    position: static;
+    width: 100%;
+    max-height: none;
+    box-shadow: none;
+    border-radius: 10px;
+    background: var(--studio-card, #fffdf8);
+}
+
+.model-config-popover.is-inline .model-config-head {
+    background: transparent;
+}
+
+.model-config-popover.is-inline .model-config-parameters {
+    max-height: 220px;
+}
+
+@media (max-width: 720px) {
+    .model-config-popover.is-inline .model-config-stages {
+        grid-template-columns: 1fr;
+    }
+}

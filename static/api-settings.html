@@ -22,7 +22,8 @@
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
     <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.17.1787100747">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
-    <link rel="stylesheet" href="/static/css/hypit-settings.css?v=2026.09.19.1">
+    <link rel="stylesheet" href="/static/css/hypit-settings.css?v=2026.09.23.1">
+    <link rel="stylesheet" href="/static/css/model-config-control.css?v=2026.09.23.1">
 </head>
 <body>
     <div class="page">
@@ -30,47 +31,61 @@
             <header class="page-head">
                 <div>
                     <div class="title" data-i18n="api.title">API 设置</div>
-                    <div class="sub" data-i18n="api.subtitle">管理平台地址、模型列表和 Key。Key 写入后端 env，页面不会回显完整内容。</div>
                 </div>
                 <div id="status" class="status"></div>
             </header>
 
             <div class="layout">
                 <aside class="sidebar">
-                    <div id="hypitSubnav" class="hypit-subnav">
-                        <div class="side-section-title" data-i18n="hypit.navTitle">Hypit 原生模型</div>
-                        <button id="hypitSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openHypitSettings()">
-                            <span class="provider-mark hypit-logo-mark" aria-hidden="true">H</span>
+                    <div class="api-nav-group canvas-models-nav-group">
+                        <div class="side-section-title" data-i18n="api.canvasModelsNavTitle">模块模型</div>
+                        <button id="canvasModelsNav" class="provider-card api-section-nav-item" type="button" onclick="setApiSettingsSection('models')">
+                            <span class="provider-mark"><i data-lucide="layers-3" class="w-3.5 h-3.5"></i></span>
                             <span class="provider-info">
-                                <span class="provider-name" data-i18n="hypit.navLabel">Hypit Endpoint</span>
-                                <span class="provider-meta" data-i18n="hypit.navMeta">绑定工作台共享模型</span>
+                                <span class="provider-name" data-i18n="api.canvasModelsNav">画布</span>
+                                <span class="provider-meta" data-i18n="api.canvasModelsMeta">按模块多选，节点内单选</span>
                             </span>
                         </button>
                     </div>
-                    <div id="comfyuiSubnav" class="comfyui-subnav">
-                        <div class="side-section-title" data-i18n="api.comfyuiSubnavTitle">ComfyUI 设置</div>
+                    <div id="hypitSubnav" class="hypit-subnav">
+                        <button id="hypitSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openHypitSettings()">
+                            <span class="provider-mark hypit-logo-mark" aria-hidden="true">H</span>
+                            <span class="provider-info">
+                                <span class="provider-name" data-i18n="hypit.navLabel">Hypit</span>
+                                <span class="provider-meta" data-i18n="hypit.navMeta">生成模型</span>
+                            </span>
+                        </button>
+                    </div>
+                    <div class="api-nav-group api-connection-nav">
+                        <div class="side-section-title" data-i18n="api.connectionsTitle">平台连接</div>
+                        <div id="providerList" class="provider-list"></div>
+                    </div>
+                    <div id="comfyuiSubnav" class="comfyui-subnav api-nav-group">
+                        <div class="side-section-title" data-i18n="api.aiAppsTitle">AI 应用</div>
+                        <div class="comfyui-subnav-list">
+                            <button id="runningHubComfyuiNav" class="provider-card comfyui-subnav-item" type="button" onclick="openComfyUiSettings('runninghub')">
+                                <span class="provider-mark"><i data-lucide="cloud-cog" class="w-3.5 h-3.5"></i></span>
+                                <span class="provider-info"><span class="provider-name" data-i18n="api.runningHubComfyuiNav">AI 应用</span></span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="api-nav-group local-comfyui-nav-group">
+                        <div class="side-section-title" data-i18n="api.localComfyuiSectionTitle">本地工作流</div>
                         <div class="comfyui-subnav-list">
                             <button id="localComfyuiNav" class="provider-card comfyui-subnav-item" type="button" onclick="openComfyUiSettings('local')">
                                 <span class="provider-mark"><i data-lucide="computer" class="w-3.5 h-3.5"></i></span>
                                 <span class="provider-info"><span class="provider-name" data-i18n="api.localComfyuiNav">本地 ComfyUI</span></span>
                             </button>
-                            <button id="runningHubComfyuiNav" class="provider-card comfyui-subnav-item" type="button" onclick="openComfyUiSettings('runninghub')">
-                                <span class="provider-mark"><i data-lucide="cloud-cog" class="w-3.5 h-3.5"></i></span>
-                                <span class="provider-info"><span class="provider-name" data-i18n="api.runningHubComfyuiNav">RunningHub ComfyUI</span></span>
-                            </button>
                         </div>
                     </div>
-                    <div class="side-section-title" data-i18n="api.providersTitle">平台列表</div>
-                    <div id="providerList" class="provider-list"></div>
-                    <button class="add-btn" type="button" onclick="addProvider()"><i data-lucide="plus" class="w-4 h-4"></i><span data-i18n="api.addProvider">新增平台</span></button>
-                    <button class="api-link-btn" type="button" onclick="openRecommendApi()"><i data-lucide="sparkles" class="w-4 h-4"></i><span data-i18n="api.recommendApi">推荐API</span></button>
-                    <div class="cli-quick-group">
-                        <div class="side-section-title" data-i18n="api.cliSettings">CLI 设置</div>
+                    <div class="cli-quick-group api-nav-group">
+                        <div class="side-section-title" data-i18n="api.cliSettings">CLI</div>
+                        <div id="cliProviderList" class="provider-list cli-provider-list"></div>
                         <div class="cli-quick-list">
-                            <button class="cli-quick-btn" type="button" onclick="addCliProvider('jimeng')"><i data-lucide="image" class="w-3.5 h-3.5"></i><span>即梦 CLI</span></button>
-                            <button class="cli-quick-btn" type="button" onclick="addCliProvider('codex')"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span>GPT CLI</span></button>
-                            <button class="cli-quick-btn" type="button" onclick="addCliProvider('gemini-cli')"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i><span>Antigravity CLI</span></button>
-                            <div class="cli-quick-note">需要先安装 CLI文件夹中的依赖。</div>
+                            <button class="cli-quick-btn" data-cli-kind="jimeng" type="button" onclick="addCliProvider('jimeng')"><i data-lucide="image" class="w-3.5 h-3.5"></i><span data-i18n="api.jimengCli">即梦 CLI</span></button>
+                            <button class="cli-quick-btn" data-cli-kind="codex" type="button" onclick="addCliProvider('codex')"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span data-i18n="api.codexCli">GPT CLI</span></button>
+                            <button class="cli-quick-btn" data-cli-kind="gemini-cli" type="button" onclick="addCliProvider('gemini-cli')"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i><span data-i18n="api.geminiCli">Antigravity CLI</span></button>
+                            <div class="cli-quick-note" data-i18n="api.cliInstallHint">需要先安装 CLI 文件夹中的依赖。</div>
                         </div>
                     </div>
                 </aside>
@@ -79,11 +94,10 @@
                     <div class="content-head">
                         <div>
                             <div id="editorTitle" class="editor-title" data-i18n="api.provider">平台</div>
-                            <div class="editor-sub" data-i18n="api.editorSub">配置基础信息、API Key 和可用模型</div>
+                            <div id="editorSub" class="editor-sub" data-i18n="api.editorSub">配置平台地址、Key 与连接参数</div>
                         </div>
                         <div class="content-actions">
                             <button id="deleteBtn" class="action-btn danger-btn api-page-delete-btn" type="button" onclick="deleteProvider()"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i><span data-i18n="api.delete">删除</span></button>
-                            <button class="action-btn save-btn api-page-save-btn" type="button" onclick="saveProviders()"><i data-lucide="save" class="w-3.5 h-3.5"></i><span data-i18n="api.save">保存</span></button>
                         </div>
                     </div>
 
@@ -95,7 +109,7 @@
                         <div class="custom-provider-guide-copy">
                             <div class="custom-provider-guide-title" data-i18n="api.customProviderGuideTitle">接入到智能画布</div>
                             <div class="custom-provider-guide-desc" data-i18n="api.customProviderGuideDesc">先把第三方官方 API 文档、本项目接入规范和 Manifest Schema 一起交给本地 Agent。先完成本地适配和 dry-run，再在这里填写自己的 Key、拉取目录，最后按文本、图片、视频、音频选择要启用的模型。文件路径：docs/第三方API平台接入规范.md、data/model_capabilities/provider-manifest.schema.json。</div>
-                            <div class="custom-provider-guide-note" data-i18n="api.customProviderModelNote">操作顺序：本地 Agent 适配并通过 dry-run → 用户填写 Key 并拉取模型 → 用户点击“选择模型”保存启用清单。拉取模型不会自动开放能力；删除模型只是停用当前用户的画布候选和真实请求，不删除平台适配、能力档案或历史画布。其他用户需要自行适配并填写自己的 Key。不要把 API Key 交给 Agent。</div>
+                            <div class="custom-provider-guide-note" data-i18n="api.customProviderModelNote">操作顺序：本地 Agent 适配并通过 dry-run → 用户填写 Key 并拉取模型 → 用户在“选择模型”中勾选启用清单。Key、模型清单和参数修改都会自动保存；拉取模型不会自动开放能力。删除模型只是停用当前用户的画布候选和真实请求，不删除平台适配、能力档案或历史画布。其他用户需要自行适配并填写自己的 Key。不要把 API Key 交给 Agent。</div>
                         </div>
                         <div class="custom-provider-guide-actions">
                             <a class="action-btn" href="/api/provider-integration-guide" target="_blank" rel="noopener noreferrer"><i data-lucide="book-open" class="w-3.5 h-3.5"></i><span data-i18n="api.viewIntegrationGuide">查看规范</span></a>
@@ -104,7 +118,7 @@
                         </div>
                     </section>
 
-                    <section class="block">
+                    <section class="block connection-details">
                         <div class="block-head">
                             <div>
                                 <div class="block-title" data-i18n="api.basicInfo">基本信息</div>
@@ -112,40 +126,76 @@
                             </div>
                         </div>
                         <div class="form">
-                            <label class="field full">
+                            <label class="field full platform-name-field">
                                 <span class="label" data-i18n="api.platformName">平台名称</span>
                                 <div class="field-frame"><input id="nameInput" type="text" placeholder="Comfly"></div>
-                                <span class="hint"><span data-i18n="api.platformIdShown">平台 ID</span>: <span id="idPreview" style="font-family:ui-monospace,Menlo,monospace;color:var(--text)">—</span></span>
+                                <span id="idPreview" hidden>—</span>
                                 <input id="idInput" type="hidden">
                             </label>
-                            <label class="field full api-base-url-field">
+                            <div class="field full api-base-url-field">
                                 <span class="label" data-i18n="api.baseUrl">请求地址</span>
                                 <div class="field-frame"><input id="baseInput" type="text" placeholder="https://api.example.com/v1"></div>
-                                <div class="runninghub-region-picker">
-                                    <span class="label" data-i18n="api.rhRegionLabel">RunningHub 当前生效站点</span>
-                                    <div class="runninghub-region-control">
-                                        <select id="rhRegionInput" aria-label="RunningHub 站点">
-                                            <option value="cn" data-i18n="api.rhRegionCn">国内站 .cn</option>
-                                            <option value="global" data-i18n="api.rhRegionGlobal">国际站 .ai</option>
-                                        </select>
-                                        <span class="hint" data-i18n="api.rhRegionHint">可分别配置两站；只有当前选中的站点会映射到画布并参与调用。</span>
+                                <div class="runninghub-region-picker" role="group" aria-labelledby="rhRegionLabel">
+                                    <span id="rhRegionLabel" class="label" data-i18n="api.rhRegionLabel">RunningHub 站点</span>
+                                    <div class="rh-region-card-grid">
+                                        <div class="rh-region-card" data-rh-region="global">
+                                            <div class="rh-region-card-head">
+                                                <div class="rh-region-card-title" data-i18n="api.rhRegionGlobalShort">AI站</div>
+                                                <label class="rh-region-switch">
+                                                    <span class="rh-region-switch-label" data-i18n="api.enabled">启用</span>
+                                                    <input id="rhGlobalEnabledInput" data-rh-region="global" type="checkbox" onchange="toggleRunningHubRegionEnabled('global', this.checked)">
+                                                    <span class="rh-switch-track" aria-hidden="true"></span>
+                                                </label>
+                                            </div>
+                                            <div class="rh-region-key-stack">
+                                                <div class="rh-key-item">
+                                                    <div class="rh-key-head">
+                                                        <div class="rh-key-title" data-i18n="api.rhCoinKey">RH币 Key</div>
+                                                        <div class="rh-key-links"><a href="https://www.runninghub.ai/enterprise-api/consumerApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.get">获取 Key</span></a></div>
+                                                    </div>
+                                                    <div class="key-input-line"><div class="field-frame"><input id="rhGlobalFreeKeyInput" data-rh-region="global" data-rh-key-kind="free" type="password"></div><div class="key-actions"><button class="key-btn key-clear" type="button" onclick="clearRhKeyOnly('free', 'global')" title="清除 RH币 Key" data-i18n-title="api.clearRhCoinKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div></div>
+                                                    <span id="rhGlobalFreeKeyHint" class="hint"></span>
+                                                </div>
+                                                <div class="rh-key-item">
+                                                    <div class="rh-key-head">
+                                                        <div class="rh-key-title" data-i18n="api.rhWalletKey">账户余额 Key</div>
+                                                        <div class="rh-key-links"><a href="https://www.runninghub.ai/enterprise-api/sharedApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.get">获取 Key</span></a></div>
+                                                    </div>
+                                                    <div class="key-input-line"><div class="field-frame"><input id="rhGlobalWalletKeyInput" data-rh-region="global" data-rh-key-kind="wallet" type="password"></div><div class="key-actions"><button class="key-btn key-clear" type="button" onclick="clearRhKeyOnly('wallet', 'global')" title="清除账户余额 Key" data-i18n-title="api.clearRhWalletKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div></div>
+                                                    <span id="rhGlobalWalletKeyHint" class="hint"></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="rh-region-card" data-rh-region="cn">
+                                            <div class="rh-region-card-head">
+                                                <div class="rh-region-card-title" data-i18n="api.rhRegionCnShort">CN站</div>
+                                                <label class="rh-region-switch">
+                                                    <span class="rh-region-switch-label" data-i18n="api.enabled">启用</span>
+                                                    <input id="rhCnEnabledInput" data-rh-region="cn" type="checkbox" onchange="toggleRunningHubRegionEnabled('cn', this.checked)">
+                                                    <span class="rh-switch-track" aria-hidden="true"></span>
+                                                </label>
+                                            </div>
+                                            <div class="rh-region-key-stack">
+                                                <div class="rh-key-item">
+                                                    <div class="rh-key-head">
+                                                        <div class="rh-key-title" data-i18n="api.rhCoinKey">RH币 Key</div>
+                                                        <div class="rh-key-links"><a href="https://www.runninghub.cn/enterprise-api/consumerApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.get">获取 Key</span></a></div>
+                                                    </div>
+                                                    <div class="key-input-line"><div class="field-frame"><input id="rhCnFreeKeyInput" data-rh-region="cn" data-rh-key-kind="free" type="password"></div><div class="key-actions"><button class="key-btn key-clear" type="button" onclick="clearRhKeyOnly('free', 'cn')" title="清除 RH币 Key" data-i18n-title="api.clearRhCoinKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div></div>
+                                                    <span id="rhCnFreeKeyHint" class="hint"></span>
+                                                </div>
+                                                <div class="rh-key-item">
+                                                    <div class="rh-key-head">
+                                                        <div class="rh-key-title" data-i18n="api.rhWalletKey">账户余额 Key</div>
+                                                        <div class="rh-key-links"><a href="https://www.runninghub.cn/enterprise-api/sharedApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.get">获取 Key</span></a></div>
+                                                    </div>
+                                                    <div class="key-input-line"><div class="field-frame"><input id="rhCnWalletKeyInput" data-rh-region="cn" data-rh-key-kind="wallet" type="password"></div><div class="key-actions"><button class="key-btn key-clear" type="button" onclick="clearRhKeyOnly('wallet', 'cn')" title="清除账户余额 Key" data-i18n-title="api.clearRhWalletKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div></div>
+                                                    <span id="rhCnWalletKeyHint" class="hint"></span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                                <div class="ms-hint">
-                                    <span class="ms-line"><span data-i18n="api.msChinaEndpoint">国内默认请求地址：</span><span class="inline-code">https://api-inference.modelscope.cn/v1</span></span>
-                                    <span class="ms-line"><span data-i18n="api.msGlobalEndpoint">国外使用请求地址：</span><span class="inline-code">https://api-inference.modelscope.ai/v1</span></span>
-                                </div>
-                                <div class="runninghub-hint">
-                                    <span class="ms-line"><span data-i18n="api.rhChinaEndpoint">国内地址：</span><span class="inline-code">https://www.runninghub.cn</span></span>
-                                    <span class="ms-line"><span data-i18n="api.rhGlobalEndpoint">国际地址：</span><span class="inline-code">https://www.runninghub.ai</span></span>
-                                    <span class="ms-line" data-i18n="api.rhRegionalCatalogHint">模型参数以官方注册表为准；“当前站点目录未列出”只表示公开目录中没有找到，不等于该模型必然不可用。</span>
-                                </div>
-                                <div class="apimart-hint">
-                                    <span class="ms-line">国内请求地址：<span class="inline-code">https://apib.ai</span></span>
-                                </div>
-                                <div class="volcengine-hint">
-                                    <span class="ms-line"><span data-i18n="api.volcengineBaseUrlHint">方舟 Base URL（需要 API Key 鉴权，不能用浏览器直接验证）：</span><span class="inline-code">https://ark.cn-beijing.volces.com/api/v3</span></span>
-                                    <span class="ms-line"><span data-i18n="api.volcengineModelsUrlHint">拉取模型时实际请求：</span><span class="inline-code">https://ark.cn-beijing.volces.com/api/v3/models</span></span>
+                                    <span class="hint" data-i18n="api.rhRegionHint">两个站点可以分别启用和配置。</span>
                                 </div>
                                 <div class="ai-money-hint">
                                     <span class="ms-line" data-i18n="api.aiMoneyUsage">laohu 使用 Bearer API Key，图片和视频任务会自动上传素材并轮询结果。</span>
@@ -154,63 +204,18 @@
                                         <a href="https://api.lao-hu.com/" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.aiMoneyDocs">打开 laohu</span></a>
                                     </span>
                                 </div>
-                            </label>
+                            </div>
                             <label class="field full api-key-field">
                                 <span class="label api-key-label">API Key</span>
                                 <div class="key-panel api-standard-key-row">
                                     <div class="key-input-line">
                                         <div class="field-frame"><input id="keyInput" type="password"></div>
                                         <div class="key-actions">
-                                            <button class="key-btn" type="button" onclick="saveKeyOnly()" title="保存 Key" data-i18n-title="api.saveKeyTitle"><i data-lucide="check" class="w-4 h-4"></i></button>
                                             <button class="key-btn key-clear" type="button" onclick="clearKeyOnly()" title="清除 Key" data-i18n-title="api.clearKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
                                         </div>
                                     </div>
                                 </div>
                                 <span id="keyHint" class="hint"></span>
-                                <div class="rh-key-stack">
-                                    <div class="rh-key-item">
-                                        <div class="rh-key-head">
-                                            <div>
-                                                <div class="rh-key-title" data-i18n="api.rhCoinApiKeyRequired">RH币 API Key · 必填</div>
-                                                <div class="rh-key-desc" data-i18n="api.rhCoinKeyDesc">使用 RH币 接口时填写</div>
-                                            </div>
-                                            <div class="rh-key-links">
-                                                <span data-i18n="api.get">获取</span>
-                                                <a href="https://www.runninghub.cn/enterprise-api/consumerApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.cnKey">国内 Key</span></a>
-                                                <a href="https://www.runninghub.ai/enterprise-api/consumerApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.globalKey">国外 Key</span></a>
-                                            </div>
-                                        </div>
-                                        <div class="key-input-line">
-                                            <div class="field-frame"><input id="rhFreeKeyInput" type="password"></div>
-                                            <div class="key-actions">
-                                                <button class="key-btn" type="button" onclick="saveRhKeyOnly('free')" title="保存 RH币 Key" data-i18n-title="api.saveRhCoinKeyTitle"><i data-lucide="check" class="w-4 h-4"></i></button>
-                                                <button class="key-btn key-clear" type="button" onclick="clearRhKeyOnly('free')" title="清除 RH币 Key" data-i18n-title="api.clearRhCoinKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
-                                            </div>
-                                        </div>
-                                        <span id="rhFreeKeyHint" class="hint"></span>
-                                    </div>
-                                    <div class="rh-key-item">
-                                        <div class="rh-key-head">
-                                            <div>
-                                                <div class="rh-key-title" data-i18n="api.rhWalletApiKeyOptional">账户余额 API Key · 可选</div>
-                                                <div class="rh-key-desc" data-i18n="api.rhWalletKeyDesc">使用账户余额接口时填写</div>
-                                            </div>
-                                            <div class="rh-key-links">
-                                                <span data-i18n="api.get">获取</span>
-                                                <a href="https://www.runninghub.cn/enterprise-api/sharedApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.cnKey">国内 Key</span></a>
-                                                <a href="https://www.runninghub.ai/enterprise-api/sharedApi?inviteCode=rh-v1001" target="_blank" rel="noopener"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.globalKey">国外 Key</span></a>
-                                            </div>
-                                        </div>
-                                        <div class="key-input-line">
-                                            <div class="field-frame"><input id="rhWalletKeyInput" type="password"></div>
-                                            <div class="key-actions">
-                                                <button class="key-btn" type="button" onclick="saveRhKeyOnly('wallet')" title="保存账户余额 Key" data-i18n-title="api.saveRhWalletKeyTitle"><i data-lucide="check" class="w-4 h-4"></i></button>
-                                                <button class="key-btn key-clear" type="button" onclick="clearRhKeyOnly('wallet')" title="清除账户余额 Key" data-i18n-title="api.clearRhWalletKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
-                                            </div>
-                                        </div>
-                                        <span id="rhWalletKeyHint" class="hint"></span>
-                                    </div>
-                                </div>
                                 <div class="volcengine-key-stack" hidden>
                                     <div class="rh-key-item">
                                         <div class="rh-key-head">
@@ -240,7 +245,6 @@
                                         <div class="key-input-line">
                                             <div class="field-frame"><input id="volcSkInput" type="password" placeholder="Secret Access Key"></div>
                                             <div class="key-actions">
-                                                <button class="key-btn" type="button" onclick="saveVolcengineAssetKeys()" title="保存火山素材库 AK/SK"><i data-lucide="check" class="w-4 h-4"></i></button>
                                                 <button class="key-btn key-clear" type="button" onclick="clearVolcengineAssetKeys()" title="清除火山素材库 AK/SK"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
                                             </div>
                                         </div>
@@ -278,8 +282,6 @@
                                         <a href="https://www.modelscope.cn/binding" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.msBindingCn">绑定账号 · 国内</span></a>
                                         <a href="https://www.modelscope.ai/binding" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.msBindingGlobal">绑定账号 · 国外</span></a>
                                     </div>
-                                </div>
-                                <div class="runninghub-hint">
                                 </div>
                             </label>
                             <div id="jimengCliPanel" class="jimeng-cli-panel" hidden>
@@ -366,29 +368,17 @@
                         <div class="hypit-settings-intro">
                             <div>
                                 <div class="block-title" data-i18n="hypit.title">Hypit 原生模型</div>
-                                <div class="block-desc" data-i18n="hypit.description">为 Hypit 项目选择工作台共享模型。这里不保存 API Key，项目首次接入时会固定一份默认模型快照。</div>
+                                <div class="block-desc" data-i18n="hypit.description">选择各类生成任务使用的模型；参数由每次复刻任务按模型要求配置。</div>
                             </div>
-                            <button class="action-btn" type="button" onclick="closeHypitSettings()"><i data-lucide="arrow-left" class="w-3.5 h-3.5"></i><span data-i18n="hypit.back">返回平台设置</span></button>
                         </div>
                         <div id="hypitSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
-                        <div class="hypit-settings-note" data-i18n="hypit.noKeys">Hypit 使用工作台后端执行；外部平台 Key 只由后端读取，不会写入 Hypit 设置或 Endpoint 配置。</div>
-                        <div id="hypitCapabilitySummary" class="hypit-capability-summary"></div>
                         <div id="hypitSlots" class="hypit-slot-grid"></div>
                         <div class="hypit-settings-actions">
                             <button class="action-btn" type="button" onclick="reloadHypitSettings()"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i><span data-i18n="hypit.reload">重新读取</span></button>
-                            <button class="action-btn save-btn" type="button" onclick="saveHypitSettings()"><i data-lucide="save" class="w-3.5 h-3.5"></i><span data-i18n="hypit.save">保存 Hypit 默认模型</span></button>
                         </div>
                     </section>
 
                     <section id="comfyuiSettingsBlock" class="comfyui-settings-block" hidden>
-                        <div class="comfyui-settings-intro">
-                            <div>
-                                <div class="block-title" data-i18n="api.comfyuiSettingsTitle">ComfyUI 设置</div>
-                                <div class="block-desc" data-i18n="api.comfyuiSettingsDesc">在这里统一管理 RunningHub AI 应用和本地 ComfyUI 工作流。RunningHub 的 API Key 仍在对应平台中保存。</div>
-                            </div>
-                            <button class="action-btn" type="button" onclick="closeComfyUiSettings()"><i data-lucide="arrow-left" class="w-3.5 h-3.5"></i><span data-i18n="api.comfyuiSettingsBack">返回平台设置</span></button>
-                        </div>
-                        <div class="comfyui-deprecated-note" data-i18n="api.runningHubLegacyWorkflowDeprecated">已废弃：RunningHub 旧工作流入口只用于历史画布兼容；新导演台和新节点仅使用已同步的 AI 应用。</div>
                         <section id="comfyuiLocalSection" class="comfyui-local-embed">
                             <div class="block-head">
                                 <div>
@@ -401,30 +391,74 @@
                         <section id="runninghubConfigBlock" class="block runninghub-config-block" hidden>
                             <div class="block-head">
                                 <div>
-                                    <div class="block-title" data-i18n="api.runningHubAppsTitle">RunningHub AI 应用</div>
-                                    <div class="block-desc" data-i18n="api.runningHubAppsDesc">只需输入 AI 应用 ID；标题、封面和参数会从当前 RunningHub 站点官方自动同步。</div>
+                                    <div class="block-title" data-i18n="api.runningHubAppsTitle">AI 应用</div>
+                                    <div class="block-desc" data-i18n="api.runningHubAppsDesc">按站点添加或同步 AI 应用。</div>
                                 </div>
                             </div>
-                            <div class="rh-paste-row">
-                                <input id="rhPasteInput" class="rh-paste-input" type="text" placeholder="AI 应用 ID" data-i18n-placeholder="api.runningHubAppIdPlaceholder">
-                                <button class="action-btn" type="button" onclick="createRhEntryFromPaste()"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="api.runningHubAppAdd">添加并同步</span></button>
-                            </div>
-                            <div class="rh-card-columns">
-                                <div class="rh-card-group">
+                            <div class="rh-app-region-grid">
+                                <section class="rh-app-region-card" data-rh-app-region="global">
+                                    <div class="rh-app-region-head">
+                                        <div class="rh-group-title" data-i18n="api.rhRegionGlobalShort">AI站</div>
+                                        <div class="rh-app-region-status" data-rh-app-status="global"></div>
+                                    </div>
+                                    <div class="rh-paste-row">
+                                        <input id="rhGlobalPasteInput" class="rh-paste-input" data-rh-region="global" type="text" placeholder="AI 应用 ID" data-i18n-placeholder="api.runningHubAppIdPlaceholder">
+                                        <button class="action-btn" data-rh-app-add="global" type="button" onclick="createRhEntryFromPaste('global')"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="api.runningHubAppAdd">添加并同步</span></button>
+                                    </div>
                                     <div class="rh-group-head">
                                         <div class="rh-group-title" data-i18n="api.runningHubAppsTitleShort">AI 应用</div>
-                                        <div id="rhAppsCount" class="rh-group-count">0</div>
+                                        <div id="rhGlobalAppsCount" class="rh-group-count">0</div>
                                     </div>
-                                    <div id="rhAppsList" class="rh-card-list"></div>
-                                </div>
+                                    <div id="rhGlobalAppsList" class="rh-card-list"></div>
+                                </section>
+                                <section class="rh-app-region-card" data-rh-app-region="cn">
+                                    <div class="rh-app-region-head">
+                                        <div class="rh-group-title" data-i18n="api.rhRegionCnShort">CN站</div>
+                                        <div class="rh-app-region-status" data-rh-app-status="cn"></div>
+                                    </div>
+                                    <div class="rh-paste-row">
+                                        <input id="rhCnPasteInput" class="rh-paste-input" data-rh-region="cn" type="text" placeholder="AI 应用 ID" data-i18n-placeholder="api.runningHubAppIdPlaceholder">
+                                        <button class="action-btn" data-rh-app-add="cn" type="button" onclick="createRhEntryFromPaste('cn')"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="api.runningHubAppAdd">添加并同步</span></button>
+                                    </div>
+                                    <div class="rh-group-head">
+                                        <div class="rh-group-title" data-i18n="api.runningHubAppsTitleShort">AI 应用</div>
+                                        <div id="rhCnAppsCount" class="rh-group-count">0</div>
+                                    </div>
+                                    <div id="rhCnAppsList" class="rh-card-list"></div>
+                                </section>
                             </div>
                         </section>
                     </section>
 
+                    </div>
+
+                    <section id="canvasModelSettingsBlock" class="canvas-model-settings-block" hidden>
+                    <div class="canvas-models-context">
+                        <div>
+                            <div class="block-title" data-i18n="api.canvasModelsTitle">画布模块模型</div>
+                            <div class="block-desc" data-i18n="api.canvasModelsDesc">这里的启用清单决定画布候选；具体节点仍在节点设置中单选。AI 应用与本地 ComfyUI 不进入普通生成分类。</div>
+                        </div>
+                        <div id="runningHubModelRegionTabs" class="runninghub-model-region-tabs" role="tablist" aria-label="RunningHub 模型站点" hidden>
+                            <button type="button" data-region="global" onclick="selectRunningHubModelRegion('global')" data-i18n="api.rhRegionGlobalShort">AI站</button>
+                            <button type="button" data-region="cn" onclick="selectRunningHubModelRegion('cn')" data-i18n="api.rhRegionCnShort">CN站</button>
+                        </div>
+                        <label class="canvas-model-provider-field">
+                            <span class="label" data-i18n="api.canvasModelsProvider">配置平台</span>
+                            <select id="canvasModelProviderSelect" onchange="selectCanvasModelProvider(this.value)"></select>
+                        </label>
+                    </div>
+                    <div id="canvasModelCategoryTabs" class="canvas-model-category-tabs" role="tablist" aria-label="画布模型类别">
+                        <button class="canvas-model-category-tab active" type="button" data-cat="all" onclick="selectCanvasModelCategory('all')" data-i18n="api.modelCategoryAll">全部</button>
+                        <button class="canvas-model-category-tab" type="button" data-cat="text" onclick="selectCanvasModelCategory('text')" data-i18n="api.modelCategoryText">文本</button>
+                        <button class="canvas-model-category-tab" type="button" data-cat="image" onclick="selectCanvasModelCategory('image')" data-i18n="api.modelCategoryImage">图片</button>
+                        <button class="canvas-model-category-tab" type="button" data-cat="video" onclick="selectCanvasModelCategory('video')" data-i18n="api.modelCategoryVideo">视频</button>
+                        <button class="canvas-model-category-tab" type="button" data-cat="audio" onclick="selectCanvasModelCategory('audio')" data-i18n="api.modelCategoryAudio">音频</button>
+                        <button class="canvas-model-category-tab" type="button" data-cat="music" onclick="selectCanvasModelCategory('music')" data-i18n="api.modelCategoryMusic">音乐</button>
+                    </div>
                     <div id="modelsHead" class="block models-toolbar">
                         <div>
                             <div class="block-title" data-i18n="api.modelsTitle">模型列表</div>
-                            <div class="block-desc" data-i18n="api.modelsDesc">先从上游拉取模型目录，再按文本、图片、视频、音频分类选择要启用的模型。只有已启用且已适配的模型会进入画布。</div>
+                            <div class="block-desc" data-i18n="api.modelsDesc">先拉取目录，再用“选择模型”多选启用清单。只保存平台原有的模型白名单。</div>
                         </div>
                         <div class="models-toolbar-actions">
                             <button id="fetchModelsBtn" class="action-btn primary-btn" type="button" onclick="fetchModels()">
@@ -436,7 +470,7 @@
                         </div>
                     </div>
                     <div class="model-grid">
-                        <section class="block">
+                        <section class="block canvas-model-category" data-model-category="image">
                             <div class="block-head">
                                 <div>
                                     <div class="block-title" data-i18n="api.imageModels">生图模型</div>
@@ -450,7 +484,7 @@
                             <div id="imageModelList" class="model-list"></div>
                         </section>
 
-                        <section class="block">
+                        <section class="block canvas-model-category" data-model-category="text">
                             <div class="block-head">
                                 <div>
                                     <div class="block-title" data-i18n="api.chatModels">聊天模型</div>
@@ -461,7 +495,7 @@
                         <div id="chatModelList" class="model-list"></div>
                     </section>
 
-                        <section class="block">
+                        <section class="block canvas-model-category" data-model-category="video">
                             <div class="block-head">
                                 <div>
                                     <div class="block-title" data-i18n="api.videoModels">视频模型</div>
@@ -472,7 +506,7 @@
                             <div id="videoModelList" class="model-list"></div>
                         </section>
 
-                        <section class="block">
+                        <section class="block canvas-model-category" data-model-category="audio">
                             <div class="block-head">
                                 <div>
                                     <div class="block-title" data-i18n="api.audioModels">音频模型</div>
@@ -481,6 +515,16 @@
                                 <button class="ghost-btn" type="button" onclick="addModel('audio')"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="api.model">模型</span></button>
                             </div>
                             <div id="audioModelList" class="model-list"></div>
+                        </section>
+
+                        <section class="block canvas-model-category" data-model-category="music">
+                            <div class="block-head">
+                                <div>
+                                    <div class="block-title" data-i18n="api.musicModels">音乐模型</div>
+                                    <div class="block-desc" data-i18n="api.musicHint">歌曲、纯音乐、伴奏和配乐节点使用；与音频模型分开筛选。</div>
+                                </div>
+                            </div>
+                            <div id="musicModelList" class="model-list"></div>
                         </section>
 
                         <section id="msLoraBlock" class="block ms-lora-block">
@@ -498,33 +542,9 @@
                             <div id="msLoraList" class="lora-list"></div>
                         </section>
                 </div>
-                    </div>
+                    </section>
             </main>
-                <main id="recommendContent" class="content recommend-content" hidden>
-                    <div class="content-head">
-                        <div>
-                            <div class="editor-title" data-i18n="api.recommendPanelTitle">推荐平台</div>
-                            <div class="editor-sub" data-i18n="api.recommendPanelSub">获取 Key 后保存，右侧会切换到刚保存的平台配置。</div>
-                        </div>
-                    </div>
-                    <section id="recommendPanel" class="provider-onboarding-card recommend-inline-card"></section>
-                </main>
         </div>
-        </div>
-    </div>
-
-    <!-- 模型选择浮层 -->
-    <div id="recommendApiOverlay" class="picker-overlay">
-        <div class="picker-modal">
-            <div class="picker-head">
-                <div>
-                    <div class="picker-title" data-i18n="api.recommendApi">推荐API</div>
-                    <div class="picker-count" data-i18n="api.recommendApiDesc">选择平台后可以一键填写请求地址和协议。</div>
-                </div>
-                <div class="picker-close" onclick="closeRecommendApi()"><i data-lucide="x" class="w-4 h-4"></i></div>
-            </div>
-            <div id="recommendApiList" class="recommend-api-body"></div>
-            <div class="recommend-note" data-i18n="api.recommendApiNote">提示：账户内需要至少 0.05 元余额，才能验证地址并拉取模型。</div>
         </div>
     </div>
 
@@ -532,19 +552,20 @@
         <div class="picker-modal">
             <div class="picker-head">
                 <div>
-                    <div class="picker-title">从上游拉取的模型清单</div>
+                    <div class="picker-title" data-i18n="api.modelPickerTitle">从上游拉取的模型清单</div>
                     <div id="pickerCount" class="picker-count">—</div>
                 </div>
                 <div class="picker-close" onclick="closeModelPicker()"><i data-lucide="x" class="w-4 h-4"></i></div>
             </div>
             <div class="picker-toolbar">
-                <input id="pickerFilter" class="picker-search" type="text" placeholder="按名称搜索模型…" oninput="renderModelPicker()">
+                <input id="pickerFilter" class="picker-search" type="text" placeholder="按名称搜索模型…" data-i18n-placeholder="api.modelPickerSearch" oninput="renderModelPicker()">
                 <div class="picker-cat-tabs">
-                    <button class="picker-cat-tab active" data-cat="all" onclick="selectPickerCat('all')">全部 <span class="cat-count">0</span></button>
-                    <button class="picker-cat-tab" data-cat="image" onclick="selectPickerCat('image')">生图 <span class="cat-count">0</span></button>
-                    <button class="picker-cat-tab" data-cat="chat" onclick="selectPickerCat('chat')">LLM <span class="cat-count">0</span></button>
-                    <button class="picker-cat-tab" data-cat="video" onclick="selectPickerCat('video')">视频 <span class="cat-count">0</span></button>
-                    <button class="picker-cat-tab" data-cat="audio" onclick="selectPickerCat('audio')">音频 <span class="cat-count">0</span></button>
+                    <button class="picker-cat-tab active" data-cat="all" onclick="selectPickerCat('all')" data-i18n="api.modelCategoryAll">全部 <span class="cat-count">0</span></button>
+                    <button class="picker-cat-tab" data-cat="text" onclick="selectPickerCat('text')" data-i18n="api.modelCategoryText">文本 <span class="cat-count">0</span></button>
+                    <button class="picker-cat-tab" data-cat="image" onclick="selectPickerCat('image')" data-i18n="api.modelCategoryImage">图片 <span class="cat-count">0</span></button>
+                    <button class="picker-cat-tab" data-cat="video" onclick="selectPickerCat('video')" data-i18n="api.modelCategoryVideo">视频 <span class="cat-count">0</span></button>
+                    <button class="picker-cat-tab" data-cat="audio" onclick="selectPickerCat('audio')" data-i18n="api.modelCategoryAudio">音频 <span class="cat-count">0</span></button>
+                    <button class="picker-cat-tab" data-cat="music" onclick="selectPickerCat('music')" data-i18n="api.modelCategoryMusic">音乐 <span class="cat-count">0</span></button>
                 </div>
             </div>
             <div class="picker-bulk-bar">
@@ -557,16 +578,17 @@
             </div>
             <div id="pickerList" class="picker-body"></div>
             <div id="pickerSummary" class="picker-summary">
-                <span class="picker-summary-title">将应用：</span>
-                <span id="sumImage" class="picker-sum-chip picker-sum-chip-empty">生图 0</span>
-                <span id="sumChat" class="picker-sum-chip picker-sum-chip-empty">聊天 0</span>
+                <span class="picker-summary-title" data-i18n="api.modelPickerApplySummary">将应用：</span>
+                <span id="sumText" class="picker-sum-chip picker-sum-chip-empty">文本 0</span>
+                <span id="sumImage" class="picker-sum-chip picker-sum-chip-empty">图片 0</span>
                 <span id="sumVideo" class="picker-sum-chip picker-sum-chip-empty">视频 0</span>
                 <span id="sumAudio" class="picker-sum-chip picker-sum-chip-empty">音频 0</span>
+                <span id="sumMusic" class="picker-sum-chip picker-sum-chip-empty">音乐 0</span>
                 <span id="sumUnsel" style="margin-left:auto;color:var(--faint)">未选 0</span>
             </div>
             <div class="picker-foot">
-                <button class="action-btn" type="button" onclick="closeModelPicker()">取消</button>
-                <button class="action-btn save-btn" type="button" onclick="applyModelPicker()">应用到模型列表</button>
+                <span class="onboarding-autosave-note" data-i18n="api.autosaveHint">修改会自动保存</span>
+                <button class="action-btn" type="button" onclick="closeModelPicker()" data-i18n="api.close">关闭</button>
             </div>
         </div>
     </div>
@@ -660,7 +682,6 @@
                 </div>
                 <div class="rh-workflow-editor-actions">
                     <button class="action-btn" type="button" onclick="fetchRhWorkflowEditor(true)"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i><span>重新拉取</span></button>
-                    <button id="rhWorkflowSaveBtn" class="action-btn save-btn" type="button" onclick="saveRhWorkflowEditor()"><i data-lucide="save" class="w-3.5 h-3.5"></i><span>保存</span></button>
                     <button class="rh-workflow-editor-close" type="button" onclick="closeRhWorkflowEditor()"><i data-lucide="x" class="w-4 h-4"></i></button>
                 </div>
             </div>
@@ -703,6 +724,9 @@
     <script src="/static/js/i18n/api-settings.js?v=2026.08.17.1787068270"></script>
     <script src="/static/js/api-settings.js?v=2026.08.17.1787833237"></script>
     <script src="/static/js/smart-model-capabilities.js?v=2026.09.19.1"></script>
+    <script src="/static/js/model-config-core.js"></script>
+    <script src="/static/js/model-config-control.js"></script>
+    <script src="/static/js/live-reload.js"></script>
     <script src="/static/js/hypit-settings.js?v=2026.09.19.1"></script>
 </body>
 </html>

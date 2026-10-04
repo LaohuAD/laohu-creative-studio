@@ -1,0 +1,89 @@
+{
+  "test_only": true,
+  "note": "画布节点迁移样本（规划 §15.2、§16 P5）。纯假数据，禁止进入生产目录。",
+  "cases": [
+    {
+      "id": "legacy-exact-match",
+      "describe": "旧节点按 provider/model/region 精确定位到唯一选项",
+      "node": {
+        "id": "n1",
+        "type": "smart-image-generator",
+        "provider_id": "fixture-conn",
+        "model": "fixture-video-m",
+        "rhRegion": "global"
+      },
+      "expect": {
+        "resolved": true,
+        "option_id": "opt_0000000000000001",
+        "ambiguous": false
+      }
+    },
+    {
+      "id": "already-migrated",
+      "describe": "已有 modelSelection 的节点直接读取新记录，不被旧字段覆盖",
+      "node": {
+        "id": "n2",
+        "type": "smart-image-generator",
+        "provider_id": "stale",
+        "model": "stale-model",
+        "modelSelection": {
+          "schema_version": 2,
+          "option_id": "opt_0000000000000002",
+          "connection_id": "fixture-conn",
+          "region_id": "global",
+          "operation": "text_to_video",
+          "parameters": {
+            "duration": 5
+          },
+          "revision": 3
+        }
+      },
+      "expect": {
+        "resolved": true,
+        "option_id": "opt_0000000000000002",
+        "ambiguous": false
+      }
+    },
+    {
+      "id": "region-ambiguous",
+      "describe": "同 ID 在两个站点出现且旧节点没有站点信息：不得猜测",
+      "node": {
+        "id": "n3",
+        "type": "smart-image-generator",
+        "provider_id": "fixture-conn",
+        "model": "fixture-video-m",
+        "rhRegion": ""
+      },
+      "expect": {
+        "resolved": false,
+        "option_id": "",
+        "ambiguous": true,
+        "reason": "MIGRATION_AMBIGUOUS"
+      }
+    },
+    {
+      "id": "removed-model",
+      "describe": "旧模型已下线：保留原选择并标记需要修复，不自动换模型",
+      "node": {
+        "id": "n4",
+        "type": "smart-image-generator",
+        "provider_id": "fixture-conn",
+        "model": "retired-model",
+        "modelSelection": {
+          "schema_version": 2,
+          "option_id": "opt_ffffffffffffffff",
+          "connection_id": "fixture-conn",
+          "region_id": "",
+          "operation": "text_to_video",
+          "parameters": {},
+          "revision": 1
+        }
+      },
+      "expect": {
+        "resolved": false,
+        "kept_option_id": "opt_ffffffffffffffff",
+        "reason": "OPTION_NOT_FOUND"
+      }
+    }
+  ]
+}

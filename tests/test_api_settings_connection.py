@@ -188,11 +188,11 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
     def test_new_runninghub_app_is_saved_into_its_selected_region_before_sync(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
 
-        create_start = script.index("async function createRhEntryFromPaste()")
+        create_start = script.index("async function createRhEntryFromPaste(region='')")
         sync_start = script.index("async function syncRhAppFromOfficial", create_start)
         create_source = script[create_start:sync_start]
-        self.assertIn("persistActiveRunningHubRegion(item);", create_source)
-        self.assertIn("regions[rollbackRegion].rh_apps", create_source)
+        self.assertIn("runningHubRegionState(item, targetRegion).rh_apps = targetEntries;", create_source)
+        self.assertIn("regions[targetRegion].rh_apps", create_source)
         self.assertIn("const rollbackSaved = await saveProviders();", create_source)
         sync_source = script[sync_start:script.index("function updateRhEntry", sync_start)]
         self.assertIn("服务器未返回已保存的 AI 应用 ID", sync_source)
@@ -652,14 +652,14 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("async function applyModelPicker(){", script)
         apply_block = script.split("async function applyModelPicker(){", 1)[1].split("async function saveKeyOnly(){", 1)[0]
-        self.assertIn("const saved = await saveProviders();", apply_block)
+        self.assertIn("const saved = await scheduleProviderAutosave(", apply_block)
         self.assertNotIn("点保存生效", apply_block)
 
     def test_model_picker_waits_for_persistence_before_closing(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         apply_block = script.split("async function applyModelPicker(){", 1)[1].split("async function saveKeyOnly(){", 1)[0]
 
-        self.assertLess(apply_block.index("const saved = await saveProviders();"), apply_block.index("closeModelPicker();"))
+        self.assertLess(apply_block.index("const saved = await scheduleProviderAutosave("), apply_block.index("closeModelPicker();"))
         self.assertIn("if(saved){", apply_block)
         self.assertIn("Object.assign(item, previousModels);", apply_block)
 
@@ -687,17 +687,17 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         save_block = script.split("async function saveRhWorkflowEditor(){", 1)[1].split("function renderRhWorkflowEditor(){", 1)[0]
 
-        self.assertGreaterEqual(save_block.count("if(!await saveProviders())"), 2)
+        self.assertIn("return scheduleRhWorkflowEditorAutosave(true);", save_block)
 
     def test_destructive_provider_actions_rollback_after_failed_save(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         delete_block = script.split("async function deleteProvider(){", 1)[1].split("async function saveRhKeyOnly", 1)[0]
         clear_key_block = script.split("async function clearKeyOnly(){", 1)[1].split("const FIXED_PROTOCOL_PROVIDER_IDS", 1)[0]
-        clear_rh_block = script.split("async function clearRhKeyOnly(kind){", 1)[1].split("async function saveVolcengineAssetKeys", 1)[0]
+        clear_rh_block = script.split("async function clearRhKeyOnly(kind, region=''){", 1)[1].split("async function saveVolcengineAssetKeys", 1)[0]
         clear_volc_block = script.split("async function clearVolcengineAssetKeys(){", 1)[1].split("function addModel", 1)[0]
-        remove_rh_block = script.split("async function removeRhEntry(kind, index){", 1)[1].split("function readFileAsDataUrl", 1)[0]
+        remove_rh_block = script.split("async function removeRhEntry(kind, index, region=''){", 1)[1].split("function readFileAsDataUrl", 1)[0]
         add_recommended_block = script.split("async function addRecommendedApi(index){", 1)[1].split("async function saveRecommendedApi", 1)[0]
-        save_recommended_block = script.split("async function saveRecommendedApi(index){", 1)[1].split("function sortedProviders", 1)[0]
+        save_recommended_block = script.split("async function saveRecommendedApi(index, suppliedKey=''){", 1)[1].split("function sortedProviders", 1)[0]
         add_cli_block = script.split("async function addCliProvider(kind){", 1)[1].split("async function deleteProvider", 1)[0]
 
         self.assertIn("providers = previousProviders;", delete_block)
@@ -706,11 +706,11 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("item._clearRhWalletKeys = previousWalletClears;", clear_rh_block)
         self.assertIn("item._clearVolcengineAccessKey = previousAccessClear;", clear_volc_block)
         self.assertIn("item._clearVolcengineSecretKey = previousSecretClear;", clear_volc_block)
-        self.assertIn("item[listKey] = previousEntries;", remove_rh_block)
+        self.assertIn("regionState[listKey] = previousEntries;", remove_rh_block)
         self.assertIn("if(!response.ok)", remove_rh_block)
-        workflow_deleted_block = remove_rh_block.split("if(workflowBodyDeleted){", 1)[1].split("item[listKey] = previousEntries;", 1)[0]
+        workflow_deleted_block = remove_rh_block.split("if(workflowBodyDeleted){", 1)[1].split("regionState[listKey] = previousEntries;", 1)[0]
         self.assertNotIn("previousEntries", workflow_deleted_block)
-        self.assertIn("请再次点击保存同步列表", workflow_deleted_block)
+        self.assertIn("请刷新后重试", workflow_deleted_block)
         self.assertIn("providers = previousProviders;", add_recommended_block)
         self.assertIn("providers = previousProviders;", save_recommended_block)
         self.assertIn("providers = previousProviders;", add_cli_block)
@@ -1188,8 +1188,185 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(canvas_provider["rh_region"], "cn")
         self.assertEqual(canvas_provider["image_models"], ["cn-model"])
         self.assertEqual(canvas_provider["rh_apps"][0]["id"], "cn-app")
-        self.assertNotIn("rh_regions", canvas_provider)
+        self.assertTrue(canvas_provider["rh_regions"]["cn"]["enabled"])
+        self.assertFalse(canvas_provider["rh_regions"]["global"]["enabled"])
+        self.assertEqual(canvas_provider["rh_regions"]["global"]["image_models"], [])
         self.assertNotIn("global-model", canvas_provider["image_models"])
+
+    def test_runninghub_explicit_region_keeps_sites_and_credentials_independent(self):
+        provider = main.normalize_provider({
+            "id": "runninghub",
+            "rh_region": "global",
+            "rh_regions": {
+                "cn": {"enabled": True, "image_models": ["cn-model"], "rh_apps": [{"id": "cn-app"}]},
+                "global": {"enabled": True, "image_models": ["global-model"], "rh_apps": [{"id": "global-app"}]},
+            },
+        })
+
+        with patch.object(main, "runninghub_region_key_value", side_effect=lambda region="global", use_wallet=False: f"{region}-key"):
+            cn_provider = main.runninghub_provider_for_region(provider, "cn", require_enabled=True)
+            global_provider = main.runninghub_provider_for_region(provider, "global", require_enabled=True)
+            cn_headers = main.runninghub_app_headers(provider=cn_provider)
+            global_headers = main.runninghub_app_headers(provider=global_provider)
+
+        self.assertEqual(provider["rh_region"], "global")
+        self.assertEqual(cn_provider["base_url"], "https://www.runninghub.cn")
+        self.assertEqual(global_provider["base_url"], "https://www.runninghub.ai")
+        self.assertEqual(cn_provider["image_models"], ["cn-model"])
+        self.assertEqual(global_provider["image_models"], ["global-model"])
+        self.assertEqual(cn_headers["Authorization"], "Bearer cn-key")
+        self.assertEqual(global_headers["Authorization"], "Bearer global-key")
+
+    def test_runninghub_capability_catalog_keeps_region_candidates_without_copying_models(self):
+        provider = main.normalize_provider({
+            "id": "runninghub",
+            "rh_region": "global",
+            "rh_regions": {
+                "cn": {"enabled": True, "image_models": ["cn-only"]},
+                "global": {"enabled": True, "image_models": ["global-only"]},
+            },
+        })
+
+        catalog = main.MODEL_CAPABILITY_REGISTRY.build_catalog([provider])
+        capability_provider = catalog["providers"][0]
+        models = {
+            item["model_id"]: set(item.get("regions") or [])
+            for item in capability_provider["models"]
+            if item["node_type"] == "image_generation"
+        }
+
+        self.assertEqual(models["cn-only"], {"cn"})
+        self.assertEqual(models["global-only"], {"global"})
+        self.assertEqual(
+            {item["region"] for item in capability_provider["regions"] if item["enabled"]},
+            {"cn", "global"},
+        )
+
+        cn_catalog = main.MODEL_CAPABILITY_REGISTRY.build_catalog([
+            main.runninghub_provider_for_region(provider, "cn", require_enabled=True),
+        ])
+        cn_models = {
+            item["model_id"] for item in cn_catalog["providers"][0]["models"]
+            if item["node_type"] == "image_generation"
+        }
+        self.assertEqual(cn_models, {"cn-only"})
+
+    async def test_runninghub_submit_workflow_and_query_use_selected_site_without_network(self):
+        provider = main.normalize_provider({
+            "id": "runninghub",
+            "rh_region": "global",
+            "rh_regions": {
+                "cn": {"enabled": True, "rh_apps": [{"id": "cn-app", "fields": []}]},
+                "global": {"enabled": True, "rh_apps": [{"id": "global-app", "fields": []}]},
+            },
+        })
+        requests = []
+
+        class Response:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def json(self):
+                return self.payload
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def post(self, url, headers=None, json=None, **_kwargs):
+                requests.append({"url": url, "headers": headers or {}, "json": json or {}})
+                if url.endswith("/task/openapi/outputs"):
+                    return Response({"code": 804, "data": {}})
+                return Response({"code": 0, "data": {"taskId": "rh-test-task"}})
+
+        with patch.object(main, "get_api_provider_exact", return_value=provider), \
+             patch.object(main, "runninghub_region_key_value", side_effect=lambda region="global", use_wallet=False: f"{region}-key"), \
+             patch.object(main.httpx, "AsyncClient", return_value=Client()):
+            await main.runninghub_submit(main.RunningHubSubmitRequest(webappId="cn-app", region="cn"))
+            await main.runninghub_workflow_submit(main.RunningHubWorkflowSubmitRequest(workflowId="global-wf", region="global"))
+            provider["rh_regions"]["cn"]["enabled"] = False
+            with self.assertRaises(main.HTTPException):
+                await main.runninghub_submit(main.RunningHubSubmitRequest(webappId="cn-app", region="cn"))
+            result = await main.runninghub_query(taskId="rh-test-task", region="cn")
+
+        self.assertEqual(result["data"]["status"], "RUNNING")
+        self.assertEqual(requests[0]["url"], "https://www.runninghub.cn/task/openapi/ai-app/run")
+        self.assertEqual(requests[0]["headers"]["Authorization"], "Bearer cn-key")
+        self.assertEqual(requests[1]["url"], "https://www.runninghub.ai/task/openapi/create")
+        self.assertEqual(requests[1]["headers"]["Authorization"], "Bearer global-key")
+        self.assertEqual(requests[2]["url"], "https://www.runninghub.cn/task/openapi/outputs")
+        self.assertEqual(requests[2]["json"]["apiKey"], "cn-key")
+
+    def test_runninghub_llm_resolution_uses_explicit_region_key_and_base_url(self):
+        provider = main.normalize_provider({
+            "id": "runninghub",
+            "rh_region": "global",
+            "rh_regions": {
+                "cn": {"enabled": True, "chat_models": ["cn-chat"]},
+                "global": {"enabled": True, "chat_models": ["global-chat"]},
+            },
+        })
+
+        with patch.object(main, "load_api_providers", return_value=[provider]), \
+             patch.object(main, "runninghub_region_key_value", side_effect=lambda region="global", use_wallet=False: f"{region}-key"):
+            base_url, headers, model = main.resolve_chat_provider("runninghub", "cn-chat", "", "cn")
+
+        self.assertEqual(base_url, "https://llm.runninghub.cn/v1")
+        self.assertEqual(headers["Authorization"], "Bearer cn-key")
+        self.assertEqual(model, "cn-chat")
+        self.assertEqual(provider["rh_region"], "global")
+
+    async def test_image_task_query_recovers_saved_region_when_client_omits_it(self):
+        provider = main.normalize_provider({
+            "id": "runninghub",
+            "rh_region": "cn",
+            "rh_regions": {"cn": {"enabled": True}, "global": {"enabled": True}},
+        })
+        requests = []
+
+        class Response:
+            status_code = 200
+            text = ""
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"code": 804, "data": {}}
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def post(self, url, headers=None, json=None, **_kwargs):
+                requests.append({"url": url, "headers": headers or {}, "json": json or {}})
+                return Response()
+
+        captured = []
+
+        def select_provider(provider_id, region="", require_enabled=True):
+            self.assertFalse(require_enabled)
+            captured.append(region)
+            return provider
+
+        with patch.object(main.PROJECT_STORAGE, "get_canvas_task", return_value={"region": "cn"}), \
+             patch.object(main, "get_api_provider", side_effect=select_provider), \
+             patch.object(main, "runninghub_region_key_value", return_value="cn-key"), \
+             patch.object(main.httpx, "AsyncClient", return_value=Client()):
+            result = await main.query_image_task(main.ImageTaskQueryRequest(provider_id="runninghub", task_id="old-task"))
+
+        self.assertEqual(result["status"], "running")
+        self.assertEqual(captured, ["cn"])
+        self.assertEqual(requests[0]["url"], "https://www.runninghub.cn/task/openapi/outputs")
 
     def test_runninghub_region_key_environment_names_are_independent(self):
         self.assertEqual(main.runninghub_api_key_env("cn"), "RUNNINGHUB_CN_API_KEY")
@@ -1248,26 +1425,20 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("return readApiResponse(r, tr('api.urlInvalid') || '验证失败');", script)
         self.assertNotIn("if(!r.ok) throw new Error((await r.json()).detail", script)
 
-    def test_runninghub_onboarding_exposes_cn_and_global_links(self):
-        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+    def test_runninghub_columns_link_to_their_own_key_pages(self):
         html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
+        for region, host in (("global", "www.runninghub.ai"), ("cn", "www.runninghub.cn")):
+            column = html.split(f'data-rh-region="{region}"', 1)[1].split('</fieldset>', 1)[0]
+            self.assertIn(host + '/enterprise-api/consumerApi', column)
+            self.assertIn(host + '/enterprise-api/sharedApi', column)
+        self.assertNotIn('id="rhRegionInput"', html)
 
-        for host in ("www.runninghub.cn", "www.runninghub.ai"):
-            self.assertIn(host, script)
-            self.assertIn(host, html)
-        self.assertIn('id="rhRegionInput"', html)
-        self.assertIn("api.rhRegionLabel", html)
-        self.assertIn("baseInput.disabled = isRunningHub || isAiMoney || isAgnes;", script)
-
-    def test_runninghub_onboarding_requires_region_before_key_links(self):
-        script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
-
-        self.assertIn("let onboardingRunningHubRegion = '';", script)
-        self.assertIn("onchange=\"changeOnboardingRunningHubRegion(this.value)\"", script)
-        self.assertIn("function changeOnboardingRunningHubRegion(region)", script)
-        self.assertIn("if(!onboardingRunningHubRegion)", script)
-        self.assertIn("tr('api.rhChooseRegionAlert')", script)
-        self.assertIn("RUNNINGHUB_REGIONS[onboardingRunningHubRegion]", script)
+    def test_runninghub_site_switches_are_only_in_connection_details(self):
+        html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
+        sidebar = html.split('<aside class="sidebar">', 1)[1].split('</aside>', 1)[0]
+        self.assertNotIn('toggleRunningHubRegionEnabled', sidebar)
+        self.assertEqual(html.count('onchange="toggleRunningHubRegionEnabled('), 2)
+        self.assertNotIn('id="rhAppRegionInput"', html)
 
     def test_volcengine_settings_link_to_official_key_consoles(self):
         html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
@@ -1276,7 +1447,7 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://console.volcengine.com/iam/keymanage/", html)
         self.assertIn("api.volcengineGetArkKey", html)
         self.assertIn("api.volcengineGetAkSk", html)
-        self.assertIn("https://ark.cn-beijing.volces.com/api/v3/models", html)
+        self.assertNotIn("https://ark.cn-beijing.volces.com/api/v3/models", html)
 
     def test_agnes_is_added_from_recommended_apis_before_configuration(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
@@ -1310,7 +1481,9 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
 
 class ApiSettingsCanvasEndToEndTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        cache = ROOT / 'cache'
+        cache.mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=cache)
         self.root = Path(self.temp.name)
         self.storage = ProjectStorage(self.root)
         self.storage.ensure_layout()
@@ -1324,12 +1497,18 @@ class ApiSettingsCanvasEndToEndTests(unittest.IsolatedAsyncioTestCase):
         self.api_env_file.write_text("", encoding="utf-8")
         self.providers_file = self.root / "data" / "api_providers.json"
         self.history_file = self.root / "data" / "history.json"
+        self.static_providers_file = self.root / "static" / "runninghub" / "api_providers.json"
         self.patches = [
             patch.object(main, "PROJECT_STORAGE", self.storage),
             patch.object(main, "ASSETS_DIR", str(self.storage.assets_dir)),
             patch.object(main, "OUTPUT_OUTPUT_DIR", str(self.storage.results_dir)),
             patch.object(main, "RESULTS_DIR", str(self.storage.results_dir)),
             patch.object(main, "API_PROVIDERS_FILE", str(self.providers_file)),
+            # 保存平台会同步静态模板和工作流存储，必须和正式配置一起隔离。
+            patch.object(main, "STATIC_RUNNINGHUB_DIR", str(self.static_providers_file.parent)),
+            patch.object(main, "STATIC_RUNNINGHUB_API_PROVIDERS_FILE", str(self.static_providers_file)),
+            patch.object(main, "RUNNINGHUB_WORKFLOW_STORE_FILE", str(self.root / "data" / "runninghub_workflows.json")),
+            patch.object(main, "DATA_DIR", str(self.root / "data")),
             patch.object(main, "API_ENV_FILE", str(self.api_env_file)),
             patch.object(main, "HISTORY_FILE", str(self.history_file)),
             patch.object(main, "GLOBAL_LOOP", None),
@@ -1382,6 +1561,8 @@ class ApiSettingsCanvasEndToEndTests(unittest.IsolatedAsyncioTestCase):
 
         saved = await main.save_providers([provider])
         saved_provider = saved["providers"][0]
+        self.assertTrue(self.static_providers_file.is_file(), '静态模板必须写入测试目录')
+        self.assertEqual(Path(main.STATIC_RUNNINGHUB_API_PROVIDERS_FILE), self.static_providers_file)
         self.assertIn(app_id, [item["id"] for item in saved_provider["rh_apps"]])
         self.assertIn(app_id, [item["id"] for item in saved_provider["rh_regions"]["global"]["rh_apps"]])
 

@@ -36,6 +36,36 @@ class HypitTests(unittest.TestCase):
             self.runtime.configure('project')
         self.assertEqual(target.read_text(), '{"old":true}')
 
+    def test_native_theme_patch_is_idempotent_and_backed_up(self):
+        distribution = self.runtime.distribution
+        style = distribution / 'packages/studio/src/style.css'
+        index = distribution / 'packages/studio/index.html'
+        style.parent.mkdir(parents=True)
+        index.parent.mkdir(parents=True, exist_ok=True)
+        style.write_text(':root { --brand-500: #e3406a; }\n', encoding='utf-8')
+        index.write_text('<!doctype html><html><head></head><body><div id="app"></div></body></html>\n', encoding='utf-8')
+        theme = self.root / 'static/css/hypit-native-theme.css'
+        theme.parent.mkdir(parents=True)
+        theme.write_text(':root { --brand-500: #b48a5a; }', encoding='utf-8')
+
+        first = self.runtime._ensure_native_theme()
+        style_after_first = style.read_text(encoding='utf-8')
+        index_after_first = index.read_text(encoding='utf-8')
+        second = self.runtime._ensure_native_theme()
+
+        self.assertEqual(first, second)
+        self.assertEqual(style.read_text(encoding='utf-8'), style_after_first)
+        self.assertEqual(index.read_text(encoding='utf-8'), index_after_first)
+        self.assertEqual(style_after_first.count('laohu-native-theme:start'), 1)
+        self.assertEqual(index_after_first.count('laohu-native-theme:start'), 1)
+        self.assertIn('dataset.laohuTheme', index_after_first)
+        self.assertIn('event.source !== window.parent', index_after_first)
+        backup = self.root / 'backups/hypit/native-studio/0.2.7'
+        self.assertTrue((backup / 'style.css').is_file())
+        self.assertTrue((backup / 'index.html').is_file())
+        self.assertFalse(style.is_symlink())
+        self.assertFalse(index.is_symlink())
+
     def test_managed_result_index_keeps_native_path_and_deduplicates(self):
         store = ProjectStorage(self.root)
         native = self.root / 'assets/output/hypit/project/date/build/movie.mp4'

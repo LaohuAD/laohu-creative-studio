@@ -7,6 +7,26 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 CONFIRMED_EVIDENCE = {"runtime_verified", "official_schema", "official_documented"}
+
+
+def generation_visibility_issue(profile: Dict[str, Any]) -> str:
+    """生成节点的候选边界；保留工具目录和用户启用记录，不冒充已适配生成能力。"""
+    model_id = str(profile.get("model_id") or profile.get("catalog_model_id") or "").lower()
+    operation = str(profile.get("operation") or "").lower()
+    if model_id.startswith('marble') or operation in {'text_to_3d', 'image_to_3d'}:
+        return '3D 场景输入与结果尚未接入'
+    if not profile.get('inputs'):
+        return '生成输入契约尚未完整登记'
+    expected = {'text_generation': 'text', 'image_generation': 'image', 'video_generation': 'video',
+                'audio_generation': 'audio', 'music_generation': 'audio'}.get(profile.get('node_type'))
+    actual = (profile.get('output') or {}).get('media_type') or str(profile.get('output_contract') or '').split(',')[0]
+    if actual == 'chat':
+        actual = 'text'
+    if expected and actual and expected != actual:
+        return '输出类型不属于该生成节点'
+    return ''
+
+
 NODE_MODEL_FIELDS = {
     "text_generation": "chat_models",
     "image_generation": "image_models",
@@ -377,11 +397,32 @@ def _family_without_classification_tier(profile: Dict[str, Any], provider_id: st
     return family_id, family_name, family_name_en
 
 
-def _fallback_variant_suffix(profile: Dict[str, Any], provider_id: str, index: int) -> str:
+def _variant_identity_label(profile: Dict[str, Any], provider_id: str, has_fast_sibling: bool = False) -> tuple[str, str]:
+    """从真实 ID 提取可解释的版本与档次，避免用列表序号区分模式。"""
+    model_id = str(profile.get("model_id") or "").strip().lower()
+    version = re.search(r"(?:^|[/_-])(?:(v|q|h|o))?(\d+(?:\.\d+)?)(?=[/_-]|$)", model_id)
+    prefix = ""
+    if version:
+        marker = version.group(1) or ""
+        prefix = f"{marker.upper()}{version.group(2)}" if marker in "qho" and marker else version.group(2)
+    qualifiers = []
     tier = _classification_tier(profile, provider_id)
-    if tier:
-        return _slug(tier)
-    return ""
+    for token, zh, en in (
+        ("fast", "快速版", "Fast"), ("turbo", "极速版", "Turbo"),
+        ("flash", "闪速版", "Flash"), ("pro", "专业版", "Pro"),
+        ("max", "增强版", "Max"), ("lite", "轻量版", "Lite"),
+        ("mini", "精简版", "Mini"), ("standard", "标准版", "Standard"),
+        ("std", "标准版", "Standard"),
+    ):
+        if re.search(rf"(?:^|[/_-]){token}(?=[/_-]|$)", model_id):
+            qualifiers.append((zh, en))
+    if not qualifiers and tier in {"fast", "mini", "pro", "turbo", "lite", "flash"}:
+        qualifiers.append((dict(fast="快速版", mini="精简版", pro="专业版", turbo="极速版", lite="轻量版", flash="闪速版")[tier], tier.title()))
+    if not qualifiers and has_fast_sibling:
+        qualifiers.append(("标准版", "Standard"))
+    zh_parts = ([prefix] if prefix else []) + [item[0] for item in qualifiers]
+    en_parts = ([prefix] if prefix else []) + [item[1] for item in qualifiers]
+    return " · ".join(zh_parts), " · ".join(en_parts)
 
 
 def normalize_model_classification(profile: Dict[str, Any], provider_id: str) -> Dict[str, Any]:
@@ -425,15 +466,40 @@ def normalize_model_classifications(models: List[Dict[str, Any]], provider_id: s
     for group in groups.values():
         if len(group) < 2:
             continue
-        used: set[str] = set()
-        for index, model in enumerate(group):
-            suffix = _fallback_variant_suffix(model, provider_id, index)
-            if suffix in used:
-                suffix = str(index + 1)
-            used.add(suffix)
-            if suffix:
-                model["variant_name"] = f"{model['variant_name']}-{suffix}"
-                model["variant_name_en"] = f"{model['variant_name_en']}-{suffix}"
+        has_fast_sibling = any(re.search(r"(?:^|[/_-])fast(?=[/_-]|$)", str(item.get("model_id") or "").lower()) for item in group)
+        for model in group:
+            zh, en = _variant_identity_label(model, provider_id, has_fast_sibling)
+            if zh:
+                model["variant_name"] = f"{zh} · {model['variant_name']}"
+                model["variant_name_en"] = f"{en} · {model['variant_name_en']}"
+    # 只有同一展示名确实覆盖了不同模型时才细化；保留真实 ID 作为最后的可核对区别。
+    named: Dict[tuple[str, str, str], List[Dict[str, Any]]] = {}
+    for model in normalized:
+        key = (str(model.get("family_id") or ""), str(model.get("node_type") or ""), str(model.get("variant_name") or ""))
+        named.setdefault(key, []).append(model)
+    for items in named.values():
+        if len({str(item.get("model_id") or "") for item in items}) < 2:
+            continue
+        for model in items:
+            model_id = str(model.get("model_id") or "").lower()
+            operation = str(model.get("operation") or "")
+            detail = ""
+            detail_en = ""
+            if re.search(r"(?:^|[/_-])r2v|reference[-_]to[-_]video", model_id):
+                detail, detail_en = "多图参考", "Multiple References"
+            elif "start" in model_id and "end" in model_id:
+                detail, detail_en = "首尾帧", "First and Last Frame"
+            elif re.search(r"(?:^|[/_-])i2v|image[-_]to[-_]video", model_id):
+                detail, detail_en = "单图输入", "Single Image Input"
+            elif re.search(r"(?:^|[/_-])t2v|text[-_]to[-_]video", model_id):
+                detail, detail_en = "文字输入", "Text Input"
+            elif "text-to-image" in model_id or "-t2i" in model_id:
+                detail, detail_en = "文字输入", "Text Input"
+            elif "image-to-image" in model_id or "-i2i" in model_id or "edit" in model_id:
+                detail, detail_en = "图片输入", "Image Input"
+            if detail and (operation.endswith("video") or str(model.get("node_type")) == "image_generation"):
+                model["variant_name"] = f"{model['variant_name']} · {detail}"
+                model["variant_name_en"] = f"{model['variant_name_en']} · {detail_en}"
     return normalized
 
 
@@ -462,7 +528,8 @@ def _profile_parameter(parameter_type: str, field: Dict[str, Any]) -> Optional[D
         result = {"level": "optional", "type": "number"}
     else:
         return None
-    for source_key, target_key in (("min", "min"), ("max", "max"), ("step", "step")):
+    # RunningHub 控件的 step 是滑动步幅，不是 API 的离散取值约束；官方默认值也可能不落在该网格上。
+    for source_key, target_key in (("min", "min"), ("max", "max"), ("step", "ui_step")):
         if field.get(source_key) not in (None, ""):
             result[target_key] = field[source_key]
     if field.get("defaultValue") not in (None, ""):
@@ -640,6 +707,13 @@ def _runninghub_family_mode(
         "variant_name_en": canonical,
     }
 
+    # RunningHub 目录有时只给中文展示名，仍按展示名保持同一模型家族。
+    if re.search(r"全能视频\s*s|(?:^|\b)sora(?:\b|[-/])", visible_name, flags=re.I):
+        assign_family = ("sora", "Sora", "Sora")
+        result.update({"family_base": assign_family[0], "family_name": assign_family[1], "family_name_en": assign_family[2]})
+    elif re.search(r"万相|\bwan\b", visible_name, flags=re.I):
+        result.update({"family_base": "wan", "family_name": "Wan", "family_name_en": "Wan"})
+
     def assign(family_base: str, family_name: str, family_name_en: str, variant_name: str = "", variant_name_en: str = "") -> None:
         result.update({
             "family_base": family_base,
@@ -672,6 +746,8 @@ def _runninghub_family_mode(
         assign("minimax", "MiniMax", "MiniMax", mode_zh, mode_en)
     elif node_type == "video_generation" and re.match(r"^minimax-h3(?:[- /]|$)", lower):
         assign("minimax-h3", "MiniMax H3", "MiniMax H3")
+    elif node_type == "video_generation" and re.match(r"^(?:laohu[-_/])?(?:video[-_/])?grok(?:[-_/]|$)|^laohu-video-gk(?:[-_/]|$)", lower):
+        assign("grok", "Grok", "Grok")
     elif lower.startswith("suno-"):
         suno = re.match(r"suno-(single|custom)-v(.+)$", lower)
         if suno:
@@ -692,7 +768,10 @@ def _runninghub_family_mode(
             (r"^pixverse[-/](v[0-9.]+|c1)", "pixverse-{0}", "PixVerse {0}"),
             (r"^hailuo-(02|2[.]3|h3)", "hailuo-{0}", "海螺 {0}"),
             (r"^skyreels-(v[0-9.]+)", "skyreels-{0}", "SkyReels {0}"),
-            (r"^wan-(2[.][0-9]+)", "wan-{0}", "万相 {0}"),
+            # Wan/万相的版本是运行模式，不拆成 Wan 2.x、Wan 3.x 多个模型家族。
+            (r"^wan-(2[.][0-9]+|3[.][0-9]+)(?:[-/].*)?$", "wan", "Wan"),
+            # 全能视频 S 的真实调用 ID 属于 Sora 系列，S 保留在运行模式信息中。
+            (r"^(sora|omni-video-s)(?:[-/].*)?$", "sora", "Sora"),
             (r"^qwen-image-(2[.][0-9]+(?:-pro)?|3[.][0-9]+(?:-pro)?)", "qwen-image-{0}", "Qwen Image {0}"),
         )
         for pattern, family_template, name_template in product_patterns:
@@ -724,6 +803,21 @@ def _runninghub_family_mode(
             elif luma:
                 version = luma.group(1)
                 assign(f"luma-uni-{version}", f"Luma Uni {version}", f"Luma Uni {version}")
+
+    # 版本档次是用户做选择时需要的信息：保留 Fast/Mini/Pro/Lite/Flash 等
+    # 原始字母标识，同时给出中文含义，避免只剩“视频编辑”这类模糊能力名。
+    edition = re.search(r"(?:^|[-_/ .])((?:fast|mini|pro|lite|flash|turbo|plus|max|standard))(?:$|[-_/ .])", lower)
+    if edition:
+        edition_en = edition.group(1).capitalize()
+        edition_zh = {
+            "fast": "快速版", "mini": "Mini 版", "pro": "Pro 版", "lite": "Lite 版",
+            "flash": "Flash 版", "turbo": "Turbo 版", "plus": "Plus 版", "max": "Max 版",
+            "standard": "标准版",
+        }.get(edition.group(1), edition_en)
+        current = str(result.get("variant_name") or "").strip()
+        if edition_en.lower() not in current.lower() and edition_zh not in current:
+            result["variant_name"] = f"{current} · {edition_zh}" if current else edition_zh
+            result["variant_name_en"] = f"{result.get('variant_name_en') or ''} · {edition_en}".strip(" ·")
 
     if not result["family_name_en"]:
         result["family_name_en"] = str(result["family_base"] or normalized).replace("/", " ").replace("-", " ").title()
@@ -875,6 +969,34 @@ def runninghub_profile_from_registry_item(item: Dict[str, Any]) -> Dict[str, Any
 def _ai_money_video_profile(model_id: str) -> Dict[str, Any]:
     normalized = normalize_laohu_model_id(model_id)
     lower = normalized.lower()
+    if lower == "animate-motion-transfer":
+        return {
+            "model_id": normalized,
+            "family_id": "ai-money-animate-motion-transfer",
+            "family_name": "Animate",
+            "family_name_en": "Animate",
+            "display_name": normalized,
+            "variant_id": "motion-transfer",
+            "variant_name": "动作迁移",
+            "variant_name_en": "Motion Transfer",
+            "node_type": "video_generation",
+            "operation": "motion_transfer",
+            "status": "confirmed", "readiness": "ready", "runnable": True,
+            "version": 1, "evidence_level": "official_documented",
+            "inputs": {
+                "reference_image": {"media_type": "image", "min": 1, "max": 1, "role": "reference_image"},
+                "motion_video": {"media_type": "video", "min": 1, "max": 1, "role": "motion_video"},
+            },
+            "parameters": {
+                "resolution": {"level": "optional", "type": "enum", "options": ["480p", "720p", "1080p"], "default": "720p", "source_field": "metadata.resolution"},
+                "ratio": {"level": "optional", "type": "enum", "options": ["adaptive", "16:9", "9:16", "1:1"], "default": "adaptive", "source_field": "metadata.ratio"},
+                "frame_rate": {"level": "optional", "type": "integer", "options": [24, 30], "default": 30, "source_field": "metadata.frame_rate"},
+                "pose_method": {"level": "advanced", "type": "enum", "options": ["vitpose"], "default": "vitpose", "source_field": "metadata.pose_method"},
+            },
+            "request_mapping": {"reference_image": "images", "motion_video": "metadata.video_url", "resolution": "metadata.resolution", "ratio": "metadata.ratio", "frame_rate": "metadata.frame_rate", "pose_method": "metadata.pose_method"},
+            "output": {"media_type": "video", "min": 1, "max": 1, "async": True},
+            "platform": {"endpoint": "/v1/video/generations"},
+        }
     is_wan_3_prime = bool(re.fullmatch(r"wan-3\.0-(?:global-)?prime-(?:i2v|r2v)", lower))
     if lower in {"fashvsr_video_upscale", "fashvsr-video-upscale"}:
         operation = "video_upscale"
@@ -2357,6 +2479,102 @@ class ModelCapabilityRegistry:
                 family["readiness"] = "ready"
         return [families[family_key] for family_key in order]
 
+    def _runninghub_catalog_scopes(self, provider: Dict[str, Any]):
+        """把一个 RunningHub provider 展开为已启用站点的只读能力 scope。"""
+        if self.capability_provider_id(provider) != "runninghub":
+            return [(provider, "")]
+        regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+        if not regions:
+            return [(provider, str(provider.get("rh_region") or "global").strip().lower() or "global")]
+        locked = str(provider.get("_runninghub_selected_region") or "").strip().lower()
+        if locked:
+            candidate_regions = [locked]
+        else:
+            candidate_regions = [
+                region for region, config in regions.items()
+                if isinstance(config, dict) and config.get("enabled") is True
+            ]
+            # 兼容尚未经过主程序 normalize_provider 的测试/调用方输入；正式配置
+            # 会显式写入 enabled，不能把缺失字段当成双站启用。
+            if not candidate_regions and not any(
+                isinstance(config, dict) and isinstance(config.get("enabled"), bool)
+                for config in regions.values()
+            ):
+                candidate_regions = [str(provider.get("rh_region") or "global").strip().lower() or "global"]
+            active_region = str(provider.get("rh_region") or "").strip().lower()
+            if active_region in candidate_regions:
+                candidate_regions = [active_region] + [region for region in candidate_regions if region != active_region]
+        scopes = []
+        for region in candidate_regions:
+            config = regions.get(region)
+            if not isinstance(config, dict) or (locked and config.get("enabled") is not True):
+                continue
+            scoped = dict(provider)
+            scoped["rh_region"] = region
+            for field_name in set(NODE_MODEL_FIELDS.values()):
+                scoped[field_name] = deepcopy(config.get(field_name) or [])
+            scoped["model_names"] = deepcopy(config.get("model_names") or {})
+            scoped["rh_apps"] = deepcopy(config.get("rh_apps") or [])
+            scoped["rh_workflows"] = deepcopy(config.get("rh_workflows") or [])
+            scopes.append((scoped, region))
+        return scopes
+
+    def _catalog_models_for_provider(self, provider, capability_id, profile_set, region=""):
+        indexed_profiles = {
+            (str(item.get("model_id") or "").strip(), str(item.get("node_type") or "").strip()): item
+            for item in profile_set.get("models") or []
+            if str(item.get("model_id") or "").strip()
+        }
+        if capability_id == "runninghub":
+            for model_id, profile in self.runninghub_snapshot_profiles(region or provider.get("rh_region") or "global").items():
+                indexed_profiles[(model_id, str(profile.get("node_type") or "").strip())] = profile
+        models = []
+        for node_type, field_name in NODE_MODEL_FIELDS.items():
+            configured_model_ids = _unique_strings(provider.get(field_name) or [])
+            if capability_id == "ai-money":
+                configured_model_ids = _unique_strings(normalize_laohu_model_id(model_id) for model_id in configured_model_ids)
+            for model_id in configured_model_ids:
+                source = indexed_profiles.get((model_id, node_type))
+                if self.readiness(source) != "ready":
+                    source = dynamic_profile_for_model(capability_id, model_id, node_type) or source
+                if node_type == "music_generation" and not source:
+                    continue
+                if node_type == "audio_generation" and not source:
+                    music_source = indexed_profiles.get((model_id, "music_generation"))
+                    if self.readiness(music_source) == "ready":
+                        continue
+                    if dynamic_profile_for_model(capability_id, model_id, "music_generation"):
+                        continue
+                item = deepcopy(source) if source else {
+                    "model_id": model_id,
+                    "node_type": node_type,
+                    "operation": "compatible",
+                    "status": "pending",
+                    "version": 0,
+                    "evidence_level": "unknown",
+                    "inputs": {},
+                    "parameters": {},
+                    "note": "该模型来自用户配置，尚未绑定经过核实的能力档案。",
+                }
+                item["node_type"] = node_type
+                item["validation_mode"] = self.validation_mode(source)
+                item["readiness"] = self.readiness(source)
+                item["runnable"] = item["validation_mode"] == "strict" and item["readiness"] == "ready"
+                item["provider_id"] = str(provider.get("id") or "").strip()
+                item["capability_provider_id"] = capability_id
+                item["family_id"] = str(item.get("family_id") or item["model_id"]).strip()
+                item["family_name"] = item.get("family_name") or item.get("display_name") or item["family_id"]
+                item["variant_id"] = str(item.get("variant_id") or item.get("operation") or item["model_id"]).strip()
+                item["inputs"] = deepcopy(item.get("inputs") or {})
+                item["parameters"] = deepcopy(item.get("parameters") or {})
+                item["selection_unavailable_reason"] = generation_visibility_issue(item)
+                item["selectable"] = item["runnable"] and not item["selection_unavailable_reason"]
+                if capability_id == "runninghub":
+                    item["regions"] = [region or str(provider.get("rh_region") or "global").strip().lower()]
+                models.append(item)
+            models = normalize_model_classifications(models, capability_id)
+        return models
+
     def build_catalog(self, providers: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         loaded = self.load()
         registry = loaded["registry"]
@@ -2367,69 +2585,64 @@ class ModelCapabilityRegistry:
                 continue
             capability_id = self.capability_provider_id(provider)
             profile_set = profile_sets.get(capability_id) or {}
-            indexed_profiles = {
-                (str(item.get("model_id") or "").strip(), str(item.get("node_type") or "").strip()): item
-                for item in profile_set.get("models") or []
-                if str(item.get("model_id") or "").strip()
-            }
-            if capability_id == "runninghub":
-                for model_id, profile in self.runninghub_snapshot_profiles(provider.get("rh_region") or "global").items():
-                    indexed_profiles[(model_id, str(profile.get("node_type") or "").strip())] = profile
-            models = []
-            for node_type, field_name in NODE_MODEL_FIELDS.items():
-                configured_model_ids = _unique_strings(provider.get(field_name) or [])
-                if capability_id == "ai-money":
-                    configured_model_ids = _unique_strings(normalize_laohu_model_id(model_id) for model_id in configured_model_ids)
-                for model_id in configured_model_ids:
-                    source = indexed_profiles.get((model_id, node_type))
-                    if self.readiness(source) != "ready":
-                        source = dynamic_profile_for_model(capability_id, model_id, node_type) or source
-                    if node_type == "music_generation" and not source:
+            scopes = self._runninghub_catalog_scopes(provider)
+            models_by_key = {}
+            for scoped, region in scopes:
+                for model in self._catalog_models_for_provider(scoped, capability_id, profile_set, region):
+                    key = (
+                        str(model.get("model_id") or ""),
+                        str(model.get("node_type") or ""),
+                        str(model.get("variant_id") or model.get("operation") or ""),
+                    )
+                    existing = models_by_key.get(key)
+                    if existing is None:
+                        if capability_id == "runninghub":
+                            existing_region = (model.get("regions") or [region or "global"])[0]
+                            existing = model
+                            existing["region_profiles"] = {
+                                existing_region: {
+                                    field: deepcopy(model.get(field))
+                                    for field in (
+                                        "model_id", "node_type", "operation", "family_id", "family_name",
+                                        "variant_id", "inputs", "parameters", "platform", "validation_mode",
+                                        "readiness", "runnable", "selectable", "selection_unavailable_reason",
+                                    ) if field in model
+                                }
+                            }
+                        else:
+                            existing = model
+                        models_by_key[key] = model
                         continue
-                    if node_type == "audio_generation" and not source:
-                        music_source = indexed_profiles.get((model_id, "music_generation"))
-                        if self.readiness(music_source) == "ready":
-                            continue
-                        if dynamic_profile_for_model(capability_id, model_id, "music_generation"):
-                            continue
-                    item = deepcopy(source) if source else {
-                        "model_id": model_id,
-                        "node_type": node_type,
-                        "operation": "compatible",
-                        "status": "pending",
-                        "version": 0,
-                        "evidence_level": "unknown",
-                        "inputs": {},
-                        "parameters": {},
-                        "note": "该模型来自用户配置，尚未绑定经过核实的能力档案。",
-                    }
-                    item["node_type"] = node_type
-                    item["validation_mode"] = self.validation_mode(source)
-                    item["readiness"] = self.readiness(source)
-                    item["runnable"] = item["validation_mode"] == "strict" and item["readiness"] == "ready"
-                    item["provider_id"] = str(provider.get("id") or "").strip()
-                    item["capability_provider_id"] = capability_id
-                    item["family_id"] = str(item.get("family_id") or item["model_id"]).strip()
-                    item["family_name"] = item.get("family_name") or item.get("display_name") or item["family_id"]
-                    item["variant_id"] = str(item.get("variant_id") or item.get("operation") or item["model_id"]).strip()
-                    item["inputs"] = deepcopy(item.get("inputs") or {})
-                    item["parameters"] = deepcopy(item.get("parameters") or {})
-                    models.append(item)
-                models = normalize_model_classifications(models, capability_id)
+                    for candidate_region in model.get("regions") or []:
+                        if candidate_region not in (existing.setdefault("regions", [])):
+                            existing["regions"].append(candidate_region)
+                        if capability_id == "runninghub":
+                            existing.setdefault("region_profiles", {})[candidate_region] = {
+                                field: deepcopy(model.get(field))
+                                for field in (
+                                    "model_id", "node_type", "operation", "family_id", "family_name",
+                                    "variant_id", "inputs", "parameters", "platform", "validation_mode",
+                                    "readiness", "runnable", "selectable", "selection_unavailable_reason",
+                                ) if field in model
+                            }
+            models = list(models_by_key.values())
+            combined_provider = dict(provider)
+            for node_type, field_name in NODE_MODEL_FIELDS.items():
+                values = []
+                for scoped, _region in scopes:
+                    values.extend(scoped.get(field_name) or [])
+                combined_provider[field_name] = _unique_strings(values)
             configured_order_by_type = {
                 node_type: {
                     model_id: index
                     for index, model_id in enumerate(_unique_strings(
                         normalize_laohu_model_id(value) if capability_id == "ai-money" else value
-                        for value in (provider.get(field_name) or [])
+                        for value in (combined_provider.get(field_name) or [])
                     ))
                 }
                 for node_type, field_name in NODE_MODEL_FIELDS.items()
             }
-            node_type_order = {
-                node_type: index
-                for index, node_type in enumerate(NODE_MODEL_FIELDS)
-            }
+            node_type_order = {node_type: index for index, node_type in enumerate(NODE_MODEL_FIELDS)}
             models.sort(key=lambda item: (
                 node_type_order.get(str(item.get("node_type") or ""), len(node_type_order)),
                 configured_order_by_type.get(str(item.get("node_type") or ""), {}).get(
@@ -2437,12 +2650,27 @@ class ModelCapabilityRegistry:
                     len(configured_order_by_type.get(str(item.get("node_type") or ""), {})),
                 ),
             ))
+            region_candidates = []
+            if capability_id == "runninghub":
+                regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+                for region, config in regions.items():
+                    if not isinstance(config, dict):
+                        continue
+                    region_candidates.append({
+                        "region": region,
+                        "enabled": config.get("enabled") is True,
+                        "base_url": config.get("base_url") or "",
+                        "model_count": sum(len(_unique_strings(config.get(field) or [])) for field in set(NODE_MODEL_FIELDS.values())),
+                        "app_count": len(config.get("rh_apps") or []),
+                        "workflow_count": len(config.get("rh_workflows") or []),
+                    })
             runtime_providers.append({
                 "id": str(provider.get("id") or "").strip(),
                 "name": provider.get("name") or provider.get("id") or capability_id,
                 "protocol": provider.get("protocol") or "openai",
                 "capability_provider_id": capability_id,
                 "profile_updated_at": profile_set.get("updated_at") or "",
+                "regions": region_candidates,
                 "models": models,
                 "families": self._family_catalog(models),
             })
@@ -2719,7 +2947,7 @@ class ModelCapabilityRegistry:
         allowed_parameters = set((profile.get("parameters") or {}).keys())
         required_parameters = sorted(
             key for key, spec in (profile.get("parameters") or {}).items()
-            if str(spec.get("level") or "").strip().lower() == "required"
+            if (spec.get("required") or str(spec.get("level") or "").strip().lower() == "required")
             and spec.get("default") in (None, "")
             and (parameters or {}).get(key) in (None, "")
         )
@@ -2731,31 +2959,23 @@ class ModelCapabilityRegistry:
         )
         if unsupported:
             raise ModelCapabilityError(f"模型 {model_id} 不支持参数：{', '.join(unsupported)}")
+        from studio_model_evaluation import validate_parameter_value
+
         for key, value in (parameters or {}).items():
             if value is None or value == "" or key not in allowed_parameters:
                 continue
             spec = profile["parameters"][key]
-            parameter_type = str(spec.get("type") or "").strip().lower()
-            if parameter_type == "enum":
-                options = [str(item) for item in spec.get("options") or []]
-                if options and str(value) not in options:
-                    raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不支持取值 {value}")
-                continue
-            if parameter_type in {"integer", "number"}:
-                try:
-                    numeric_value = float(value)
-                except (TypeError, ValueError) as exc:
-                    raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 必须是数字") from exc
-                if parameter_type == "integer" and not numeric_value.is_integer():
-                    raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 必须是整数")
-                if spec.get("min") is not None and numeric_value < float(spec["min"]):
-                    raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不能小于 {spec['min']}")
-                if spec.get("max") is not None and numeric_value > float(spec["max"]):
-                    raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不能大于 {spec['max']}")
-                continue
-            if parameter_type == "boolean" and not isinstance(value, bool):
-                if str(value).strip().lower() not in {"true", "false", "1", "0"}:
-                    raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 必须是布尔值")
+            if validate_parameter_value(spec, value):
+                if spec.get("type") in {"integer", "number"} and not isinstance(value, bool):
+                    try:
+                        numeric = float(value)
+                    except (TypeError, ValueError):
+                        numeric = float('nan')
+                    if spec.get("min") is not None and numeric < float(spec["min"]):
+                        raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不能小于 {spec['min']}")
+                    if spec.get("max") is not None and numeric > float(spec["max"]):
+                        raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不能大于 {spec['max']}")
+                raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不支持取值 {value}")
         if str(profile.get("model_id") or "").startswith(("MiniMax-H3", "laohu-image-g-v2.5-", "suno-")):
             from laohu_protocols import validate_parameters
             try:

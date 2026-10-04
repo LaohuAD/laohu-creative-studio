@@ -505,7 +505,8 @@ def request_for(canvas, node, *, app_fields=None, comfy_fields=None):
             'prompt': prompt, 'inputs': inputs, 'input_roles': roles, 'references': refs,
             'input_counts': {'text' if kind == 'text' else 'prompt': 1,
                              **{key: len(value) for key, value in media.items()}},
-            'system_prompt': settings.get('textSystemPrompt', '') if settings.get('textSystemEnabled') else ''}
+            'system_prompt': settings.get('textSystemPrompt', '') if settings.get('textSystemEnabled') else '',
+            'region': str(settings.get('region') or settings.get('rhRegion') or '')}
 
 
 class StudioExecution:

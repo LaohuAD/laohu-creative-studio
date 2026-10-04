@@ -31,12 +31,14 @@ HYPIT_TASK_VERSION = 1
 
 _PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _REQUEST_ID = re.compile(r"^[^\x00\r\n]{1,160}$")
-_SLOTS = ("text", "image", "video", "audio", "voice")
+_SLOTS = ("text", "image", "video", "audio", "music", "voice")
+_RUNNINGHUB_REGIONS = frozenset(("global", "cn"))
 _SLOT_NODE_TYPES = {
     "text": "text_generation",
     "image": "image_generation",
     "video": "video_generation",
     "audio": "audio_generation",
+    "music": "music_generation",
     "voice": "audio_generation",
 }
 _SLOT_KINDS = {
@@ -44,6 +46,7 @@ _SLOT_KINDS = {
     "image": "image",
     "video": "video",
     "audio": "audio",
+    "music": "music",
     "voice": "audio",
 }
 
@@ -87,6 +90,11 @@ SUPPORTED_HYPIT_CAPABILITIES = (
         "label": {"zh": "音频生成", "en": "Audio generation"},
     },
     {
+        "slot": "music", "kind": "music", "node_type": "music_generation",
+        "capability": _capability_ref("music-generation"), "returns": _capability_ref("audio-set"),
+        "label": {"zh": "音乐生成", "en": "Music generation"},
+    },
+    {
         "slot": "voice",
         "kind": "audio",
         "node_type": "audio_generation",
@@ -97,14 +105,6 @@ SUPPORTED_HYPIT_CAPABILITIES = (
 )
 
 UNSUPPORTED_HYPIT_CAPABILITIES = (
-    {
-        "name": "music-generation",
-        "label": {"zh": "音乐生成", "en": "Music generation"},
-        "reason": {
-            "zh": "当前 Endpoint 桥接未实现音乐输出，不能把音乐模型映射到语音槽位。",
-            "en": "Music output is not implemented by this Endpoint bridge; music models are not mapped to speech.",
-        },
-    },
     {
         "name": "ai-application",
         "label": {"zh": "AI 应用", "en": "AI application"},
@@ -211,7 +211,16 @@ def _hash(value: Any) -> str:
 
 
 def _empty_defaults() -> Dict[str, Dict[str, Any]]:
-    return {slot: {"provider": "", "model": "", "parameters": {}} for slot in _SLOTS}
+    return {slot: {"provider": "", "model": "", "region": "", "parameters": {}} for slot in _SLOTS}
+
+
+def _normalise_region(value: Any, label: str = "RunningHub 站点") -> str:
+    region = str(value or "").strip().lower()
+    if not region:
+        return ""
+    if region not in _RUNNINGHUB_REGIONS:
+        raise HTTPException(status_code=400, detail=f"{label}不受支持：{region}")
+    return region
 
 
 def _safe_identifier(value: Any, label: str, pattern: re.Pattern[str]) -> str:
@@ -259,21 +268,137 @@ def _provider_models(provider: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]
     return output
 
 
+def _provider_region_candidates(provider: Mapping[str, Any]) -> set[str]:
+    raw = provider.get("regions")
+    if isinstance(raw, list):
+        values = set()
+        for item in raw:
+            if isinstance(item, Mapping):
+                region = str(item.get("region") or "").strip().lower()
+                if region in _RUNNINGHUB_REGIONS and item.get("enabled") is True:
+                    values.add(region)
+            else:
+                region = str(item or "").strip().lower()
+                if region in _RUNNINGHUB_REGIONS:
+                    values.add(region)
+        if values:
+            return values
+    raw_regions = provider.get("rh_regions")
+    if isinstance(raw_regions, Mapping):
+        return {
+            str(region).strip().lower()
+            for region, config in raw_regions.items()
+            if str(region).strip().lower() in _RUNNINGHUB_REGIONS
+            and isinstance(config, Mapping)
+            and config.get("enabled") is True
+        }
+    return set()
+
+
+def _model_region_candidates(model: Mapping[str, Any], provider: Mapping[str, Any]) -> set[str]:
+    values = model.get("regions")
+    regions = {
+        str(item).strip().lower()
+        for item in values
+        if str(item).strip().lower() in _RUNNINGHUB_REGIONS
+    } if isinstance(values, list) else set()
+    profiles = model.get("region_profiles")
+    if isinstance(profiles, Mapping):
+        regions.update(
+            str(region).strip().lower()
+            for region in profiles
+            if str(region).strip().lower() in _RUNNINGHUB_REGIONS
+        )
+    return regions or _provider_region_candidates(provider)
+
+
+def _merge_profile(
+    model: Mapping[str, Any], provider: Mapping[str, Any], provider_id: str, region: str = ""
+) -> Dict[str, Any]:
+    value = dict(model)
+    if region:
+        scoped_profiles = model.get("region_profiles")
+        scoped = scoped_profiles.get(region) if isinstance(scoped_profiles, Mapping) else None
+        if isinstance(scoped, Mapping):
+            value.update(_copy(scoped))
+        value["region"] = region
+    value.setdefault("provider_id", provider_id)
+    value.setdefault("provider_name", provider.get("name") or provider_id)
+    return value
+
+
 def _find_profile(
-    catalog: Mapping[str, Any], provider_id: str, model_id: str, node_type: str
+    catalog: Mapping[str, Any], provider_id: str, model_id: str, node_type: str, region: str = ""
 ) -> Optional[Dict[str, Any]]:
+    region = _normalise_region(region)
     for provider in catalog.get("providers") or []:
         if not isinstance(provider, Mapping) or _provider_id(provider) != provider_id:
             continue
         for model in _provider_models(provider):
             if _model_id(model) != model_id:
                 continue
-            value = dict(model)
-            value.setdefault("provider_id", provider_id)
-            value.setdefault("provider_name", provider.get("name") or provider_id)
+            if region and region not in _model_region_candidates(model, provider):
+                continue
+            value = _merge_profile(model, provider, provider_id, region)
             if value.get("node_type") == node_type:
                 return value
     return None
+
+
+def _resolve_profile(
+    catalog: Mapping[str, Any], provider_id: str, model_id: str, node_type: str, region: str = ""
+) -> tuple[Dict[str, Any], str]:
+    requested_region = _normalise_region(region)
+    provider = next(
+        (
+            item
+            for item in catalog.get("providers") or []
+            if isinstance(item, Mapping) and _provider_id(item) == provider_id
+        ),
+        None,
+    )
+    if provider is None:
+        raise HTTPException(status_code=400, detail=f"模型 {model_id} 不在当前用户启用白名单中")
+
+    matches = [
+        model
+        for model in _provider_models(provider)
+        if _model_id(model) == model_id and model.get("node_type") == node_type
+    ]
+    if not matches:
+        raise HTTPException(status_code=400, detail=f"模型 {model_id} 不在当前用户启用白名单中")
+
+    if provider_id != "runninghub":
+        if requested_region:
+            raise HTTPException(status_code=400, detail="只有 RunningHub 模型支持 region=global/cn")
+        profile = _find_profile(catalog, provider_id, model_id, node_type)
+        assert profile is not None
+        return profile, ""
+
+    available_regions = set()
+    for model in matches:
+        available_regions.update(_model_region_candidates(model, provider))
+    if requested_region:
+        if available_regions and requested_region not in available_regions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"RunningHub 模型 {model_id} 未在 {requested_region} 站点启用",
+            )
+        profile = _find_profile(catalog, provider_id, model_id, node_type, requested_region)
+        if profile is None:
+            raise HTTPException(status_code=400, detail=f"模型 {model_id} 不在 {requested_region} 站点启用白名单中")
+        return profile, requested_region
+
+    if len(available_regions) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"RunningHub 模型 {model_id} 同时属于多个站点，请明确选择 region=global 或 region=cn",
+        )
+    resolved_region = next(iter(available_regions), "")
+    profile = _find_profile(catalog, provider_id, model_id, node_type, resolved_region)
+    if profile is None:
+        raise HTTPException(status_code=400, detail=f"模型 {model_id} 不在当前用户启用白名单中")
+    return profile, resolved_region
 
 
 def _parameter_schema(profile: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -336,12 +461,13 @@ def _reject_secrets(value: Any) -> None:
 
 def _normalise_slot(raw: Any, slot: str) -> Dict[str, Any]:
     if raw is None:
-        return {"provider": "", "model": "", "parameters": {}}
+        return {"provider": "", "model": "", "region": "", "parameters": {}}
     if not isinstance(raw, Mapping):
         raise HTTPException(status_code=400, detail=f"{slot} 默认模型格式不正确")
     _reject_secrets(raw)
     provider = str(raw.get("provider") or raw.get("provider_id") or "")
     model = str(raw.get("model") or raw.get("model_id") or "")
+    region = _normalise_region(raw.get("region"), f"{slot} RunningHub 站点")
     parameters = raw.get("parameters", {})
     if parameters is None:
         parameters = {}
@@ -349,7 +475,9 @@ def _normalise_slot(raw: Any, slot: str) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"{slot} 默认参数必须是对象")
     if bool(provider) != bool(model):
         raise HTTPException(status_code=400, detail=f"{slot} 必须同时选择平台和模型")
-    return {"provider": provider, "model": model, "parameters": dict(parameters)}
+    if region and not provider:
+        raise HTTPException(status_code=400, detail=f"{slot} 未选择模型，不能保存站点")
+    return {"provider": provider, "model": model, "region": region, "parameters": dict(parameters)}
 
 
 def _capability_by_kind(kind: str) -> Optional[Mapping[str, Any]]:
@@ -494,7 +622,7 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
     if kind == "speech":
         kind = "audio"
     if not kind or _capability_by_kind(kind) is None:
-        raise HTTPException(status_code=400, detail="Hypit 只支持已声明的文本、图片、视频和语音能力")
+        raise HTTPException(status_code=400, detail="Hypit 只支持已声明的文本、图片、视频、语音和音乐能力")
     if capability_kind and capability_kind != kind:
         raise HTTPException(status_code=400, detail="Endpoint capability 与请求 kind 不一致")
     capability = _capability_by_kind(kind)
@@ -511,9 +639,21 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
     if not provider or not model:
         raise HTTPException(status_code=400, detail=f"请先为 {slot} 配置工作台模型")
 
-    profile = _find_profile(catalog, provider, model, _SLOT_NODE_TYPES[slot])
-    if profile is None:
-        raise HTTPException(status_code=400, detail=f"模型 {model} 不在当前用户启用白名单中")
+    explicit_region = constraints.get("region")
+    if explicit_region is None:
+        explicit_region = raw.get("region")
+    if explicit_region is None and provider == selected.get("provider") and model == selected.get("model"):
+        explicit_region = selected.get("region")
+    profile, region = _resolve_profile(
+        catalog,
+        provider,
+        model,
+        _SLOT_NODE_TYPES[slot],
+        _normalise_region(explicit_region),
+    )
+    from studio_module_models import hypit_profile_reasons
+    if hypit_profile_reasons(slot, profile):
+        raise HTTPException(400, detail="该模型不支持此 Hypit 生成用途，请重新选择模型")
     if profile.get("validation_mode") not in (None, "strict") or profile.get("readiness") not in (None, "ready") or profile.get("runnable") is False:
         readiness = profile.get("readiness") or "needs_profile"
         if readiness == "adapter_missing":
@@ -522,12 +662,21 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
             message = f"模型 {model} 当前不可运行（{readiness}）"
         raise HTTPException(status_code=400, detail=message)
 
+    # §10.7 收敛：显式 provider/model 覆盖不再是隐藏路径。
+    # 原生 Endpoint 会转发这些字段（static/hypit-endpoint.mjs），因此保留受限兼容：
+    # 覆盖仍要落到该槽位真实允许、且档案就绪的模型；这里把来源显式记录下来，
+    # 供审计与后续按槽位 runtime_model_override 策略判定，而不是静默绕过模块设置。
+    explicit_override = bool(
+        str(constraints.get("provider_id") or constraints.get("provider") or "").strip()
+        or str(constraints.get("model") or constraints.get("model_id") or "").strip()
+    )
+    matches_module_binding = provider == selected.get("provider") and model == selected.get("model")
+    model_source = "runtime_override" if (explicit_override and not matches_module_binding) else "module_settings"
+
     prompt_parts: list[str] = []
     system_parts: list[str] = []
-    if provider == selected.get("provider") and model == selected.get("model") and isinstance(selected.get("parameters"), Mapping):
-        parameters: Dict[str, Any] = dict(selected.get("parameters") or {})
-    else:
-        parameters = {}
+    # Hypit 参数由本次复刻请求与模型默认契约决定，旧模块参数不再覆盖任务。
+    parameters: Dict[str, Any] = {}
     _collect_constraint_parameters(constraints, parameters)
     _normalise_ports(constraints, prompt_parts, system_parts, media := {}, parameters)
     _normalise_media_inputs(constraints, media)
@@ -550,6 +699,7 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
         "image": {"reference"},
         "video": {"reference", "source_video", "reference_audio", "first_frame", "last_frame"},
         "audio": {"reference_audio"},
+        "music": {"reference_audio"},
     }[kind]
     unexpected = [role for role, values in media.items() if values and role not in allowed_media]
     if unexpected:
@@ -579,6 +729,7 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
         "kind": kind,
         "provider_id": provider,
         "model": model,
+        "region": region,
         "parameters": parameters,
         "prompt": prompt,
         "inputs": inputs,
@@ -586,11 +737,20 @@ def _project_constraints(raw: Mapping[str, Any], binding: Mapping[str, Any], cat
         "input_counts": input_counts,
         "references": references,
         "system_prompt": "\n".join(system_parts).strip(),
+        "model_source": model_source,
+        "module_slot": slot,
     }
 
 
 def _task_key(project_id: str, request_id: str) -> str:
     return hashlib.sha256(f"{project_id}\0{request_id}".encode("utf-8")).hexdigest()
+
+
+def _request_fingerprint(payload: Mapping[str, Any]) -> str:
+    """只根据调用方输入做幂等判断，不把模块默认模型算进输入。"""
+    value = _copy(dict(payload))
+    value.pop("request_id", None)
+    return _hash({"input": value})
 
 
 def _public_task(record: Mapping[str, Any]) -> Dict[str, Any]:
@@ -640,7 +800,13 @@ def create_hypit_models_router(
         except Exception as exc:
             _raise_storage(exc)
         if value is None:
-            return {"version": HYPIT_SETTINGS_VERSION, "defaults": _empty_defaults(), "updated_at": None}
+            return {
+                "version": HYPIT_SETTINGS_VERSION,
+                "defaults": _empty_defaults(),
+                "created_at": None,
+                "updated_at": None,
+                "revision": 1,
+            }
         if not isinstance(value, Mapping) or value.get("version", HYPIT_SETTINGS_VERSION) != HYPIT_SETTINGS_VERSION:
             raise HTTPException(status_code=500, detail="Hypit 设置版本不受支持，原文件已保留")
         defaults = _empty_defaults()
@@ -649,7 +815,16 @@ def create_hypit_models_router(
             raise HTTPException(status_code=500, detail="Hypit 设置格式损坏，原文件已保留")
         for slot in _SLOTS:
             defaults[slot] = _normalise_slot(raw_defaults.get(slot), slot)
-        return {"version": HYPIT_SETTINGS_VERSION, "defaults": defaults, "updated_at": value.get("updated_at")}
+        revision = value.get("revision", 1)
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise HTTPException(status_code=500, detail="Hypit 设置修订号损坏，原文件已保留")
+        return {
+            "version": HYPIT_SETTINGS_VERSION,
+            "defaults": defaults,
+            "created_at": value.get("created_at"),
+            "updated_at": value.get("updated_at"),
+            "revision": revision,
+        }
 
     def catalog_record() -> Dict[str, Any]:
         try:
@@ -664,15 +839,27 @@ def create_hypit_models_router(
             raise HTTPException(status_code=500, detail="主控模型能力目录格式不正确")
         return _copy(value)
 
-    def validate_settings(defaults: Mapping[str, Any]) -> Dict[str, Any]:
+    def validate_settings(defaults: Mapping[str, Any], previous: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         catalog = catalog_record()
         result = _empty_defaults()
         for slot in _SLOTS:
             value = _normalise_slot(defaults.get(slot), slot)
+            prior = (previous or {}).get(slot) or {}
+            if previous is not None and all(value.get(k) == prior.get(k) for k in ('provider', 'model', 'region')):
+                result[slot] = value
+                continue
             if value["provider"] and value["model"]:
-                profile = _find_profile(catalog, value["provider"], value["model"], _SLOT_NODE_TYPES[slot])
-                if profile is None:
-                    raise HTTPException(status_code=400, detail=f"{slot} 模型不在当前用户启用白名单中")
+                profile, region = _resolve_profile(
+                    catalog,
+                    value["provider"],
+                    value["model"],
+                    _SLOT_NODE_TYPES[slot],
+                    value.get("region", ""),
+                )
+                from studio_module_models import hypit_profile_reasons
+                if hypit_profile_reasons(slot, profile):
+                    raise HTTPException(400, detail="该模型不支持此 Hypit 生成用途，请重新选择模型")
+                value["region"] = region
                 value["parameters"] = _validate_parameters(profile, value["parameters"])
             result[slot] = value
         return result
@@ -705,31 +892,18 @@ def create_hypit_models_router(
         return await run_in_threadpool(_call_project_sync, project_id)
 
     def read_binding(project_id: str) -> Dict[str, Any]:
-        target = binding_path(project_id)
-        try:
-            value = read_json(target)
-        except FileNotFoundError:
-            settings = settings_record()
-            value = {
-                "version": HYPIT_BINDING_VERSION,
-                "project_id": project_id,
-                "defaults": _copy(settings["defaults"]),
-                "created_at": _now(), "revision": 1,
-            }
-            write_json(target, value)
-            return value
-        except Exception as exc:
-            _raise_storage(exc)
-        if not isinstance(value, Mapping) or value.get("version") != HYPIT_BINDING_VERSION or value.get("project_id") != project_id:
-            raise HTTPException(status_code=500, detail="Hypit 项目绑定快照损坏，原文件已保留")
-        defaults = value.get("defaults")
-        if not isinstance(defaults, Mapping):
-            raise HTTPException(status_code=500, detail="Hypit 项目绑定默认模型格式损坏，原文件已保留")
+        # binding URL 是旧客户端的兼容入口，但不再创建或读取项目级模型快照。
+        # 历史 data/hypit_bindings/<project_id>.json 保留在原处，仅供追溯，不能
+        # 反向决定新版运行模型。
+        settings = settings_record()
         return {
             "version": HYPIT_BINDING_VERSION,
             "project_id": project_id,
-            "defaults": {slot: _normalise_slot(defaults.get(slot), slot) for slot in _SLOTS},
-            "created_at": value.get("created_at"), "revision": int(value.get("revision") or 1),
+            "defaults": _copy(settings["defaults"]),
+            "created_at": settings.get("created_at"),
+            "updated_at": settings.get("updated_at"),
+            "revision": settings.get("revision", 1),
+            "source": "module_settings",
         }
 
     def read_task(project_id: str, request_id: str) -> Dict[str, Any]:
@@ -799,6 +973,7 @@ def create_hypit_models_router(
     @router.get("/capabilities")
     async def capabilities() -> Dict[str, Any]:
         catalog = catalog_record()
+        from studio_module_models import hypit_profile_reasons, select_options_for_slot
         supported = []
         for item in SUPPORTED_HYPIT_CAPABILITIES:
             models = []
@@ -808,6 +983,8 @@ def create_hypit_models_router(
                 provider_id = _provider_id(provider)
                 for model in _provider_models(provider):
                     if model.get("node_type") != item["node_type"]:
+                        continue
+                    if hypit_profile_reasons(item['slot'], model):
                         continue
                     models.append(
                         {
@@ -820,6 +997,9 @@ def create_hypit_models_router(
                             "readiness": model.get("readiness"),
                             "runnable": model.get("runnable"),
                             "validation_mode": model.get("validation_mode"),
+                            "region": model.get("region") or "",
+                            "regions": _copy(model.get("regions") or []),
+                            "region_profiles": _copy(model.get("region_profiles") or {}),
                             "parameters": _copy(model.get("parameters") or {}),
                             "inputs": _copy(model.get("inputs") or {}),
                         }
@@ -831,6 +1011,8 @@ def create_hypit_models_router(
             "supported_capabilities": supported,
             "unsupported_capabilities": _copy(list(UNSUPPORTED_HYPIT_CAPABILITIES)),
             "defaults": settings_record()["defaults"],
+            "slot_options": {item['slot']: select_options_for_slot(catalog.get('options') or [], 'hypit', item['slot'])['options']
+                             for item in SUPPORTED_HYPIT_CAPABILITIES} if 'options' in catalog else None,
         }
 
     @router.get("/settings")
@@ -840,27 +1022,41 @@ def create_hypit_models_router(
     @router.put("/settings")
     @router.post("/settings")
     async def save_settings(payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
-        current = settings_record()
-        raw_defaults = payload.get("defaults") if isinstance(payload, Mapping) else None
-        if raw_defaults is None and isinstance(payload, Mapping):
-            raw_defaults = payload.get("slots")
-        if raw_defaults is None:
-            raw_defaults = payload
-        if not isinstance(raw_defaults, Mapping):
-            raise HTTPException(status_code=400, detail="Hypit 默认模型必须是对象")
-        merged = _copy(current["defaults"])
-        for key, value in raw_defaults.items():
-            if key not in _SLOTS:
-                raise HTTPException(status_code=400, detail=f"不支持的 Hypit 模型槽位：{key}")
-            merged[key] = _normalise_slot(value, key)
-        defaults = validate_settings(merged)
-        record = {"version": HYPIT_SETTINGS_VERSION, "defaults": defaults, "updated_at": _now()}
         with lock:
+            current = settings_record()
+            expected_revision = payload.get("expected_revision") if isinstance(payload, Mapping) else None
+            if expected_revision is not None and (isinstance(expected_revision, bool) or expected_revision != current.get("revision", 1)):
+                raise HTTPException(409, detail="Hypit 模块模型设置已更新，请重新读取")
+            raw_defaults = payload.get("defaults") if isinstance(payload, Mapping) else None
+            if raw_defaults is None and isinstance(payload, Mapping):
+                raw_defaults = payload.get("slots")
+            if raw_defaults is None:
+                raw_defaults = {key: value for key, value in payload.items()
+                                if key not in {"expected_revision", "revision", "version"}}
+            if not isinstance(raw_defaults, Mapping):
+                raise HTTPException(status_code=400, detail="Hypit 默认模型必须是对象")
+            merged = _copy(current["defaults"])
+            for key, value in raw_defaults.items():
+                if key not in _SLOTS:
+                    raise HTTPException(status_code=400, detail=f"不支持的 Hypit 模型槽位：{key}")
+                merged[key] = _normalise_slot(value, key)
+            if payload.get('parameter_mode') == 'per_request':
+                for value in merged.values():
+                    value['parameters'] = {}
+            defaults = validate_settings(merged, current['defaults'])
+            now = _now()
+            record = {
+                "version": HYPIT_SETTINGS_VERSION,
+                "defaults": defaults,
+                "created_at": current.get("created_at") or now,
+                "updated_at": now,
+                "revision": current.get("revision", 1) + 1,
+            }
             try:
                 write_json(settings_path, record)
             except Exception as exc:
                 _raise_storage(exc)
-        return record
+            return record
 
     @router.get("/projects/{project_id}/binding")
     async def get_binding(project_id: str) -> Dict[str, Any]:
@@ -881,15 +1077,38 @@ def create_hypit_models_router(
         _reject_secrets(payload)
         with lock:
             current = read_binding(project_id)
-            if payload.get("expected_revision") != current.get("revision", 1):
-                raise HTTPException(409, detail="项目模型设置已更新，请重新读取")
+            expected_revision = payload.get("expected_revision")
+            if isinstance(expected_revision, bool) or expected_revision != current.get("revision", 1):
+                raise HTTPException(409, detail="Hypit 模块模型设置已更新，请重新读取")
             defaults = payload.get("defaults")
             if not isinstance(defaults, Mapping) or set(defaults) - set(_SLOTS):
-                raise HTTPException(400, detail="项目模型设置无效")
-            updated = {**current, "defaults": validate_settings({**current["defaults"], **defaults}),
-                       "revision": current.get("revision", 1) + 1, "updated_at": _now()}
-            write_json(binding_path(project_id), updated)
-            return updated
+                raise HTTPException(400, detail="Hypit 模块模型设置无效")
+            settings = settings_record()
+            merged = _copy(settings["defaults"])
+            for key, value in defaults.items():
+                merged[key] = _normalise_slot(value, key)
+            validated = validate_settings(merged)
+            now = _now()
+            updated_settings = {
+                "version": HYPIT_SETTINGS_VERSION,
+                "defaults": validated,
+                "created_at": settings.get("created_at") or now,
+                "updated_at": now,
+                "revision": settings.get("revision", 1) + 1,
+            }
+            try:
+                write_json(settings_path, updated_settings)
+            except Exception as exc:
+                _raise_storage(exc)
+            return {
+                "version": HYPIT_BINDING_VERSION,
+                "project_id": project_id,
+                "defaults": _copy(validated),
+                "created_at": updated_settings["created_at"],
+                "updated_at": updated_settings["updated_at"],
+                "revision": updated_settings["revision"],
+                "source": "module_settings",
+            }
 
     @router.post("/projects/{project_id}/requests")
     async def submit_request(project_id: str, payload: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
@@ -899,24 +1118,35 @@ def create_hypit_models_router(
             raise HTTPException(status_code=400, detail="Hypit 请求必须是对象")
         _reject_secrets(payload)
         request_id = _safe_identifier(payload.get("request_id"), "request_id", _REQUEST_ID)
+        input_fingerprint = _request_fingerprint(payload)
+        target = task_path(project_id, request_id)
+        # 先按调用方输入查已有任务。这样模块设置变化、当前模型下线或目录
+        # 刷新都不会把同一个 request_id 重新投影成另一条收费任务。
+        with lock:
+            if target.exists():
+                existing = read_task(project_id, request_id)
+                existing_fingerprint = existing.get("input_fingerprint") or existing.get("fingerprint")
+                if existing_fingerprint != input_fingerprint:
+                    raise HTTPException(status_code=409, detail="相同 request_id 不能用于不同输入")
+                return _public_task(existing)
         with lock:
             binding = read_binding(project_id)
         catalog = catalog_record()
         projected = _project_constraints(payload, binding, catalog)
-        fingerprint = _hash({"request": projected, "capability": payload.get("capability"), "returns": payload.get("returns")})
-        target = task_path(project_id, request_id)
         with lock:
             if target.exists():
                 existing = read_task(project_id, request_id)
-                if existing.get("fingerprint") != fingerprint:
-                    raise HTTPException(status_code=409, detail="相同 request_id 不能用于不同模型请求")
+                existing_fingerprint = existing.get("input_fingerprint") or existing.get("fingerprint")
+                if existing_fingerprint != input_fingerprint:
+                    raise HTTPException(status_code=409, detail="相同 request_id 不能用于不同输入")
                 return _public_task(existing)
             record: Dict[str, Any] = {
                 "version": HYPIT_TASK_VERSION,
                 "task_id": f"hypit_{_task_key(project_id, request_id)[:32]}",
                 "project_id": project_id,
                 "request_id": request_id,
-                "fingerprint": fingerprint,
+                "fingerprint": input_fingerprint,
+                "input_fingerprint": input_fingerprint,
                 "status": "queued",
                 "request": projected,
                 "created_at": _now(),

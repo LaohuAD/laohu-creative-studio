@@ -248,3 +248,9 @@ body.studio-theme-dark .pfield-bool-track:not(.on) .pfield-bool-thumb { backgrou
 .mini-port.out { right:-5px; }
 .mini-run { margin-top:10px; }
 @media (max-width:1100px) { .layout { grid-template-columns:1fr; } .sidebar, .preview { position:static; } }
+
+/* ===== 本地 ComfyUI 连接卡片 ===== */
+.workflow-panel-comfy { border-color:var(--studio-line); border-radius:var(--studio-radius-panel); box-shadow:var(--studio-shadow-soft); background:var(--studio-surface); }
+.workflow-panel-comfy .side-title { color:var(--studio-muted); }
+.workflow-panel-comfy .upload-btn { border-color:var(--studio-line-strong); border-radius:var(--studio-radius-control); }
+.workflow-panel-comfy .upload-btn:hover { border-color:var(--studio-accent); background:var(--studio-accent-soft); color:var(--studio-text); }

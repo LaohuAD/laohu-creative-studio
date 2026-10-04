@@ -1,0 +1,118 @@
+{
+  "note": "P5 执行 dry-run：只做静态请求构造与运行前校验，不联网、不产生付费任务（§0.2、§16 P5）。空输入被阻断是预期行为（B01），用于证明预检确实在提交前生效。",
+  "catalog_revision": "rev_36826cae82542aff",
+  "option_count": 635,
+  "records": [
+    {
+      "node_type": "audio_generation",
+      "option_id": "opt_9cafd10c9a026f83",
+      "connection_id": "ai-money",
+      "region_id": "",
+      "catalog_model_id": "minimax-speech-2.8-hd",
+      "operation": "text_to_speech",
+      "attempts": [
+        {
+          "case": "empty-inputs",
+          "status": "blocked",
+          "reason": "400: 模型家族 ai-money-minimax 没有匹配当前输入和参数的任务变体。原因：模型 minimax-speech-2.8-hd 至少需要 1 个文本输入；模型 minimax-speech-2.8-turbo 至少需要 1 个文本输入"
+        },
+        {
+          "case": "prompt-only",
+          "status": "dry_run_ok",
+          "upstream_payload_keys": [],
+          "model_id": "minimax-speech-2.8-hd",
+          "operation": "text_to_speech"
+        }
+      ],
+      "network_requested": false
+    },
+    {
+      "node_type": "image_generation",
+      "option_id": "opt_576a3b5e0d72274b",
+      "connection_id": "ai-money",
+      "region_id": "",
+      "catalog_model_id": "laohu-image-g2-i2i",
+      "operation": "image_to_image",
+      "attempts": [
+        {
+          "case": "empty-inputs",
+          "status": "blocked",
+          "reason": "400: 模型家族 ai-money-gpt-image-2 没有匹配当前输入和参数的任务变体。原因：模型 laohu-image-g2-i2i 至少需要 1 个文本输入"
+        },
+        {
+          "case": "prompt-only",
+          "status": "blocked",
+          "reason": "400: 模型家族 ai-money-gpt-image-2 没有匹配当前输入和参数的任务变体。原因：模型 laohu-image-g2-i2i 至少需要 1 个图片输入"
+        }
+      ],
+      "network_requested": false
+    },
+    {
+      "node_type": "music_generation",
+      "option_id": "opt_61c34c65785f763b",
+      "connection_id": "ai-money",
+      "region_id": "",
+      "catalog_model_id": "flowmusic-cover",
+      "operation": "flowmusic_cover",
+      "attempts": [
+        {
+          "case": "empty-inputs",
+          "status": "blocked",
+          "reason": "400: 模型家族 ai-money-flowmusic-lyria-3-5 没有匹配当前输入和参数的任务变体。原因：模型 flowmusic-cover 缺少必填参数：clip_id, instruction"
+        },
+        {
+          "case": "prompt-only",
+          "status": "blocked",
+          "reason": "400: 模型家族 ai-money-flowmusic-lyria-3-5 没有匹配当前输入和参数的任务变体。原因：模型 flowmusic-cover 不支持文本输入"
+        }
+      ],
+      "network_requested": false
+    },
+    {
+      "node_type": "text_generation",
+      "option_id": "opt_9a7c5d735051dda5",
+      "connection_id": "ai-money",
+      "region_id": "",
+      "catalog_model_id": "deepseek/deepseek-v4-flash",
+      "operation": "chat",
+      "attempts": [
+        {
+          "case": "empty-inputs",
+          "status": "blocked",
+          "reason": "400: 模型家族 ai-money-deepseek-deepseek-v4 没有匹配当前输入和参数的任务变体。原因：模型 deepseek/deepseek-v4-flash 至少需要 1 个文本输入；模型 deepseek/deepseek-v4-pro 至少需要 1 个文本输入"
+        },
+        {
+          "case": "prompt-only",
+          "status": "dry_run_ok",
+          "upstream_payload_keys": [],
+          "model_id": "deepseek/deepseek-v4-flash",
+          "operation": "chat"
+        }
+      ],
+      "network_requested": false
+    },
+    {
+      "node_type": "video_generation",
+      "option_id": "opt_a6a384067221cb81",
+      "connection_id": "ai-money",
+      "region_id": "",
+      "catalog_model_id": "kling-elements-advanced",
+      "operation": "special_video",
+      "attempts": [
+        {
+          "case": "empty-inputs",
+          "status": "blocked",
+          "reason": "400: 模型家族 ai-money-kling-elements-advanced 没有匹配当前输入和参数的任务变体。原因：模型 kling-elements-advanced 至少需要 1 个文本输入"
+        },
+        {
+          "case": "prompt-only",
+          "status": "dry_run_ok",
+          "upstream_payload_keys": [],
+          "model_id": "kling-elements-advanced",
+          "operation": "special_video"
+        }
+      ],
+      "network_requested": false
+    }
+  ]
+}

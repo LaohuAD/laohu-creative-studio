@@ -1,4 +1,17 @@
 /* Hypit 设置只增加自己的作用域，避免改动现有平台和 ComfyUI 样式。 */
+.hypit-subnav,
+.hypit-settings-block {
+    --line: var(--studio-line, #ded8ce);
+    --line-strong: var(--studio-line-strong, #c7beb1);
+    --soft: var(--studio-soft, #f0ebe2);
+    --panel: var(--studio-surface, #fffaf2);
+    --text: var(--studio-text, #30363b);
+    --muted: var(--studio-muted, #6f7b83);
+    --bg: var(--studio-bg, #f7f3eb);
+    color: var(--text);
+    font-family: var(--studio-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif);
+}
+
 .hypit-subnav {
     display: flex;
     flex-direction: column;
@@ -13,14 +26,14 @@
 
 .hypit-subnav-item:hover,
 .hypit-subnav-item.active {
-    border-color: var(--line-strong);
-    color: var(--text);
-    background: var(--panel);
+    border-color: var(--studio-accent, var(--line-strong));
+    color: var(--studio-accent-strong, var(--text));
+    background: var(--studio-accent-soft, var(--panel));
 }
 
 .hypit-logo-mark {
-    background: var(--text);
-    color: var(--bg);
+    background: var(--studio-accent, var(--text));
+    color: var(--studio-strong-text, var(--bg));
     font-size: 15px;
     font-weight: 950;
     letter-spacing: -.06em;
@@ -51,11 +64,11 @@
 }
 
 .hypit-settings-status[data-state="error"] {
-    color: #dc2626;
+    color: var(--studio-danger, #b85c62);
 }
 
 .hypit-settings-status[data-state="success"] {
-    color: #059669;
+    color: #3b8068;
 }
 
 .hypit-settings-note {
@@ -102,20 +115,87 @@
 
 .hypit-slot-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
 }
 
 .hypit-slot-card {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 13px;
-    padding: 16px;
+    gap: 8px;
+    padding: 10px 12px;
     border: 1px solid var(--line);
     border-radius: 16px;
     background: var(--panel);
     box-shadow: 0 8px 22px rgba(15, 23, 42, .045);
+}
+.hypit-model-config-fallback { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-bottom:4px; }
+.hypit-model-config-fallback label { display:grid; gap:5px; min-width:0; color:var(--muted); font-size:10px; }
+.hypit-model-config-fallback select { width:100%; min-width:0; height:38px; padding:0 9px; border:1px solid var(--line); border-radius:9px; background:var(--card); color:var(--text); text-align:center; }
+@media(max-width:700px){.hypit-model-config-fallback{grid-template-columns:1fr;}}
+
+/* Hypit 仅配置模型，运行参数由每次复刻请求提供。 */
+.hypit-slot-card .model-config-module { width: 100%; }
+.hypit-slot-card .model-config-module .model-config-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+}
+.hypit-slot-card .model-config-module .model-config-trigger,
+.hypit-slot-card .model-config-module .model-config-summary {
+    width: 100%;
+    max-width: none;
+    min-height: 34px;
+    justify-content: space-between;
+    text-align: left;
+}
+.hypit-slot-card .model-config-module .model-config-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+}
+.hypit-slot-card .model-config-module .model-config-popover.is-module {
+    position: static;
+    width: 100%;
+    /* 外层面板固定；滚动只发生在三个选项列表内部。 */
+    height: auto;
+    max-height: none;
+    overflow: hidden;
+    margin-top: 6px;
+    border-radius: 10px;
+    box-shadow: none;
+}
+.hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-stages {
+    height: 285px;
+    max-height: 285px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hypit-slot-card .model-config-module .model-config-option-label {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-parameters {
+    max-height: 285px;
+    overflow-y: auto;
+}
+
+@media (max-height: 760px) {
+    .hypit-slot-card .model-config-module .model-config-popover.is-module {
+        height: auto;
+        max-height: none;
+    }
+
+    .hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-stages,
+    .hypit-slot-card .model-config-module .model-config-popover.is-module .model-config-parameters {
+        height: 225px;
+        max-height: 225px;
+    }
 }
 
 .hypit-slot-card.is-disabled {
@@ -204,8 +284,8 @@
 .hypit-field select:focus,
 .hypit-parameter-field input:focus,
 .hypit-parameter-field select:focus {
-    border-color: var(--line-strong);
-    box-shadow: 0 0 0 3px rgba(100, 116, 139, .13);
+    border-color: var(--studio-info, var(--line-strong));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--studio-info, #7891a4) 18%, transparent);
 }
 
 .hypit-parameters {
@@ -275,11 +355,8 @@
     display: flex !important;
 }
 
-.layout.hypit-settings-mode .provider-list,
-.layout.hypit-settings-mode .add-btn,
-.layout.hypit-settings-mode .api-link-btn,
-.layout.hypit-settings-mode .cli-quick-group {
-    display: none;
+.layout.hypit-settings-mode #canvasModelSettingsBlock {
+    display: none !important;
 }
 
 @media (max-width: 860px) {
@@ -296,7 +373,6 @@
         flex-direction: column;
     }
 
-    .hypit-slot-grid,
     .hypit-capability-summary,
     .hypit-model-fields,
     .hypit-parameters {
@@ -326,7 +402,7 @@ body.studio-theme-dark .hypit-settings-status[data-state="success"] {
 
 .hypit-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(56px,1fr));gap:5px;}
 .hypit-choices button{min-height:32px;border:1px solid var(--line);border-radius:8px;background:var(--soft);color:var(--text);font:inherit;font-size:12px;cursor:pointer;}
-.hypit-choices button.active{background:var(--text);color:var(--panel);border-color:var(--text);}
-.hypit-choices button:hover{box-shadow:inset 0 0 0 1px var(--text);}
+.hypit-choices button.active{background:var(--studio-info, var(--text));color:var(--studio-card, var(--panel));border-color:var(--studio-info, var(--text));}
+.hypit-choices button:hover{box-shadow:inset 0 0 0 1px var(--studio-info, var(--text));}
 .hypit-model-fields{grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,.85fr);}
 @media(max-width:960px){.hypit-slot-grid{grid-template-columns:1fr;}}

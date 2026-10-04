@@ -1,22 +1,25 @@
-/* 共用项目列表。中性工具界面只保留一个蓝色强调色。 */
+/* 共用项目列表：与工作台共享暖白、蓝灰和香槟金语义变量。 */
 :root {
-    --sp-page: #f7f8fa;
-    --sp-surface: rgba(255, 255, 255, .94);
-    --sp-card: #ffffff;
-    --sp-soft: #f3f5f8;
-    --sp-soft-strong: #e9edf3;
-    --sp-line: #e1e6ee;
-    --sp-line-strong: #c6d0dd;
-    --sp-text: #172033;
-    --sp-muted: #667085;
-    --sp-faint: #98a2b3;
-    --sp-accent: #315fe8;
-    --sp-accent-soft: #edf3ff;
-    --sp-accent-line: #bfd0ff;
-    --sp-danger: #c83f4a;
-    --sp-danger-soft: #fff1f2;
-    --sp-shadow: 0 12px 28px rgba(22, 35, 58, .07);
-    --sp-shadow-strong: 0 20px 48px rgba(22, 35, 58, .13);
+    --sp-page: var(--studio-bg, #f7f3eb);
+    --sp-surface: var(--studio-surface, #fffaf2);
+    --sp-card: var(--studio-card, #fffdf8);
+    --sp-soft: var(--studio-soft, #f0ebe2);
+    --sp-soft-strong: var(--studio-soft-strong, #e4ddd2);
+    --sp-line: var(--studio-line, #ded8ce);
+    --sp-line-strong: var(--studio-line-strong, #c7beb1);
+    --sp-text: var(--studio-text, #30363b);
+    --sp-muted: var(--studio-muted, #6f7b83);
+    --sp-faint: var(--studio-faint, #98a0a3);
+    --sp-accent: var(--studio-accent, #b48a5a);
+    --sp-accent-strong: var(--studio-accent-strong, #916a43);
+    --sp-accent-soft: var(--studio-accent-soft, rgba(180, 138, 90, .14));
+    --sp-accent-line: var(--studio-accent-line, rgba(180, 138, 90, .38));
+    --sp-strong-text: var(--studio-strong-text, #30363b);
+    --sp-info: var(--studio-info, #7891a4);
+    --sp-danger: var(--studio-danger, #b85c62);
+    --sp-danger-soft: var(--studio-danger-soft, rgba(184, 92, 98, .12));
+    --sp-shadow: var(--studio-shadow-soft, 0 12px 28px rgba(74, 60, 44, .08));
+    --sp-shadow-strong: var(--studio-shadow-strong, 0 20px 48px rgba(74, 60, 44, .14));
     --sp-radius-control: 9px;
     --sp-radius-panel: 14px;
     --sp-radius-modal: 16px;
@@ -26,23 +29,26 @@ html.studio-theme-dark,
 html.theme-dark,
 body.studio-theme-dark,
 body.theme-dark {
-    --sp-page: #0f141d;
-    --sp-surface: rgba(19, 26, 38, .94);
-    --sp-card: #151d2a;
-    --sp-soft: #1b2534;
-    --sp-soft-strong: #273449;
-    --sp-line: #2b3a50;
-    --sp-line-strong: #4a5e7b;
-    --sp-text: #edf2f8;
-    --sp-muted: #b8c3d2;
-    --sp-faint: #8795aa;
-    --sp-accent: #9db5ff;
-    --sp-accent-soft: rgba(49, 95, 232, .18);
-    --sp-accent-line: rgba(157, 181, 255, .38);
-    --sp-danger: #ff9ca7;
-    --sp-danger-soft: rgba(200, 63, 74, .18);
-    --sp-shadow: 0 14px 34px rgba(0, 0, 0, .22);
-    --sp-shadow-strong: 0 24px 56px rgba(0, 0, 0, .36);
+    --sp-page: var(--studio-bg, #202528);
+    --sp-surface: var(--studio-surface, #282d2f);
+    --sp-card: var(--studio-card, #303638);
+    --sp-soft: var(--studio-soft, #252a2d);
+    --sp-soft-strong: var(--studio-soft-strong, #3a4245);
+    --sp-line: var(--studio-line, #465055);
+    --sp-line-strong: var(--studio-line-strong, #627078);
+    --sp-text: var(--studio-text, #f2eee7);
+    --sp-muted: var(--studio-muted, #bec5c4);
+    --sp-faint: var(--studio-faint, #929da1);
+    --sp-accent: var(--studio-accent, #d4b47a);
+    --sp-accent-strong: var(--studio-accent-strong, #ecd29b);
+    --sp-accent-soft: var(--studio-accent-soft, rgba(212, 180, 122, .16));
+    --sp-accent-line: var(--studio-accent-line, rgba(212, 180, 122, .42));
+    --sp-strong-text: var(--studio-strong-text, #272b2c);
+    --sp-info: var(--studio-info, #a7bac4);
+    --sp-danger: var(--studio-danger, #ed9a96);
+    --sp-danger-soft: var(--studio-danger-soft, rgba(237, 154, 150, .16));
+    --sp-shadow: var(--studio-shadow-soft, 0 14px 34px rgba(0, 0, 0, .22));
+    --sp-shadow-strong: var(--studio-shadow-strong, 0 24px 56px rgba(0, 0, 0, .36));
 }
 
 * { box-sizing: border-box; }
@@ -54,7 +60,7 @@ body {
     overflow: auto;
     color: var(--sp-text);
     background: var(--sp-page);
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-family: var(--studio-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif);
     -webkit-font-smoothing: antialiased;
 }
 
@@ -116,12 +122,12 @@ input:focus-visible {
     place-items: center;
     width: 42px;
     height: 42px;
-    color: #fff;
-    background: #315fe8;
+    color: var(--sp-strong-text);
+    background: var(--sp-accent);
     border-radius: 12px;
 }
 
-.studio-project-mark-hypit { background: #55616f; }
+.studio-project-mark-hypit { background: var(--sp-info); }
 
 .studio-project-mark svg { width: 21px; height: 21px; stroke-width: 1.8; }
 
@@ -283,13 +289,13 @@ input:focus-visible {
 }
 
 .studio-primary-button {
-    color: #fff;
+    color: var(--sp-strong-text);
     background: var(--sp-accent);
     border: 1px solid var(--sp-accent);
-    box-shadow: 0 7px 16px rgba(49, 95, 232, .18);
+    box-shadow: 0 7px 16px var(--sp-accent-line);
 }
 
-.studio-primary-button:hover { background: #274fc8; border-color: #274fc8; box-shadow: 0 10px 22px rgba(49, 95, 232, .24); }
+.studio-primary-button:hover { background: var(--sp-accent-strong, var(--sp-accent)); border-color: var(--sp-accent-strong, var(--sp-accent)); box-shadow: 0 10px 22px var(--sp-accent-line); }
 .studio-primary-button:active,
 .studio-secondary-button:active { transform: translateY(1px); }
 
@@ -419,8 +425,8 @@ input:focus-visible {
 
 .studio-card-action:hover { color: var(--sp-text); background: var(--sp-card); border-color: var(--sp-line-strong); }
 .studio-card-action:active { transform: translateY(1px); }
-.studio-card-action.open { color: #fff; background: var(--sp-accent); border-color: var(--sp-accent); }
-.studio-card-action.open:hover { color: #fff; background: #274fc8; border-color: #274fc8; }
+.studio-card-action.open { color: var(--sp-strong-text); background: var(--sp-accent); border-color: var(--sp-accent); }
+.studio-card-action.open:hover { color: var(--sp-strong-text); background: var(--sp-accent-strong, var(--sp-accent)); border-color: var(--sp-accent-strong, var(--sp-accent)); }
 .studio-card-action.danger { color: var(--sp-danger); }
 .studio-card-action.danger:hover { background: var(--sp-danger-soft); border-color: color-mix(in srgb, var(--sp-danger) 42%, var(--sp-line)); }
 .studio-card-action svg { width: 14px; height: 14px; }
@@ -434,7 +440,8 @@ input:focus-visible {
     align-items: center;
     justify-content: space-between;
     gap: 18px;
-    margin-top: 28px;
+    margin-top: 0;
+    margin-bottom: 28px;
     padding: 15px 17px;
     background: var(--sp-soft);
     border: 1px solid var(--sp-line);
@@ -445,7 +452,7 @@ input:focus-visible {
 .studio-legacy-copy strong { color: var(--sp-text); font-size: 12px; }
 .studio-legacy-copy span { color: var(--sp-muted); font-size: 11px; line-height: 1.45; }
 .studio-legacy-actions { flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.studio-trash-badge { min-width: 17px; padding: 1px 5px; color: #fff; background: var(--sp-danger); border-radius: 999px; font-size: 10px; }
+.studio-trash-badge { min-width: 17px; padding: 1px 5px; color: var(--sp-strong-text); background: var(--sp-danger); border-radius: 999px; font-size: 10px; }
 
 .studio-open-fallback {
     position: fixed;

@@ -4,7 +4,7 @@
   "provider_name": "即梦 CLI",
   "protocol": "jimeng",
   "status": "maintained",
-  "updated_at": "2026-09-12",
+  "updated_at": "2026-09-24",
   "sources": [
     {
       "path": "dreamina text2image --help / dreamina image2image --help",
@@ -41,6 +41,12 @@
       "checked_at": "2026-09-12",
       "path": "dreamina text2image --help; 用户服务端 logid=202609122315201921680012536243EAB",
       "note": "5.0Pro 服务端拒绝 1k，明确接受 1.5k/2k/4k。按此模型的服务端契约提供选项，CLI 旧帮助不作为删减合法选项的依据；选择 1.5K 原样映射为 --resolution_type=1.5k。未进行付费实测。"
+    },
+    {
+      "path": "dreamina text2image --help / dreamina image2image --help",
+      "kind": "runtime_verified",
+      "checked_at": "2026-09-24",
+      "note": "核对全部图片版本的八个固定比例及分辨率；5.0Pro 继续以 2026-09-12 服务端证据保留 1.5k/2k/4k，不向模型提交生成任务。"
     }
   ],
   "models": [
@@ -72,7 +78,17 @@
         "aspect_ratio": {
           "level": "optional",
           "type": "enum",
-          "source_field": "ratio"
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
         },
         "resolution": {
           "level": "optional",
@@ -96,7 +112,7 @@
         "prompt": "prompt",
         "reference": "images",
         "aspect_ratio": "ratio",
-        "resolution": "resolution",
+        "resolution": "resolution_type",
         "count": "count"
       },
       "output": {
@@ -187,6 +203,16 @@
         "generate_audio": {
           "level": "optional",
           "type": "boolean"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p"
+          ],
+          "default": "720p",
+          "source_field": "video_resolution"
         }
       },
       "request_mapping": {
@@ -196,7 +222,8 @@
         "reference": "images",
         "duration": "duration",
         "aspect_ratio": "ratio",
-        "generate_audio": "generate_audio"
+        "generate_audio": "generate_audio",
+        "resolution": "video_resolution"
       },
       "output": {
         "media_type": "video",
@@ -329,6 +356,1078 @@
           "multimodal_to_video": 15000,
           "video_edit": 15000
         }
+      }
+    },
+    {
+      "model_id": "5.0",
+      "family_id": "jimeng-image-5-0",
+      "family_name": "即梦图片 5.0",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "2k",
+            "4k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "4.7",
+      "family_id": "jimeng-image-4-7",
+      "family_name": "即梦图片 4.7",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "2k",
+            "4k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "4.6",
+      "family_id": "jimeng-image-4-6",
+      "family_name": "即梦图片 4.6",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "2k",
+            "4k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "4.5",
+      "family_id": "jimeng-image-4-5",
+      "family_name": "即梦图片 4.5",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "2k",
+            "4k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "4.1",
+      "family_id": "jimeng-image-4-1",
+      "family_name": "即梦图片 4.1",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "2k",
+            "4k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "4.0",
+      "family_id": "jimeng-image-4-0",
+      "family_name": "即梦图片 4.0",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "2k",
+            "4k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "3.1",
+      "family_id": "jimeng-image-3-1",
+      "family_name": "即梦图片 3.1",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "1k",
+            "2k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "3.0",
+      "family_id": "jimeng-image-3-0",
+      "family_name": "即梦图片 3.0",
+      "variant_id": "text_or_image_to_image",
+      "node_type": "image_generation",
+      "operation": "text_to_image_or_image_to_image",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "21:9",
+            "16:9",
+            "3:2",
+            "4:3",
+            "1:1",
+            "3:4",
+            "2:3",
+            "9:16"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "resolution_type",
+          "default": "2k",
+          "options": [
+            "1k",
+            "2k"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "ratio",
+        "count": "count",
+        "resolution": "resolution_type"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 4,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2image",
+          "image2image"
+        ]
+      }
+    },
+    {
+      "model_id": "seedance2.0_vip",
+      "family_id": "jimeng-seedance-2.0",
+      "family_name": "Seedance 2.0",
+      "variant_id": "seedance2.0_vip",
+      "variant_name": "Seedance 2.0 VIP",
+      "node_type": "video_generation",
+      "operation": "text_to_video_or_image_to_video",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 4000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 3,
+          "role": "source_video"
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 3,
+          "role": "reference_audio"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 4,
+          "max": 15,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "1:1",
+            "3:4",
+            "16:9",
+            "4:3",
+            "9:16",
+            "21:9"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p"
+          ],
+          "default": "720p",
+          "source_field": "video_resolution"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "first_frame": "first_frame",
+        "last_frame": "last_frame",
+        "reference": "images",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "generate_audio": "generate_audio",
+        "resolution": "video_resolution"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2video",
+          "image2video",
+          "frames2video",
+          "multimodal2video"
+        ]
+      }
+    },
+    {
+      "model_id": "seedance2.0fast_vip",
+      "family_id": "jimeng-seedance-2.0",
+      "family_name": "Seedance 2.0",
+      "variant_id": "seedance2.0fast_vip",
+      "variant_name": "Seedance 2.0 Fast VIP",
+      "node_type": "video_generation",
+      "operation": "text_to_video_or_image_to_video",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 4000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 3,
+          "role": "source_video"
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 3,
+          "role": "reference_audio"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 4,
+          "max": 15,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "1:1",
+            "3:4",
+            "16:9",
+            "4:3",
+            "9:16",
+            "21:9"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p"
+          ],
+          "default": "720p",
+          "source_field": "video_resolution"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "first_frame": "first_frame",
+        "last_frame": "last_frame",
+        "reference": "images",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "generate_audio": "generate_audio",
+        "resolution": "video_resolution"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2video",
+          "image2video",
+          "frames2video",
+          "multimodal2video"
+        ]
+      }
+    },
+    {
+      "model_id": "seedance2.0fast",
+      "family_id": "jimeng-seedance-2.0",
+      "family_name": "Seedance 2.0",
+      "variant_id": "seedance2.0fast",
+      "variant_name": "Seedance 2.0 Fast",
+      "node_type": "video_generation",
+      "operation": "text_to_video_or_image_to_video",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 4000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 3,
+          "role": "source_video"
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 3,
+          "role": "reference_audio"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 4,
+          "max": 15,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "1:1",
+            "3:4",
+            "16:9",
+            "4:3",
+            "9:16",
+            "21:9"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p"
+          ],
+          "default": "720p",
+          "source_field": "video_resolution"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "first_frame": "first_frame",
+        "last_frame": "last_frame",
+        "reference": "images",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "generate_audio": "generate_audio",
+        "resolution": "video_resolution"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2video",
+          "image2video",
+          "frames2video",
+          "multimodal2video"
+        ]
+      }
+    },
+    {
+      "model_id": "seedance2.0mini",
+      "family_id": "jimeng-seedance-2.0",
+      "family_name": "Seedance 2.0",
+      "variant_id": "seedance2.0mini",
+      "variant_name": "Seedance 2.0 Mini",
+      "node_type": "video_generation",
+      "operation": "text_to_video_or_image_to_video",
+      "status": "confirmed",
+      "version": 1,
+      "evidence_level": "runtime_verified",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt",
+          "max_chars": 4000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 10,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 3,
+          "role": "source_video"
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 3,
+          "role": "reference_audio"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 4,
+          "max": 15,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "source_field": "ratio",
+          "options": [
+            "1:1",
+            "3:4",
+            "16:9",
+            "4:3",
+            "9:16",
+            "21:9"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p"
+          ],
+          "default": "720p",
+          "source_field": "video_resolution"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "first_frame": "first_frame",
+        "last_frame": "last_frame",
+        "reference": "images",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "generate_audio": "generate_audio",
+        "resolution": "video_resolution"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "transport": "local_cli",
+        "commands": [
+          "text2video",
+          "image2video",
+          "frames2video",
+          "multimodal2video"
+        ]
       }
     }
   ],

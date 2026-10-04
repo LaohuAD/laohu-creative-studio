@@ -27,6 +27,7 @@ const TYPES = [
     { v:'audio', zh:'音频', en:'Audio' },
     { v:'boolean', zh:'开关', en:'Switch' },
 ];
+const AUTOSAVE_DELAY = 320;
 function currentLang(){ return window.StudioI18n?.lang?.() === 'en' ? 'en' : 'zh'; }
 function typeLabel(type){
     const item = TYPES.find(t => t.v === type);
@@ -140,10 +141,19 @@ const listEl = document.getElementById('workflowList');
 const workflowTitleInput = document.getElementById('workflowTitleInput');
 const subEl = document.getElementById('editorSub');
 const deleteBtn = document.getElementById('deleteBtn');
-const saveBtn = document.getElementById('saveBtn');
 const nodeListEl = document.getElementById('nodeList');
 const previewCard = document.getElementById('previewContent');
 const miniCanvasHost = document.getElementById('miniCanvasHost');
+
+let comfySaveTimer = null;
+let comfySavePending = null;
+let comfySaveSerial = Promise.resolve();
+let comfySaveRevision = 0;
+let workflowSaveTimer = null;
+let workflowSavePending = null;
+let workflowSaveSerial = Promise.resolve();
+let workflowSaveRevision = 0;
+let workflowSelectionRevision = 0;
 
 function setStatus(text){ statusEl.textContent = text || ''; }
 function broadcastComfyUiChange(type){
@@ -230,34 +240,109 @@ function renderComfyInstances(){
 function addComfyInstance(){
     comfyInstances = [...comfyInstances, ''];
     renderComfyInstances();
+    scheduleComfyInstancesSave(true);
 }
 function updateComfyInstance(index, value){
     comfyInstances[index] = value;
+    scheduleComfyInstancesSave();
 }
 function removeComfyInstance(index){
     comfyInstances = comfyInstances.filter((_, i) => i !== index);
     renderComfyInstances();
+    scheduleComfyInstancesSave(true);
 }
-async function saveComfyInstances(){
-    const cleaned = comfyInstances.map(s => String(s||'').trim()).filter(Boolean);
-    if(!cleaned.length){ await StudioDialog.alert('请至少填一个 ComfyUI 后端地址', {type:'warning'}); return; }
-    setStatus('保存中...');
+function scheduleComfyInstancesSave(immediate = false){
+    const cleaned = comfyInstances.map(s => String(s || '').trim()).filter(Boolean);
+    const revision = ++comfySaveRevision;
+    clearTimeout(comfySaveTimer);
+    comfySaveTimer = null;
+    if(!cleaned.length){
+        comfySavePending = null;
+        setStatus(tr('comfy.saveFailed'));
+        return Promise.resolve(false);
+    }
+    comfySavePending = { instances: cleaned, revision };
+    setStatus(tr('comfy.saving'));
+    if(immediate) return flushComfyInstancesSave();
+    comfySaveTimer = setTimeout(() => {
+        comfySaveTimer = null;
+        flushComfyInstancesSave();
+    }, AUTOSAVE_DELAY);
+    return Promise.resolve(true);
+}
+function flushComfyInstancesSave(){
+    clearTimeout(comfySaveTimer);
+    comfySaveTimer = null;
+    const draft = comfySavePending;
+    comfySavePending = null;
+    if(!draft) return comfySaveSerial;
+    const savePromise = comfySaveSerial.then(() => saveComfyInstances(draft));
+    comfySaveSerial = savePromise.catch(() => false);
+    return savePromise;
+}
+async function saveComfyInstances(draft){
+    if(!draft) return scheduleComfyInstancesSave(true);
+    if(!draft?.instances?.length) return false;
     try {
         const res = await fetch('/api/comfyui/instances', {
             method:'PUT',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({ instances: cleaned })
+            body:JSON.stringify({ instances: draft.instances })
         });
-        if(!res.ok) throw new Error((await res.json()).detail || '保存失败');
+        if(!res.ok){
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || tr('comfy.saveFailed'));
+        }
         const data = await res.json();
-        comfyInstances = data.instances || cleaned;
-        renderComfyInstances();
+        if(draft.revision === comfySaveRevision && !comfySavePending){
+            if(Array.isArray(data.instances)) comfyInstances = data.instances;
+            setStatus(tr('comfy.backendsSaved'));
+        }
         broadcastComfyUiChange('comfy-instances-changed');
-        setStatus('ComfyUI 后端地址已保存');
+        return true;
     } catch(e){
-        await StudioDialog.alert(e.message || '保存失败', {type:'warning'});
-        setStatus('保存失败');
+        if(draft.revision === comfySaveRevision && !comfySavePending) setStatus(tr('comfy.saveFailed'));
+        console.error(e);
+        return false;
     }
+}
+
+function cloneWorkflowConfig(config){
+    return JSON.parse(JSON.stringify(config));
+}
+function isCurrentWorkflowDraft(draft){
+    return selectedName === draft.name && currentConfig === draft.configRef;
+}
+function scheduleWorkflowSave(immediate = false){
+    if(!selectedName || !currentConfig) return Promise.resolve(false);
+    clearTimeout(workflowSaveTimer);
+    workflowSaveTimer = null;
+    workflowSavePending = {
+        name: selectedName,
+        config: cloneWorkflowConfig(currentConfig),
+        configRef: currentConfig,
+        revision: ++workflowSaveRevision,
+    };
+    setStatus(tr('comfy.saving'));
+    if(immediate) return flushWorkflowSave();
+    workflowSaveTimer = setTimeout(() => {
+        workflowSaveTimer = null;
+        flushWorkflowSave();
+    }, AUTOSAVE_DELAY);
+    return Promise.resolve(true);
+}
+function flushWorkflowSave(waitForQueue = false){
+    clearTimeout(workflowSaveTimer);
+    workflowSaveTimer = null;
+    const draft = workflowSavePending;
+    workflowSavePending = null;
+    if(draft){
+        const savePromise = workflowSaveSerial.then(() => onSave(draft));
+        workflowSaveSerial = savePromise.catch(() => false);
+        if(waitForQueue) return workflowSaveSerial;
+        return savePromise;
+    }
+    return waitForQueue ? workflowSaveSerial : Promise.resolve(true);
 }
 
 async function loadList(){
@@ -293,11 +378,15 @@ function renderList(){
 }
 
 async function selectWorkflow(name){
+    const selectionRevision = ++workflowSelectionRevision;
+    await flushWorkflowSave(true);
+    if(selectionRevision !== workflowSelectionRevision) return;
     selectedName = name;
     renderList();
     try {
         setStatus(tr('comfy.loading'));
         const data = await fetch(`/api/workflows/${encodeURIComponent(name)}`).then(r=>r.json());
+        if(selectionRevision !== workflowSelectionRevision) return;
         currentWorkflow = data.workflow;
         currentConfig = data.config || { title:name.replace('.json',''), fields:[] };
         if(!currentConfig.fields) currentConfig.fields = [];
@@ -361,6 +450,7 @@ function toggleField(node, input){
     }
     renderEditor();
     renderPreview();
+    scheduleWorkflowSave(true);
     // 浮窗打开时同步刷新浮窗内容
     if(popupNodeId === node) refreshPopupBody();
 }
@@ -415,10 +505,12 @@ function updateField(fieldId, key, value){
     if(key === 'name' || key === 'min' || key === 'max' || key === 'step' || key === 'default' || key === 'options' || key === 'random_enabled'){
         renderPreview();
         if(workspaceMode === 'canvas') renderMiniCanvasPreview(miniCanvasHost, true);
+        scheduleWorkflowSave(key === 'random_enabled');
         return;
     }
     renderEditor();
     renderPreview();
+    scheduleWorkflowSave(true);
     if(popupNodeId === f.node) refreshPopupBody();
 }
 
@@ -428,6 +520,7 @@ function updateWorkflowTitle(value){
     const item = workflows.find(w => w.name === selectedName);
     if(item) item.title = value || selectedName.replace('.json','');
     renderList();
+    scheduleWorkflowSave();
 }
 
 function setWorkspaceMode(mode){
@@ -440,7 +533,6 @@ function setWorkspaceMode(mode){
 function renderEditor(){
     if(!currentWorkflow){
         deleteBtn.style.display = 'none';
-        saveBtn.style.display = 'none';
         nodeListEl.innerHTML = '';
         document.getElementById('graphCard').style.display = 'none';
         document.getElementById('nodesToggle').style.display = 'none';
@@ -451,7 +543,6 @@ function renderEditor(){
     workflowTitleInput.value = currentConfig.title || selectedName.replace('.json','');
     subEl.textContent = tf('comfy.nodeStats', {nodes:Object.keys(currentWorkflow).length, fields:currentConfig.fields.length}) + (isBuiltin ? ` · ${tr('comfy.builtin')}` : '');
     deleteBtn.style.display = isBuiltin ? 'none' : 'inline-flex';
-    saveBtn.style.display = 'inline-flex';
 
     renderGraph();
     renderWorkspaceView();
@@ -848,17 +939,20 @@ function updateDropdownOption(fieldId, index, value, inputEl){
         }
     }
     renderPreview();  // 右侧预览的下拉选项实时同步
+    scheduleWorkflowSave();
 }
 function addDropdownOption(fieldId){
     const f = currentConfig.fields.find(x => x.id === fieldId); if(!f) return;
     f.options = [...(f.options || []), ''];
     renderPreview();
+    scheduleWorkflowSave(true);
     if(popupNodeId === f.node) refreshPopupBody();
 }
 function removeDropdownOption(fieldId, index){
     const f = currentConfig.fields.find(x => x.id === fieldId); if(!f) return;
     f.options = (f.options || []).filter((_, i) => i !== index);
     renderPreview();
+    scheduleWorkflowSave(true);
     if(popupNodeId === f.node) refreshPopupBody();
 }
 
@@ -1246,8 +1340,10 @@ function bindMiniCanvas(){
     window.onmouseup = () => {
         if(miniDrag?.type === 'pan') canvas.classList.remove('is-panning');
         const shouldRefresh = miniDrag?.type === 'card';
+        const shouldSave = shouldRefresh && !miniTestNodes.some(n => n.id === miniDrag?.id);
         miniDrag = null;
         if(shouldRefresh) renderWorkspaceView();
+        if(shouldSave) scheduleWorkflowSave(true);
     };
 }
 
@@ -1347,31 +1443,42 @@ async function onUpload(event){
     } catch(e){ await StudioDialog.alert(e.message || tr('comfy.uploadFailed'), {type:'warning'}); }
 }
 
-async function onSave(){
-    if(!selectedName || !currentConfig) return;
-    // 校验
-    for(const f of currentConfig.fields){
+async function onSave(draft){
+    if(!draft){
+        return scheduleWorkflowSave(true);
+    }
+    for(const f of draft.config.fields || []){
         if(!f.name || !f.name.trim()){
-            await StudioDialog.alert(tf('comfy.saveMissingName', {field:f.input}), {type:'warning'}); return;
+            if(isCurrentWorkflowDraft(draft) && draft.revision === workflowSaveRevision) setStatus(tr('comfy.saveFailed'));
+            return false;
         }
     }
-    setStatus(tr('comfy.saving'));
     try {
-        const res = await fetch(`/api/workflows/${encodeURIComponent(selectedName)}/config`, {
+        const res = await fetch(`/api/workflows/${encodeURIComponent(draft.name)}/config`, {
             method:'PUT',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(currentConfig)
+            body:JSON.stringify(draft.config)
         });
-        if(!res.ok) throw new Error((await res.json()).detail || tr('comfy.saveFailed'));
-        setStatus(tr('comfy.saved'));
-        await loadList();
+        if(!res.ok){
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || tr('comfy.saveFailed'));
+        }
+        if(isCurrentWorkflowDraft(draft) && draft.revision === workflowSaveRevision && !workflowSavePending){
+            setStatus(tr('comfy.saved'));
+        }
         broadcastComfyUiChange('workflows-changed');
-    } catch(e){ await StudioDialog.alert(e.message || tr('comfy.saveFailed'), {type:'warning'}); setStatus(tr('comfy.saveFailed')); }
+        return true;
+    } catch(e){
+        if(isCurrentWorkflowDraft(draft) && draft.revision === workflowSaveRevision && !workflowSavePending) setStatus(tr('comfy.saveFailed'));
+        console.error(e);
+        return false;
+    }
 }
 
 async function onDelete(){
     if(!selectedName || isBuiltin) return;
     if(!await StudioDialog.confirm(tf('comfy.deleteConfirm', {name: currentConfig.title || selectedName}), {type:'danger'})) return;
+    await flushWorkflowSave(true);
     try {
         const res = await fetch(`/api/workflows/${encodeURIComponent(selectedName)}`, { method:'DELETE' });
         if(!res.ok) throw new Error((await res.json()).detail || tr('comfy.deleteFailed'));

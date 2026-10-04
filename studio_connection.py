@@ -31,7 +31,7 @@ def create_connection_router(get_project):
             raise HTTPException(404, '模块不存在')
         project = get_project(project_id, module)
         base = str(request.base_url).rstrip('/')
-        common = (f'接入 laohu-creative-studio 当前项目。模块：{module}；项目 ID：{project_id}；'
+        common = (f'接入老胡画梦枋（laohu-creative-studio）当前项目。模块：{module}；项目 ID：{project_id}；'
                   f'名称：{project.get("name") or project.get("title") or project_id}。\n'
                   '先读取接口确认项目身份，本次接入不开始生成。创作方法和 Skills 由用户选择。'
                   '保存内容与执行模型是独立操作，用户只要求修改时不能生成。'
@@ -62,7 +62,7 @@ def create_connection_router(get_project):
                        '原生评论在工程 FEEDBACK.json，保留 Run 对应关系。工程删除不删除素材。'
                        '普通文件读写不能移动结果仓库，也不接受绝对路径。\n')
         if lang.startswith('en'):
-            common = (f'Connect to the current laohu-creative-studio project. Module: {module}; project ID: {project_id}; '
+            common = (f'Connect to the current Laohu Creative Studio (laohu-creative-studio) project. Module: {module}; project ID: {project_id}; '
                       f'name: {project.get("name") or project.get("title") or project_id}.\n'
                       'Read the project identity before editing. Connecting does not start generation. The user chooses creative methods and skills. '
                       'Saving and model execution are separate operations; do not generate when asked only to edit. '
@@ -93,24 +93,30 @@ def create_connection_router(get_project):
         if module == 'hypit':
             models = f'{base}/api/studio/hypit/models'
             if lang.startswith('en'):
-                common += (f'Model catalog: GET {models}/capabilities. Project binding: GET {models}/projects/{project_id}/binding. '
-                           'Bindings snapshot defaults on first use; global edits do not change existing projects. PUT the same binding URL with {defaults,expected_revision} to explicitly change this project; on 409 reread and merge. '
+                common += (f'Model catalog: GET {models}/capabilities. Unified module model settings: GET {models}/settings and PUT {models}/settings with {{defaults,expected_revision}}. '
+                           'After a module setting changes, later runs in every project use the new setting; a submitted task keeps the model captured at submission. On 409 reread the settings and merge. '
+                           f'Project binding: GET {models}/projects/{project_id}/binding is a compatibility read of the same module settings; its PUT compatibility route updates that same shared setting with revision protection, not a project snapshot. '
+                           'Select one actual model for each supported capability; do not treat a workflow as a model. '
                            'Models must be enabled in API settings and have a confirmed adapter. Never copy keys into the project.\n'
-                           'Use <import as="studio" from="@laohu/studio-models@1"/>. Native surfaces: studio:Image, studio:Video, studio:Speech, studio:Audio. '
+                           'Use <import as="studio" from="@laohu/studio-models@1"/>. Native surfaces: studio:Image, studio:Video, studio:Speech, studio:Audio, studio:Music. '
                            'Each takes id and prompt={textReference}; use text:Value from @hypit/text@1 for text. '
+                           'An optional parameters attribute accepts a JSON object for this task. Read the selected model schema before supplying values; legacy module parameters are not inherited. '
                            'Output references are id.image, id.video or id.audio. Image accepts child studio:images; Video accepts '
                            'studio:referenceImage, studio:referenceVideo, studio:referenceAudio, studio:firstFrame, studio:lastFrame; '
-                           'Speech/Audio accept studio:referenceAudio. Each child uses source={blobReference}. '
+                           'Speech/Audio/Music accept studio:referenceAudio. Each child uses source={blobReference}. '
                            'The runtime command installs the real local adapter files before check/plan/build. '
                            'Run check then plan, inspect model settings, and build only when generation is requested. '
                            'Bridge requests may call paid providers; native local rendering does not imply free model inference.\n')
             else:
-                common += (f'模型目录：GET {models}/capabilities；项目绑定：GET {models}/projects/{project_id}/binding。'
-                           '首次接入保存默认模型快照，全局设置改变不会修改已有项目。明确修改本项目时向相同 binding 地址 PUT {defaults,expected_revision}，409 时重新读取合并。模型必须在 API 设置启用且具备确认的适配器；工程中不保存密钥。\n'
-                           '工程导入 <import as="studio" from="@laohu/studio-models@1"/>。原生表面为 studio:Image、studio:Video、studio:Speech、studio:Audio；'
+                common += (f'模型目录：GET {models}/capabilities；统一模块模型设置：GET {models}/settings、PUT {models}/settings，JSON 为 {{defaults,expected_revision}}。'
+                           '修改模块设置后，所有项目的后续执行使用新设置；已经提交的任务保持提交时记录的原模型；409 时重新读取并合并。'
+                           f'项目 binding：GET {models}/projects/{project_id}/binding 只是读取同一模块设置的兼容入口；其 PUT 兼容入口更新同一份共享设置并做 revision 冲突保护，不再形成项目快照。'
+                           '每项已支持的实际能力各选择一个模型，不要把工作流当作模型。模型必须在 API 设置启用且具备确认的适配器；工程中不保存密钥。\n'
+                           '工程导入 <import as="studio" from="@laohu/studio-models@1"/>。原生表面为 studio:Image、studio:Video、studio:Speech、studio:Audio、studio:Music；'
                            '均填写 id 和 prompt={文本引用}，文本由 @hypit/text@1 的 text:Value 提供。输出为 id.image、id.video 或 id.audio。'
+                           '可选 parameters 属性填写本次任务的 JSON 参数对象；先读取已选模型的参数契约再填写，旧模块参数不再继承。'
                            '图片可用子元素 studio:images；视频可用 studio:referenceImage、studio:referenceVideo、studio:referenceAudio、studio:firstFrame、studio:lastFrame；'
-                           '语音/音频可用 studio:referenceAudio。各子元素使用 source={Blob引用}。'
+                           '语音/音频/音乐可用 studio:referenceAudio。各子元素使用 source={Blob引用}。'
                            '运行命令在 check/plan/build 前准备真实本地适配文件。先 check、plan 并核对模型设置；用户要求生成时才 build。'
                            '模型桥接可能调用收费供应商，本地渲染不代表模型推理免费。history 的 source 是输出名称，例如 final.video。\n')
         return PlainTextResponse('# '+('Project integration guide' if lang.startswith('en') else '项目对接文档')+'\n\n'+common, media_type='text/markdown; charset=utf-8')
@@ -124,10 +130,10 @@ def create_connection_router(get_project):
         language = 'en' if lang.startswith('en') else 'zh'
         document = f'{base}/api/studio/projects/{project_id}/connection.md?module={module}&lang={language}'
         name = project.get('name') or project.get('title') or project_id
-        text = (f'我使用 laohu-creative-studio 的 {module} 模块。当前项目：{name}（ID：{project_id}）。\n'
+        text = (f'我使用老胡画梦枋（laohu-creative-studio）的 {module} 模块。当前项目：{name}（ID：{project_id}）。\n'
                 f'请先读取对接文档：{document}\n按文档接入这个项目，确认后等待我的创作要求。')
         if language == 'en':
-            text = (f'I use the {module} module in laohu-creative-studio. Project: {name} (ID: {project_id}).\n'
+            text = (f'I use the {module} module in Laohu Creative Studio (laohu-creative-studio). Project: {name} (ID: {project_id}).\n'
                     f'Read the integration guide: {document}\nConnect to this project as documented, confirm, and wait for my creative request.')
         return {'project_id':project_id, 'module':module, 'project':project, 'text':text, 'document_url':document}
 
@@ -137,9 +143,9 @@ def create_connection_router(get_project):
             raise HTTPException(404, '模块不存在')
         language='en' if lang.startswith('en') else 'zh'
         document=f"{str(request.base_url).rstrip('/')}/api/studio/modules/{module}/preparation.md?lang={language}"
-        text=f'我准备使用 laohu-creative-studio 的 {module} 模块。请读取技能准备文档：{document}\n检查我的 Agent 环境，并按文档完成必要准备；已有可用技能则复用。'
+        text=f'我准备使用老胡画梦枋（laohu-creative-studio）的 {module} 模块。请读取技能准备文档：{document}\n检查我的 Agent 环境，并按文档完成必要准备；已有可用技能则复用。'
         if language=='en':
-            text=f'I plan to use the {module} module in laohu-creative-studio. Read the skills preparation guide: {document}\nCheck my Agent environment and prepare only what is missing; reuse existing skills.'
+            text=f'I plan to use the {module} module in Laohu Creative Studio (laohu-creative-studio). Read the skills preparation guide: {document}\nCheck my Agent environment and prepare only what is missing; reuse existing skills.'
         return {'module':module, 'optional':True, 'text':text, 'document_url':document}
 
     return router

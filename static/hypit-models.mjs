@@ -11,11 +11,13 @@ const modes = [
   {key:'image',tag:'Image',capability:'image-generation',result:'image',media:[['images','image'],]},
   {key:'video',tag:'Video',capability:'video-generation',result:'video',media:[['referenceImage','image'],['referenceVideo','video'],['referenceAudio','audio'],['firstFrame','image'],['lastFrame','image']]},
   {key:'audio',tag:'Audio',capability:'audio-generation',result:'audio',media:[['referenceAudio','audio']]},
+  {key:'music',tag:'Music',capability:'music-generation',result:'audio',media:[['referenceAudio','audio']]},
   {key:'speech',tag:'Speech',capability:'speech-generation',result:'audio',media:[['referenceAudio','audio']]},
 ];
 const definitions = modes.map(mode => ({...mode, ports:sealGenerationPortTable({
   model:mode.capability,result:mode.result,
   ports:[{name:'prompt',value:{kind:'text'},minItems:1,maxItems:1},
+    {name:'parameters',value:{kind:'text'},minItems:0,maxItems:1},
     ...mode.media.map(([name,role])=>({name,value:{kind:'media',accepts:[role]},minItems:0,maxItems:name==='firstFrame'||name==='lastFrame'?1:1000}))], requires:[]
 })}));
 // 这里的上限仅保护工程规模；真实模型更小的限制仍由工作台运行前校验执行。
@@ -36,17 +38,26 @@ const facets=definitions.map(mode=>{
     outputs:[endpoint.draftType,...Object.values(endpoint.mediaBindings).map(x=>x.type)],
     vocabulary:{summary:`Generate ${mode.result} using this workbench project's configured model.`,
       attributes:[{name:'id',kind:'identifier',required:true,summary:'Output name'},
-                  {name:'prompt',kind:'reference',required:true,accepts:[textTypes.text],summary:'Text input'}],
+                  {name:'prompt',kind:'reference',required:true,accepts:[textTypes.text],summary:'Text input'},
+                  {name:'parameters',kind:'literal',required:false,summary:'JSON object of parameters for this task; validated against the selected model'}],
       children:mode.media.map(([port,role])=>({tag:port,cardinality:port==='firstFrame'||port==='lastFrame'?'optional':'many',
         summary:`${role} reference`,attributes:[{name:'source',kind:'reference',required:true,accepts:[artifactTypes.blob],summary:'Media input'}]})),
       ports:[{name:mode.result,type:artifactTypes.blob,summary:'Generated media'}],
-      notes:['Model, provider and parameter values come from the workbench project binding. Preparation and plan do not generate.']}};
+      notes:['Model and provider come from shared workbench settings. Parameters belong to this task; omitted values follow the model contract. Preparation and plan do not generate.']}};
   return createMarkupSurfaceHostFacet({module:moduleRef,declaration,handler:({element,resolveReference})=>{
     const id=element.attributes.id;
     if(typeof id!=='string'||!id.trim())throw new Error('id is required');
-    for(const key of Object.keys(element.attributes))if(!['id','prompt'].includes(key))throw new Error(`Unknown attribute: ${key}`);
+    for(const key of Object.keys(element.attributes))if(!['id','prompt','parameters'].includes(key))throw new Error(`Unknown attribute: ${key}`);
     const prompt=reference(element,'prompt',textTypes.text,resolveReference);
-    const records=[{id:id+'.draft',type:endpoint.draftType,value:{kind:'inline',value:sealGenerationRequestDraft(mode.ports,{})},range:element.range}];
+    const ports={};
+    if(element.attributes.parameters!==undefined){
+      const raw=element.attributes.parameters;
+      if(typeof raw!=='string')throw new Error('parameters must be a JSON object literal');
+      const parameters=JSON.parse(raw);
+      if(!parameters||typeof parameters!=='object'||Array.isArray(parameters))throw new Error('parameters must be a JSON object');
+      ports.parameters=[JSON.stringify(parameters)];
+    }
+    const records=[{id:id+'.draft',type:endpoint.draftType,value:{kind:'inline',value:sealGenerationRequestDraft(mode.ports,ports)},range:element.range}];
     const inputs={draft:{kind:'record',id:id+'.draft'},[exactModelTextInputName('prompt')]:prompt.ref};
     const mediaInputs=[];
     for(const child of element.children){

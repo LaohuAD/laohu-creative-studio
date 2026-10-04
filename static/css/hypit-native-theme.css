@@ -1,0 +1,367 @@
+/*
+ * Hypit 原生 Studio 的共享主题覆盖。
+ * 这份文件只改颜色、边框、焦点和表面层级，不改变原生制作流程或布局。
+ * HypitRuntime 会把它注入受管发行版；页面通过 data-laohu-theme 保留深色模式。
+ */
+:root {
+  color-scheme: light;
+  --app: #f7f3eb;
+  --panel: #fffaf2;
+  --panel-raised: #fffdf8;
+  --field: #f0ebe2;
+  --lane: #eee8df;
+  --line: #ded8ce;
+  --line-strong: #c7beb1;
+  --text: #30363b;
+  --text-2: #6f7b83;
+  --text-3: #98a0a3;
+  --subtab-surface: #f0ebe2;
+  --subtab-active-surface: #fffdf8;
+  --subtab-active-text: #30363b;
+  --brand-200: #ead1a5;
+  --brand-400: #c29a61;
+  --brand-500: #b48a5a;
+  --brand-600: #916a43;
+  --brand-soft: rgba(180, 138, 90, .14);
+  --brand-foreground: #30363b;
+  --interaction-accent: #7891a4;
+  --interaction-pressed: #5f7789;
+  --danger: #b85c62;
+  --ok: #3b8068;
+  --tone-orange: #a96532;
+  --tone-orange-rail: #d6945c;
+  --tone-orange-muted: #81502d;
+  --tone-orange-muted-rail: #bc7a4b;
+  --tone-green: #4f8668;
+  --tone-green-rail: #79aa89;
+  --tone-green-muted: #3d674f;
+  --tone-green-muted-rail: #659477;
+  --tone-teal: #4e8788;
+  --tone-teal-rail: #82b6b4;
+  --semantic-segment: #617f80;
+  --semantic-word: #41696a;
+  --semantic-intent: #a07c38;
+  --semantic-moment: #b48a5a;
+  --semantic-current: #5f9691;
+  --intent-depth-0: #e4ca86;
+  --intent-depth-1: #c7aa5b;
+  --intent-depth-2: #a07c38;
+  --intent-depth-3: #7c5a24;
+  --tone-blue: #607f98;
+  --tone-blue-rail: #8faabd;
+  --tone-blue-muted: #486477;
+  --tone-blue-muted-rail: #7592a7;
+  --tone-violet: #82769b;
+  --tone-violet-rail: #aca0c1;
+  --tone-magenta: #9b718d;
+  --tone-magenta-rail: #be99b1;
+  --tone-magenta-muted: #76536c;
+  --tone-magenta-muted-rail: #a27a96;
+  --tone-neutral: #778087;
+  --tone-neutral-rail: #aab2b5;
+}
+
+:root[data-laohu-theme="dark"] {
+  color-scheme: dark;
+  --app: #202528;
+  --panel: #282d2f;
+  --panel-raised: #303638;
+  --field: #252a2d;
+  --lane: #202528;
+  --line: #465055;
+  --line-strong: #627078;
+  --text: #f2eee7;
+  --text-2: #bec5c4;
+  --text-3: #929da1;
+  --subtab-surface: #252a2d;
+  --subtab-active-surface: #3a4245;
+  --subtab-active-text: #f2eee7;
+  --brand-200: #ecd29b;
+  --brand-400: #d4b47a;
+  --brand-500: #d4b47a;
+  --brand-600: #b48a5a;
+  --brand-soft: rgba(212, 180, 122, .16);
+  --brand-foreground: #f2eee7;
+  --interaction-accent: #a7bac4;
+  --interaction-pressed: #c4d2d8;
+  --danger: #ed9a96;
+  --ok: #8ac9a8;
+  --tone-orange: #d39460;
+  --tone-orange-rail: #edb47f;
+  --tone-orange-muted: #b97845;
+  --tone-orange-muted-rail: #d99a68;
+  --tone-green: #83b596;
+  --tone-green-rail: #a9d1b3;
+  --tone-green-muted: #669675;
+  --tone-green-muted-rail: #8fc0a0;
+  --tone-teal: #83b9b6;
+  --tone-teal-rail: #acd4d0;
+  --semantic-segment: #8ab1b0;
+  --semantic-word: #b3d0cd;
+  --semantic-intent: #d6b86b;
+  --semantic-moment: #d4b47a;
+  --semantic-current: #8fc8c0;
+  --intent-depth-0: #f0d995;
+  --intent-depth-1: #ddc174;
+  --intent-depth-2: #d6b86b;
+  --intent-depth-3: #b99442;
+  --tone-blue: #9ab6ca;
+  --tone-blue-rail: #bdd3e0;
+  --tone-blue-muted: #7696ad;
+  --tone-blue-muted-rail: #a5c2d2;
+  --tone-violet: #b2a5c8;
+  --tone-violet-rail: #d0c5df;
+  --tone-magenta: #c79dbb;
+  --tone-magenta-rail: #dfbfd4;
+  --tone-magenta-muted: #a87e9c;
+  --tone-magenta-muted-rail: #c39bb5;
+  --tone-neutral: #b0bcc1;
+  --tone-neutral-rail: #d0d9dc;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-laohu-theme]) {
+    color-scheme: dark;
+    --app: #202528;
+    --panel: #282d2f;
+    --panel-raised: #303638;
+    --field: #252a2d;
+    --lane: #202528;
+    --line: #465055;
+    --line-strong: #627078;
+    --text: #f2eee7;
+    --text-2: #bec5c4;
+    --text-3: #929da1;
+    --subtab-surface: #252a2d;
+    --subtab-active-surface: #3a4245;
+    --subtab-active-text: #f2eee7;
+    --brand-200: #ecd29b;
+    --brand-400: #d4b47a;
+    --brand-500: #d4b47a;
+    --brand-600: #b48a5a;
+    --brand-soft: rgba(212, 180, 122, .16);
+    --brand-foreground: #f2eee7;
+    --interaction-accent: #a7bac4;
+    --interaction-pressed: #c4d2d8;
+    --danger: #ed9a96;
+    --ok: #8ac9a8;
+  }
+}
+
+html,
+body,
+#app {
+  background: var(--app) !important;
+  color: var(--text) !important;
+}
+
+body,
+button,
+textarea,
+input,
+select {
+  font-family: var(--font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif);
+}
+
+.topbar,
+.pane-heading,
+.stage-heading,
+.library-tabs,
+.inspector-domain-tabs,
+.inspector-subtabs,
+.timeline-toolbar,
+.code-toolbar,
+.sidebar-panel-heading,
+.sidebar-panel-toolbar,
+.ruler,
+.label-corner {
+  background: var(--panel-raised) !important;
+  border-color: var(--line) !important;
+}
+
+.studio-shell,
+.stage,
+.stage-viewport,
+.workspace-scroll,
+.timeline-body,
+.lanes,
+.timeline,
+.timeline-zoom,
+.handle {
+  background: var(--app) !important;
+}
+
+.source-panel,
+.preview-panel,
+.workspace-panel,
+.timeline-panel,
+.comments-panel,
+.library,
+.library-view,
+.inspector,
+.task-list,
+.code-editor,
+.property-group,
+.parameter-group,
+.parameter-select-menu,
+.selection-menu,
+.timeline-overlap-menu,
+.sidebar-panel-nav,
+.timeline-labels {
+  background: var(--panel) !important;
+  border-color: var(--line) !important;
+}
+
+.artifact-card,
+.task-card,
+.parameter-value,
+.parameter-select-trigger,
+.parameter-select-option,
+.comment-input,
+.comment-composer textarea,
+.comment-edit textarea,
+.code-scroll,
+.lane,
+.sidebar-panel-item,
+.track-label::before,
+.track-label-attached::before,
+.track-label-semantic,
+.comment-composer {
+  background: var(--field) !important;
+  border-color: var(--line) !important;
+  color: var(--text) !important;
+}
+
+.view-tabs,
+.subtab,
+.inspector-subtab,
+.library-tab {
+  background: var(--subtab-surface) !important;
+  color: var(--text-2) !important;
+}
+
+.view-tabs button[aria-selected="true"],
+.library-tab[aria-selected="true"],
+.inspector-subtab[aria-selected="true"],
+.subtab.active,
+.selected,
+.current {
+  background: var(--subtab-active-surface) !important;
+  color: var(--subtab-active-text) !important;
+}
+
+.brand-wordmark,
+.brand-symbol,
+.brand .icon,
+.project-title,
+.pane-title,
+.stage-title,
+.parameter-label,
+.artifact-name,
+.task-card,
+.comment-text,
+.property,
+.property-code,
+.code-editor {
+  color: var(--text) !important;
+}
+
+.meta,
+.status,
+.pane-tab,
+.pane-icon,
+.parameter-display,
+.parameter-right,
+.artifact-type,
+.artifact-copy,
+.comment-number,
+.comments-empty,
+.library-empty,
+.inspector-empty,
+.preview-unavailable {
+  color: var(--text-2) !important;
+}
+
+.topbar,
+.source-panel,
+.preview-panel,
+.workspace-panel,
+.timeline-panel,
+.comments-panel,
+.handle,
+.handle-column,
+.handle-row,
+.stage-heading,
+.pane-heading,
+.property-group,
+.parameter-group,
+.artifact-card,
+.task-card,
+.code-editor,
+.library,
+.inspector,
+.lane {
+  border-color: var(--line) !important;
+}
+
+button:hover,
+[role="button"]:hover,
+.parameter-select-option:hover,
+.library-tab:hover,
+.inspector-subtab:hover {
+  background: var(--field) !important;
+  color: var(--text) !important;
+}
+
+button:focus-visible,
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline-color: var(--interaction-accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--interaction-accent) 24%, transparent) !important;
+}
+
+.status.error,
+.error,
+.failure,
+.artifact-name-error {
+  color: var(--danger) !important;
+}
+
+.comment-time,
+.clip.selected,
+.clip-selection,
+.stage-scrubber,
+.playhead {
+  background: var(--brand-soft) !important;
+  border-color: var(--brand-400) !important;
+}
+
+.clip.selected,
+.clip-selection,
+.current {
+  box-shadow: inset 0 0 0 1px var(--interaction-accent);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--interaction-accent) 28%, transparent) !important;
+  color: var(--text) !important;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-3) 48%, transparent) !important;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--interaction-accent) 68%, transparent) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

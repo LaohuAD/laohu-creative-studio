@@ -752,8 +752,14 @@
     }
     function hydrateRunningHubProviderApps(provider){
         const copy = clone(provider) || {};
-        if(String(copy.id || '').trim().toLowerCase() !== 'runninghub' || !Array.isArray(copy.rh_apps)) return copy;
-        copy.rh_apps = copy.rh_apps.map(hydrateRunningHubAppEntry);
+        if(String(copy.id || '').trim().toLowerCase() !== 'runninghub') return copy;
+        if(Array.isArray(copy.rh_apps)) copy.rh_apps = copy.rh_apps.map(hydrateRunningHubAppEntry);
+        if(copy.rh_regions && typeof copy.rh_regions === 'object' && !Array.isArray(copy.rh_regions)){
+            Object.values(copy.rh_regions).forEach(region => {
+                if(!region || typeof region !== 'object') return;
+                if(Array.isArray(region.rh_apps)) region.rh_apps = region.rh_apps.map(hydrateRunningHubAppEntry);
+            });
+        }
         return copy;
     }
     function runningHubSchemaSnapshot(fields){
@@ -1019,7 +1025,7 @@
         if(type === NODE_TYPES.videoGenerator) return '视频生成';
         if(type === NODE_TYPES.audioGenerator) return '音频生成';
         if(type === NODE_TYPES.musicGenerator) return '音乐生成';
-        if(type === NODE_TYPES.aiApp) return 'RunningHub ComfyUI';
+        if(type === NODE_TYPES.aiApp) return 'AI 应用';
         if(type === NODE_TYPES.comfyWorkflow) return '本地 ComfyUI';
         if(type === NODE_TYPES.imageCompare) return '图像对比';
         if(type === NODE_TYPES.resultGroup) return '结果组';

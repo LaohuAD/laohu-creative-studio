@@ -1,4 +1,4 @@
-# Agent 接入老胡创意工作台 · 画布
+# Agent 接入老胡画梦枋 · 画布
 
 Codex、Claude Code 或其他能调用 HTTP／Python 的 Agent，可以通过结构化命令在当前画布创建节点、填写内容、连接素材、调用模型并检查结果。无需安装新的 Codex 插件，也不要求把模型密钥交给 Agent。
 

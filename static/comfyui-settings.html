@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>工作流设置</title>
+    <title>本地 ComfyUI 工作流</title>
     <script>
         (function(){
             try {
@@ -31,8 +31,8 @@
         <div class="wrap">
             <header class="page-head">
                 <div>
-                    <div class="title" data-i18n="comfy.title">工作流设置</div>
-                    <div class="sub" data-i18n="comfy.subtitle">选择本地 ComfyUI 工作流，配置可暴露到画布的输入参数。</div>
+                    <div class="title" data-i18n="comfy.title">本地 ComfyUI 工作流</div>
+                    <div class="sub" data-i18n="comfy.subtitle">连接 ComfyUI，导入工作流。</div>
                 </div>
                 <div id="status" class="status"></div>
             </header>
@@ -40,17 +40,12 @@
             <div class="layout">
                 <aside class="sidebar">
                     <div class="side-card workflow-panel workflow-panel-comfy">
-                        <div class="side-title">ComfyUI 后端地址</div>
+                        <div class="side-title" data-i18n="comfy.backendAddress">ComfyUI 地址</div>
                         <div id="comfyInstancesList" style="display:flex;flex-direction:column;gap:6px"></div>
                         <button class="upload-btn" type="button" onclick="addComfyInstance()">
-                            <i data-lucide="plus" class="w-3.5 h-3.5"></i><span>添加后端</span>
+                            <i data-lucide="plus" class="w-3.5 h-3.5"></i><span data-i18n="comfy.addBackend">添加地址</span>
                         </button>
-                        <div style="display:flex;gap:6px">
-                            <button class="upload-btn" type="button" onclick="saveComfyInstances()" style="flex:1;border-style:solid;background:var(--panel);color:var(--text);border-color:var(--text)">
-                                <i data-lucide="save" class="w-3.5 h-3.5"></i><span>保存</span>
-                            </button>
-                        </div>
-                        <div style="font-size:10.5px;color:var(--faint);line-height:1.55;font-weight:600">格式：<span style="font-family:ui-monospace,Menlo,monospace">host:port</span>（如 <span style="font-family:ui-monospace,Menlo,monospace">127.0.0.1:8188</span>）</div>
+                        <div style="font-size:10.5px;color:var(--faint);line-height:1.55;font-weight:600" data-i18n="comfy.backendFormat">例如 127.0.0.1:8188</div>
                     </div>
 
                     <div class="side-card workflow-panel workflow-panel-comfy">
@@ -68,7 +63,7 @@
                             <div class="preview-title" data-i18n="comfy.nodePreview">画布节点预览</div>
                             <div class="preview-pill" data-i18n="comfy.live">实时</div>
                         </div>
-                        <div class="preview-desc" data-i18n="comfy.previewDesc">这个工作流在画布 Comfy 节点上将显示出的控件，可直接填写并点击「运行测试」。</div>
+                        <div class="preview-desc" data-i18n="comfy.previewDesc">预览画布中的参数，可填写后试运行。</div>
                         <div id="previewContent">
                             <div class="preview-empty" data-i18n="comfy.previewEmpty">勾选节点输入字段后<br>预览将出现在这里</div>
                         </div>
@@ -88,9 +83,6 @@
                                 <div class="content-actions">
                                     <button id="deleteBtn" class="action-btn danger-btn" type="button" onclick="onDelete()" style="display:none">
                                         <i data-lucide="trash-2" class="w-3.5 h-3.5"></i><span data-i18n="common.delete">删除</span>
-                                    </button>
-                                    <button id="saveBtn" class="action-btn save-btn" type="button" onclick="onSave()" style="display:none">
-                                        <i data-lucide="save" class="w-3.5 h-3.5"></i><span data-i18n="comfy.saveConfig">保存配置</span>
                                     </button>
                                 </div>
                             </div>

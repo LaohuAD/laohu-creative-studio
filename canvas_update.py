@@ -147,8 +147,8 @@ def fetch_bytes(url, limit):
 def github_release():
     """固定同一个提交和 Git blob 校验，避免下载过程中主分支变化。"""
     from concurrent.futures import ThreadPoolExecutor
-    commit = json.loads(fetch_bytes('https://api.github.com/repos/LaohuAD/laohu-Infinite-Canvas/commits/main', 4 * 1024 * 1024))['sha']
-    tree = json.loads(fetch_bytes(f'https://api.github.com/repos/LaohuAD/laohu-Infinite-Canvas/git/trees/{commit}?recursive=1', 8 * 1024 * 1024))
+    commit = json.loads(fetch_bytes('https://api.github.com/repos/LaohuAD/laohu-creative-studio/commits/main', 4 * 1024 * 1024))['sha']
+    tree = json.loads(fetch_bytes(f'https://api.github.com/repos/LaohuAD/laohu-creative-studio/git/trees/{commit}?recursive=1', 8 * 1024 * 1024))
     if tree.get('truncated'):
         raise ValueError('GitHub 文件目录不完整')
     entries = [e for e in tree['tree'] if e['type']=='blob' and allowed_file(e['path'])]
@@ -156,7 +156,7 @@ def github_release():
         raise ValueError('GitHub 程序超过大小限制')
     def read(entry):
         import urllib.parse
-        data = fetch_bytes(f'https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/{commit}/' + urllib.parse.quote(entry['path']), MAX_PACKAGE_BYTES)
+        data = fetch_bytes(f'https://raw.githubusercontent.com/LaohuAD/laohu-creative-studio/{commit}/' + urllib.parse.quote(entry['path']), MAX_PACKAGE_BYTES)
         if hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest() != entry['sha']:
             raise ValueError('GitHub 文件校验失败：' + entry['path'])
         return entry['path'], data
@@ -212,7 +212,7 @@ def probe_program(stage, python, log):
                 try:
                     with opener.open(f'http://127.0.0.1:{port}/api/app-info', timeout=1) as response:
                         info = json.load(response)
-                    if info.get('version') == expected and info.get('repo_url') == 'https://github.com/LaohuAD/laohu-Infinite-Canvas':
+                    if info.get('version') == expected and info.get('repo_url') == 'https://github.com/LaohuAD/laohu-creative-studio':
                         return
                 except (OSError, ValueError):
                     pass

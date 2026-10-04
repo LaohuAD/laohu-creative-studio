@@ -1,0 +1,64 @@
+{
+  "note": "P6 项目 binding 差异报告（§15.4、D14/E14）：只读比对，不修改任何项目配置。",
+  "module_settings_present": false,
+  "module_defaults": {},
+  "projects": [
+    {
+      "project_id": "f46553ce9d094ace80b756493e201d4d",
+      "status": "needs_confirmation",
+      "slot_count": 5,
+      "diffs": [
+        {
+          "slot": "text",
+          "kind": "project-only",
+          "project": {
+            "provider": "",
+            "model": "",
+            "region": null
+          },
+          "module": null
+        },
+        {
+          "slot": "image",
+          "kind": "project-only",
+          "project": {
+            "provider": "",
+            "model": "",
+            "region": null
+          },
+          "module": null
+        },
+        {
+          "slot": "video",
+          "kind": "project-only",
+          "project": {
+            "provider": "",
+            "model": "",
+            "region": null
+          },
+          "module": null
+        },
+        {
+          "slot": "audio",
+          "kind": "project-only",
+          "project": {
+            "provider": "",
+            "model": "",
+            "region": null
+          },
+          "module": null
+        },
+        {
+          "slot": "voice",
+          "kind": "project-only",
+          "project": {
+            "provider": "",
+            "model": "",
+            "region": null
+          },
+          "module": null
+        }
+      ]
+    }
+  ]
+}

@@ -88,10 +88,10 @@ from canvas_core.json_store import read_json as read_json_file, write_json as at
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
-GITHUB_REPO_URL = "https://github.com/LaohuAD/laohu-Infinite-Canvas"
-GITHUB_VERSION_URL = "https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/main/VERSION"
-GITHUB_TREE_URL = "https://api.github.com/repos/LaohuAD/laohu-Infinite-Canvas/git/trees/main?recursive=1"
-GITHUB_RAW_ROOT = "https://raw.githubusercontent.com/LaohuAD/laohu-Infinite-Canvas/main"
+GITHUB_REPO_URL = "https://github.com/LaohuAD/laohu-creative-studio"
+GITHUB_VERSION_URL = "https://raw.githubusercontent.com/LaohuAD/laohu-creative-studio/main/VERSION"
+GITHUB_TREE_URL = "https://api.github.com/repos/LaohuAD/laohu-creative-studio/git/trees/main?recursive=1"
+GITHUB_RAW_ROOT = "https://raw.githubusercontent.com/LaohuAD/laohu-creative-studio/main"
 GITHUB_UPDATE_NOTES_URL = GITHUB_RAW_ROOT + "/static/update-notes.json"
 MODELSCOPE_REPO_URL = "https://modelscope.ai/studios/daniel8152/Infinite-Canvas"
 MODELSCOPE_RAW_ROOT = "https://www.modelscope.ai/studios/daniel8152/Infinite-Canvas/raw/main"
@@ -715,6 +715,15 @@ def runninghub_normalize_region(value, fallback="global"):
     region = str(value or "").strip().lower()
     return region if region in RUNNINGHUB_REGION_DEFAULTS else fallback
 
+def runninghub_request_region(value, allow_empty=True):
+    """校验来自请求或节点设置的站点标识；永不接受客户端传入的域名或凭据。"""
+    region = str(value or "").strip().lower()
+    if not region and allow_empty:
+        return ""
+    if region not in RUNNINGHUB_REGION_DEFAULTS:
+        raise HTTPException(status_code=400, detail=f"RunningHub 站点不受支持：{region or '(empty)'}")
+    return region
+
 def runninghub_region_from_base_url(base_url, fallback="global"):
     try:
         host = (urllib.parse.urlsplit(str(base_url or "").strip()).hostname or "").lower()
@@ -955,12 +964,7 @@ def merge_default_api_providers(providers, inject_missing=True):
                 current["base_url"] = ms_default["base_url"]
             seeded_version = int(current.get("ms_defaults_version") or 0)
             if seeded_version < MODELSCOPE_DEFAULTS_VERSION:
-                image_models = model_list_from_values([*MODELSCOPE_DEFAULT_IMAGE_MODELS, *(current.get("image_models") or [])])
-                chat_models = model_list_from_values([*MODELSCOPE_DEFAULT_CHAT_MODELS, *(current.get("chat_models") or [])])
-                loras = normalize_ms_loras([*MODELSCOPE_DEFAULT_LORAS, *(current.get("ms_loras") or [])])
-                current["image_models"] = image_models
-                current["chat_models"] = chat_models
-                current["ms_loras"] = loras
+                # 目录升级只推进内置档案版本；已有平台的可见模型和 LoRA 是用户选择，不能重新播种。
                 current["ms_defaults_version"] = MODELSCOPE_DEFAULTS_VERSION
     rh_default = load_static_runninghub_provider() or next((d for d in default_api_providers() if d["id"] == "runninghub"), None)
     if rh_default:
@@ -1072,11 +1076,9 @@ def merge_default_api_providers(providers, inject_missing=True):
         if current_protocol == "codex":
             image_models = [item for item in image_models if str(item or "").strip().lower() != "$imagegen"]
             image_models = []
-        current["image_models"] = model_list_from_values(image_models if current_protocol == "codex" else [*image_models, *default_image_models])
+        current["image_models"] = model_list_from_values(image_models)
         current["chat_models"] = model_list_from_values(
-            (current.get("chat_models") or [])
-            if current_protocol == "codex"
-            else [*(current.get("chat_models") or []), *default_chat_models]
+            current.get("chat_models") or []
         )
         current["video_models"] = []
         current["audio_models"] = []
@@ -1478,6 +1480,7 @@ def runninghub_empty_region_config(region):
     region = runninghub_normalize_region(region)
     return {
         "base_url": RUNNINGHUB_REGION_DEFAULTS[region]["base_url"],
+        "enabled": False,
         "image_models": [],
         "chat_models": [],
         "video_models": [],
@@ -1515,6 +1518,10 @@ def normalize_runninghub_regions(item):
                 config[key] = raw.get(key)
         if region == selected and not raw:
             config.update(legacy)
+        # 历史配置没有区域 enabled 字段时，只把原来的当前站迁移为启用，
+        # 另一站保持关闭，避免升级后凭空暴露候选或复制模型清单。
+        if not isinstance(raw.get("enabled"), bool):
+            config["enabled"] = region == selected
         # RunningHub 两个站点的凭证不互通，区域必须与官方域名强绑定。
         # 忽略历史或手工写入的错配地址，避免用国内 Key 请求国际站（反之亦然）。
         config["base_url"] = RUNNINGHUB_REGION_DEFAULTS[region]["base_url"]
@@ -1538,13 +1545,26 @@ def runninghub_region_config(provider, region=None):
     fallback["base_url"] = RUNNINGHUB_REGION_DEFAULTS[selected]["base_url"]
     return fallback
 
-def runninghub_provider_for_region(provider, region=None):
+def runninghub_provider_for_region(provider, region=None, require_enabled=False):
     provider = dict(provider or {})
     if not provider or provider.get("id") != "runninghub":
         return provider
-    selected = runninghub_normalize_region(region or provider.get("rh_region"), runninghub_region_from_base_url(provider.get("base_url"), "global"))
+    requested = runninghub_request_region(region)
+    source_region = runninghub_provider_region(provider)
+    selected = requested or source_region
     active = runninghub_region_config(provider, selected)
+    if not provider.get("rh_regions") and selected == source_region:
+        # 保留未迁移的内存/测试 provider 兼容性；已迁移配置仍以区域 enabled 为准。
+        active["enabled"] = provider.get("enabled", True) is not False
+    if require_enabled and active.get("enabled") is not True:
+        raise HTTPException(status_code=400, detail=f"RunningHub {selected} 站点尚未启用")
+    # 顶层 api_key 仅允许继续服务于原来的站点；切换区域时不得把它带到另一站。
+    if requested and requested != source_region:
+        provider.pop("api_key", None)
+        provider.pop("wallet_api_key", None)
     provider["rh_region"] = selected
+    provider["_runninghub_region_locked"] = True
+    provider["_runninghub_selected_region"] = selected
     provider["base_url"] = active["base_url"]
     provider["image_models"] = active["image_models"]
     provider["chat_models"] = active["chat_models"]
@@ -1745,8 +1765,11 @@ def mutate_static_runninghub_provider(mutator):
         f.write("\n")
     return True
 
-def sync_runninghub_provider_workflows_to_static_template(provider):
+def sync_runninghub_provider_workflows_to_static_template(provider, region: str = ""):
     if not isinstance(provider, dict) or str(provider.get("id") or "").strip().lower() != "runninghub":
+        return False
+    # static 模板历史上只有 global 一份，不能用 CN 用户配置覆盖它。
+    if runninghub_workflow_region(region, provider) != "global":
         return False
     workflows = []
     seen = set()
@@ -1839,7 +1862,28 @@ def canvas_api_providers():
     for provider in public_api_providers():
         item = dict(provider)
         if item.get("id") == "runninghub":
-            item.pop("rh_regions", None)
+            regions = {}
+            candidates = []
+            for region, raw_config in (item.get("rh_regions") or {}).items():
+                config = dict(raw_config) if isinstance(raw_config, dict) else {}
+                enabled = config.get("enabled") is True
+                if not enabled:
+                    # 站点状态仍公开给设置页/前端，但关闭站点不得泄露可选模型、应用或工作流。
+                    for field in ("image_models", "chat_models", "video_models", "audio_models", "rh_apps", "rh_workflows"):
+                        config[field] = []
+                    config["model_names"] = {}
+                regions[region] = config
+                candidates.append({
+                    "region": region,
+                    "enabled": enabled,
+                    "base_url": config.get("base_url") or RUNNINGHUB_REGION_DEFAULTS.get(region, {}).get("base_url", ""),
+                    "has_key": bool(config.get("has_key")),
+                    "has_wallet_key": bool(config.get("has_wallet_key")),
+                    "key_env": config.get("key_env") or runninghub_api_key_env(region),
+                    "wallet_key_env": config.get("wallet_key_env") or runninghub_wallet_key_env(region),
+                })
+            item["rh_regions"] = regions
+            item["runninghub_region_candidates"] = candidates
         providers.append(item)
     return providers
 
@@ -1859,7 +1903,16 @@ def public_model_catalog(providers=None):
     return catalog
 
 def build_model_capability_catalog(providers=None):
-    return MODEL_CAPABILITY_REGISTRY.build_catalog(providers if providers is not None else load_api_providers())
+    catalog = MODEL_CAPABILITY_REGISTRY.build_catalog(providers if providers is not None else load_api_providers())
+    # 统一可执行选项投影：前端不再自行计算稳定标识，避免前后端各算一套（§13.5、§11.2）。
+    try:
+        options = studio_model_selection.compile_catalog_options(catalog)
+    except Exception:  # pragma: no cover - 投影失败不得让目录接口整体不可用
+        options = []
+    catalog["options"] = options
+    catalog["catalog_revision"] = studio_model_selection.catalog_revision(options)
+    catalog["selection_contract_version"] = studio_model_selection.SCHEMA_VERSION
+    return catalog
 
 def validate_model_capability_request(provider_id, model_id, node_type, input_counts=None, input_roles=None, parameters=None, providers=None):
     try:
@@ -2022,7 +2075,7 @@ def get_primary_provider_id(providers=None):
         return non_ms["id"]
     return providers[0]["id"] if providers else "modelscope"
 
-def get_api_provider(provider_id="comfly"):
+def get_api_provider(provider_id="comfly", region="", require_enabled=True):
     providers = load_api_providers()
     target = (provider_id or "").strip().lower()
     # 兼容旧的 "comfly" 硬编码：若 comfly 不存在或未指定，回退到首选 provider
@@ -2033,6 +2086,8 @@ def get_api_provider(provider_id="comfly"):
         raise HTTPException(status_code=400, detail=f"未找到 API 平台：{target}")
     if not provider.get("enabled", True):
         raise HTTPException(status_code=400, detail=f"API 平台已禁用：{provider.get('name') or target}")
+    if target == "runninghub":
+        return runninghub_provider_for_region(provider, region, require_enabled=require_enabled)
     return provider
 
 def get_api_provider_exact(provider_id: str):
@@ -2119,6 +2174,37 @@ async def versioned_static_page(page_name: str):
     if not os.path.isfile(os.path.join(STATIC_DIR, filename)):
         raise HTTPException(status_code=404, detail="页面不存在")
     return static_html_response(filename)
+
+@app.get("/api/static-revision", include_in_schema=False)
+async def static_revision():
+    """返回前端源码和模型能力档案修订指纹，供本地页面自动热刷新使用。"""
+    files = []
+    revisions = {}
+    watched_roots = [
+        (STATIC_DIR, ""),
+        (os.path.join(BASE_DIR, "data", "model_capabilities"), "data/model_capabilities"),
+    ]
+    for root_path, prefix in watched_roots:
+        if not os.path.isdir(root_path):
+            continue
+        for root, _dirs, names in os.walk(root_path):
+            for name in names:
+                if prefix and not name.endswith(".json"):
+                    continue
+                if not prefix and not name.endswith((".js", ".css", ".html")):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    stat = os.stat(path)
+                    relative = os.path.relpath(path, root_path).replace(os.sep, "/")
+                    relative = f"{prefix}/{relative}" if prefix else relative
+                    token = f"{stat.st_mtime_ns}:{stat.st_size}"
+                    files.append(f"{relative}:{token}")
+                    revisions[relative] = token
+                except OSError:
+                    continue
+    digest = hashlib.sha256("\n".join(sorted(files)).encode("utf-8")).hexdigest()[:16]
+    return JSONResponse({"revision": digest, "files": revisions}, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
@@ -3072,6 +3158,7 @@ class AIReference(BaseModel):
 class OnlineImageRequest(BaseModel):
     prompt: str = Field(default="", max_length=ONLINE_IMAGE_PROMPT_MAX_LENGTH)
     provider_id: str = "comfly"
+    region: str = ""
     model: str = ""
     family_id: str = ""
     size: str = "1024x1024"
@@ -3114,6 +3201,7 @@ class MidjourneyModalRequest(BaseModel):
 
 class ImageTaskQueryRequest(BaseModel):
     provider_id: str = "comfly"
+    region: str = ""
     task_id: str = Field(min_length=1, max_length=240)
 
 CANVAS_TASKS: Dict[str, Dict[str, Any]] = {}
@@ -3123,6 +3211,7 @@ CANVAS_TASK_LOCK = Lock()
 class CanvasVideoRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=VIDEO_PROMPT_REQUEST_MAX_LENGTH)
     provider_id: str = "comfly"
+    region: str = ""
     model: str = "veo3-fast"
     family_id: str = ""
     duration: int = 5
@@ -3147,6 +3236,7 @@ class CanvasVideoRequest(BaseModel):
 class CanvasAudioRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=VIDEO_PROMPT_MAX_LENGTH)
     provider_id: str = "ai-money"
+    region: str = ""
     model: str = "doubao-seed-audio-1.0"
     family_id: str = ""
     reference_audio: str = ""
@@ -3321,6 +3411,7 @@ class ProviderManifestValidateRequest(BaseModel):
 
 class ModelCapabilityDryRunRequest(BaseModel):
     provider_id: str = ""
+    region: str = ""
     model_id: str = ""
     family_id: str = ""
     operation: str = ""
@@ -3336,6 +3427,7 @@ class CanvasPreflightRequest(BaseModel):
     node_id: str = ""
     client_operation_id: str = ""
     provider_id: str = ""
+    region: str = ""
     model_id: str = ""
     family_id: str = ""
     operation: str = ""
@@ -3382,6 +3474,7 @@ class CanvasLLMRequest(BaseModel):
     family_id: str = ""
     messages: List[Dict[str, Any]] = []
     provider: str = "comfly"
+    region: str = ""
     ms_model: str = ""
     images: List[str] = []   # 可以是 /output/*.png、/assets/*.png 本地路径 或 http(s) URL 或 data URL
     videos: List[str] = []   # 可以是 /output/*.mp4、/assets/*.mp4 本地路径 或 http(s) URL 或 data URL
@@ -4186,6 +4279,29 @@ def normalize_canvas_kind(kind="classic"):
 
 # ===== 项目（按项目分类管理画布）=====
 PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
+SMART_CANVAS_PERSONALIZATION_PATH = os.path.join(DATA_DIR, "smart_canvas_personalization.json")
+
+@app.get("/api/smart-canvas/personalization")
+async def get_smart_canvas_personalization():
+    path = Path(SMART_CANVAS_PERSONALIZATION_PATH)
+    if not path.exists():
+        return {"version": 1, "executionLayouts": {}, "parameterOptionOrder": {}, "modelOrder": {}}
+    try:
+        value = read_json_file(path)
+    except (DataFileError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"画布个性化配置读取失败：{exc}") from exc
+    return value if isinstance(value, dict) else {"version": 1}
+
+@app.put("/api/smart-canvas/personalization")
+async def put_smart_canvas_personalization(payload: Dict[str, Any]):
+    allowed = {
+        "version": max(1, int(payload.get("version") or 1)),
+        "executionLayouts": payload.get("executionLayouts") if isinstance(payload.get("executionLayouts"), dict) else {},
+        "parameterOptionOrder": payload.get("parameterOptionOrder") if isinstance(payload.get("parameterOptionOrder"), dict) else {},
+        "modelOrder": payload.get("modelOrder") if isinstance(payload.get("modelOrder"), dict) else {},
+    }
+    atomic_write_json(Path(SMART_CANVAS_PERSONALIZATION_PATH), allowed)
+    return {"ok": True}
 DEFAULT_PROJECT_ID = "default"
 
 def load_projects():
@@ -4545,7 +4661,7 @@ def canvas_assets_index():
     return {"categories": categories, "canvases": canvases, "items": items}
 
 
-def resolve_chat_provider(provider: str, model: str, ms_model: str):
+def resolve_chat_provider(provider: str, model: str, ms_model: str, region: str = ""):
     if provider == "modelscope":
         clean_token = modelscope_api_key()
         if not clean_token:
@@ -4554,7 +4670,7 @@ def resolve_chat_provider(provider: str, model: str, ms_model: str):
         hdrs = {"Authorization": bearer_auth_value(clean_token), "Content-Type": "application/json"}
         mdl = selected_model(ms_model or model, MODELSCOPE_CHAT_MODELS[0] if MODELSCOPE_CHAT_MODELS else "MiniMax/MiniMax-M2.7")
         return base, hdrs, mdl
-    api_provider = get_api_provider(provider or "")
+    api_provider = get_api_provider(provider or "", region=region)
     if is_codex_provider(api_provider):
         raise HTTPException(status_code=400, detail="OpenAI CLI 自动跟随当前 Codex 登录，不需要在 API 卡片中填写 Key。请使用画布/聊天里的 OpenAI CLI 专用通道。")
     if is_gemini_cli_provider(api_provider):
@@ -4615,7 +4731,10 @@ def api_headers(json_body=True, provider=None, model=""):
     if provider:
         if is_codex_provider(provider) or is_gemini_cli_provider(provider):
             raise HTTPException(status_code=400, detail="CLI 协议使用本机登录态，不需要 API Key。当前入口应走对应 CLI 专用通道。")
-        api_key = provider_env_key_value(provider["id"])
+        if is_runninghub_provider(provider):
+            api_key = runninghub_api_key(provider, region=provider.get("rh_region"))
+        else:
+            api_key = provider_env_key_value(provider["id"])
         provider_name = provider.get("name") or provider["id"]
         if not api_key:
             raise HTTPException(status_code=400, detail=f"未配置 {provider_name} 的 API Key，请在 API 平台管理中填写。")
@@ -7124,6 +7243,8 @@ async def generate_jimeng_provider_image(prompt, size, model, reference_images=N
                 f"--resolution_type={resolution}",
                 f"--poll={jimeng_poll_seconds()}",
             ]
+            if requested_ratio:
+                args.append(f"--ratio={requested_ratio}")
             if model_version:
                 args.append(f"--model_version={model_version}")
         else:
@@ -7406,6 +7527,13 @@ def ai_money_video_request_body(model, prompt, seconds, aspect_ratio="", resolut
     images = [str(url or "").strip() for url in (image_urls or []) if str(url or "").strip()]
     videos = [str(url or "").strip() for url in (video_urls or []) if str(url or "").strip()]
     audios = [str(url or "").strip() for url in (audio_urls or []) if str(url or "").strip()]
+    if lower_model == "animate-motion-transfer":
+        if len(images) != 1 or len(videos) != 1:
+            raise HTTPException(status_code=400, detail="Animate 动作迁移需要一张角色图片和一个参考动作视频。")
+        metadata = {"video_url": videos}
+        if capability_parameters:
+            metadata.update({key: value for key, value in capability_parameters.items() if value not in (None, "")})
+        return merge_request_body({"model": model_name, "images": images, "metadata": metadata}, None)
     is_wan_3_reference = bool(re.fullmatch(r"wan-3\.0-(?:global-)?prime-r2v", lower_model))
     if lower_model.endswith("-i2v") and not images:
         raise HTTPException(status_code=400, detail="laohu 图生视频模型需要至少一张参考图片。")
@@ -8056,8 +8184,9 @@ async def generate_ai_money_video(payload, provider, capability_parameters=None)
             seed=payload.seed,
             capability_parameters=capability_parameters,
         )
+        submit_endpoint = "/v1/video/generations" if str(payload.model or "").strip().lower() == "animate-motion-transfer" else "/v1/videos"
         response = await client.post(
-            f"{base_url}/v1/videos",
+            f"{base_url}{submit_endpoint}",
             headers=api_headers(provider=provider, model=body["model"]),
             json=body,
         )
@@ -11885,15 +12014,23 @@ def runninghub_api_headers(provider, use_wallet=True):
 def runninghub_json_headers(provider, use_wallet=True):
     return runninghub_api_headers(provider, use_wallet=use_wallet)
 
-def runninghub_provider(region=None):
-    return runninghub_provider_for_region(get_api_provider_exact("runninghub"), region)
+def runninghub_provider(region=None, require_enabled=True):
+    requested = runninghub_request_region(region)
+    return runninghub_provider_for_region(
+        get_api_provider_exact("runninghub"),
+        requested,
+        require_enabled=require_enabled,
+    )
 
 def runninghub_api_key(provider=None, use_wallet=False, prefer_wallet=False, region=None):
     provider = provider or runninghub_provider(region)
     provider_id = (provider or {}).get("id") or "runninghub"
-    active_region = runninghub_normalize_region(region or (provider or {}).get("rh_region"), runninghub_region_from_base_url((provider or {}).get("base_url"), "global"))
-    free_key = str((provider or {}).get("api_key") or "").strip() or runninghub_region_key_value(active_region, use_wallet=False)
-    wallet_key = str((provider or {}).get("wallet_api_key") or "").strip() or runninghub_wallet_key_value(active_region)
+    requested = runninghub_request_region(region)
+    active_region = requested or runninghub_normalize_region((provider or {}).get("rh_region"), runninghub_region_from_base_url((provider or {}).get("base_url"), "global"))
+    source_region = runninghub_provider_region(provider)
+    top_key_allowed = not requested or requested == source_region
+    free_key = (str((provider or {}).get("api_key") or "").strip() if top_key_allowed else "") or runninghub_region_key_value(active_region, use_wallet=False)
+    wallet_key = (str((provider or {}).get("wallet_api_key") or "").strip() if top_key_allowed else "") or runninghub_wallet_key_value(active_region)
     if use_wallet and not wallet_key:
         raise HTTPException(status_code=400, detail="未配置 RunningHub 账户余额 API Key。标准模型接口只能走账户余额，请在 RH 设置中填写账户余额 Key。")
     api_key = wallet_key if (use_wallet or prefer_wallet) and wallet_key else free_key
@@ -11903,6 +12040,9 @@ def runninghub_api_key(provider=None, use_wallet=False, prefer_wallet=False, reg
 
 def runninghub_app_headers(json_body=True, use_wallet=False, provider=None, region=None, api_key=""):
     provider = provider or runninghub_provider(region)
+    requested_region = runninghub_request_region(region)
+    if requested_region and runninghub_provider_region(provider) != requested_region:
+        provider = runninghub_provider_for_region(provider, requested_region, require_enabled=True)
     host = urllib.parse.urlsplit(str((provider or {}).get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL)).netloc or "www.runninghub.ai"
     headers = {"Host": host}
     if provider:
@@ -11916,6 +12056,9 @@ def runninghub_app_headers(json_body=True, use_wallet=False, provider=None, regi
 def runninghub_app_info_key_candidates(provider=None, region=None):
     """按当前站点收集可用于读取 AI 应用 Schema 的 Key，避免跨站点或泄露 Key。"""
     provider = provider or runninghub_provider(region)
+    requested_region = runninghub_request_region(region)
+    if requested_region and runninghub_provider_region(provider) != requested_region:
+        provider = runninghub_provider_for_region(provider, requested_region, require_enabled=True)
     active_region = runninghub_normalize_region(
         region or (provider or {}).get("rh_region"),
         runninghub_region_from_base_url((provider or {}).get("base_url"), "global"),
@@ -12993,7 +13136,7 @@ def rh_random_field_value(field):
         return str(int(round(value)))
     return str(value)
 
-def runninghub_entry_config_from_model(provider, model):
+def runninghub_entry_config_from_model(provider, model, region=""):
     """解析 model=app:ID / workflow:ID，返回 {kind,id,fields,optionalImageMode,workflowJson} 或 None。"""
     text = str(model or "").strip()
     match = RUNNINGHUB_ENTRY_MODEL_RE.match(text)
@@ -13005,9 +13148,15 @@ def runninghub_entry_config_from_model(provider, model):
         return None
     if kind == "workflow":
         key = runninghub_workflow_store_key(entry_id)
+        selected_region = runninghub_workflow_region(region, provider)
         with RUNNINGHUB_WORKFLOW_LOCK:
             store = load_runninghub_workflow_store()
-        cfg = runninghub_select_workflow_config(store.get(key), runninghub_provider_workflow_config(key), key)
+        cfg = runninghub_select_workflow_config(
+            runninghub_workflow_store_config(store, key, selected_region, provider),
+            runninghub_provider_workflow_config(key, region=region),
+            key,
+            region=selected_region,
+        )
         if not isinstance(cfg, dict):
             # 退回到 provider 列表中的内联条目
             entry = next(
@@ -13194,7 +13343,7 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
         raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload}")
 
 async def generate_runninghub_provider_image(prompt, size, model, reference_images=None, provider=None, capability_parameters=None):
-    entry = runninghub_entry_config_from_model(provider, model)
+    entry = runninghub_entry_config_from_model(provider, model, region=(provider or {}).get("rh_region", ""))
     if entry:
         return await generate_runninghub_entry_image(prompt, size, model, reference_images, provider, entry)
     model_def = await runninghub_model_definition(provider, model)
@@ -13404,8 +13553,8 @@ async def generate_runninghub_audio(payload, provider, capability_parameters=Non
         return {"audios": local_urls, "task_id": task_id, "raw": result}
 
 
-async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution="", capability_parameters=None):
-    provider = get_api_provider(provider_id)
+async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution="", capability_parameters=None, region=""):
+    provider = get_api_provider(provider_id, region=region)
     if is_tudou_provider(provider):
         model = tudou_image_model_for_request(model)
     if provider["id"] == "modelscope":
@@ -14910,7 +15059,7 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
         raise HTTPException(status_code=400, detail="webappId 必填")
     provider = runninghub_provider(payload.region)
     api_key = runninghub_api_key(provider, use_wallet=payload.useWallet, region=payload.region)
-    entry = runninghub_entry_config_from_model(provider, f"app:{webapp_id}")
+    entry = runninghub_entry_config_from_model(provider, f"app:{webapp_id}", region=payload.region)
     if not entry:
         raise HTTPException(status_code=400, detail=f"RunningHub AI 应用未同步官方 Schema：{webapp_id}")
     try:
@@ -15014,32 +15163,37 @@ async def runninghub_workflow_info(workflowId: str = "", region: str = ""):
     return {"success": True, "data": {"workflowId": workflow_id, "nodeInfoList": node_info_list, "raw": raw}}
 
 @app.get("/api/runninghub/workflows")
-def list_runninghub_workflows():
+def list_runninghub_workflows(region: str = ""):
+    requested, selected_region, selected_provider = runninghub_workflow_region_context(region)
     providers = load_api_providers()
-    hidden_ids = runninghub_saved_hidden_workflow_ids()
-    for provider in providers:
-        if provider.get("id") != "runninghub":
-            continue
-        for entry in provider.get("rh_workflows") or []:
-            workflow_id = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
-            if workflow_id and entry.get("hidden") is True:
-                hidden_ids.add(workflow_id)
+    hidden_ids = runninghub_saved_hidden_workflow_ids(selected_region)
     with RUNNINGHUB_WORKFLOW_LOCK:
         store = load_runninghub_workflow_store()
-    merged = {workflow_id: cfg for workflow_id, cfg in store.items() if isinstance(cfg, dict) and workflow_id not in hidden_ids}
+    merged = {
+        workflow_id: cfg
+        for workflow_id, cfg in runninghub_workflow_store_entries_for_region(store, selected_region, selected_provider).items()
+        if workflow_id not in hidden_ids
+    }
     for provider in providers:
         if provider.get("id") != "runninghub":
             continue
-        for entry in provider.get("rh_workflows") or []:
+        active_provider = runninghub_provider_for_region(
+            provider,
+            requested or selected_region,
+            require_enabled=bool(requested),
+        )
+        for entry in active_provider.get("rh_workflows") or []:
             workflow_id = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
             if not workflow_id:
                 continue
             if entry.get("hidden") is True:
                 merged.pop(workflow_id, None)
                 continue
-            provider_cfg = runninghub_provider_workflow_config(workflow_id)
+            provider_cfg = runninghub_provider_workflow_config(workflow_id, region=requested)
             if provider_cfg:
-                merged[workflow_id] = runninghub_select_workflow_config(merged.get(workflow_id), provider_cfg, workflow_id)
+                merged[workflow_id] = runninghub_select_workflow_config(
+                    merged.get(workflow_id), provider_cfg, workflow_id, region=selected_region
+                )
     items = []
     for workflow_id, cfg in merged.items():
         if not isinstance(cfg, dict):
@@ -15055,15 +15209,16 @@ def list_runninghub_workflows():
     return {"workflows": items}
 
 @app.get("/api/runninghub/workflows/{workflow_id:path}")
-def get_runninghub_workflow(workflow_id: str):
+def get_runninghub_workflow(workflow_id: str, region: str = ""):
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         raise HTTPException(status_code=400, detail="workflowId 必填")
+    requested, selected_region, provider = runninghub_workflow_region_context(region)
     with RUNNINGHUB_WORKFLOW_LOCK:
         store = load_runninghub_workflow_store()
-    cfg = store.get(key)
-    provider_cfg = runninghub_provider_workflow_config(key)
-    cfg = runninghub_select_workflow_config(cfg, provider_cfg, key)
+    cfg = runninghub_workflow_store_config(store, key, selected_region, provider)
+    provider_cfg = runninghub_provider_workflow_config(key, region=requested)
+    cfg = runninghub_select_workflow_config(cfg, provider_cfg, key, region=selected_region)
     if not isinstance(cfg, dict):
         raise HTTPException(status_code=404, detail="RunningHub 工作流未找到")
     return {"workflow": cfg}
@@ -15105,6 +15260,7 @@ def save_runninghub_workflow(workflow_id: str, payload: RunningHubWorkflowConfig
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         raise HTTPException(status_code=400, detail="workflowId 必填")
+    _, selected_region, _ = runninghub_workflow_region_context(payload.region)
     fields = [
         field for field in (runninghub_normalize_field(item) for item in (payload.fields or []))
         if not runninghub_is_saved_link_field(field)
@@ -15118,27 +15274,30 @@ def save_runninghub_workflow(workflow_id: str, payload: RunningHubWorkflowConfig
         "optionalImageMode": payload.optionalImageMode or "prune-workflow",
         "raw": payload.raw or {},
         "updatedAt": now_ms(),
+        "region": selected_region,
     }
     with RUNNINGHUB_WORKFLOW_LOCK:
         store = load_runninghub_workflow_store()
-        store[key] = cfg
+        store[runninghub_workflow_store_region_key(key, selected_region)] = cfg
         save_runninghub_workflow_store(store)
-    sync_runninghub_workflow_to_provider(cfg)
+    sync_runninghub_workflow_to_provider(cfg, region=selected_region)
     return {"success": True, "workflow": cfg}
 
 @app.delete("/api/runninghub/workflows/{workflow_id:path}")
-def delete_runninghub_workflow(workflow_id: str):
+def delete_runninghub_workflow(workflow_id: str, region: str = ""):
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         raise HTTPException(status_code=400, detail="workflowId 必填")
+    requested, selected_region, provider = runninghub_workflow_region_context(region)
     with RUNNINGHUB_WORKFLOW_LOCK:
         store = load_runninghub_workflow_store()
-        provider_cfg = runninghub_provider_workflow_config(key)
-        if key not in store and not provider_cfg:
+        local_cfg = runninghub_workflow_store_config(store, key, selected_region, provider)
+        provider_cfg = runninghub_provider_workflow_config(key, region=requested)
+        if not local_cfg and not provider_cfg:
             raise HTTPException(status_code=404, detail="RunningHub 工作流未找到")
-        store.pop(key, None)
+        runninghub_workflow_store_remove(store, key, selected_region, provider)
         save_runninghub_workflow_store(store)
-    remove_runninghub_workflow_from_provider(key)
+    remove_runninghub_workflow_from_provider(key, region=selected_region)
     return {"success": True}
 
 @app.get("/api/runninghub/query")
@@ -15146,7 +15305,7 @@ async def runninghub_query(taskId: str = "", useWallet: bool = False, region: st
     task_id = str(taskId or "").strip()
     if not task_id:
         raise HTTPException(status_code=400, detail="taskId 必填")
-    provider = runninghub_provider(region)
+    provider = runninghub_provider(region, require_enabled=False)
     api_key = runninghub_api_key(provider, use_wallet=useWallet, region=region)
     url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=240.0, write=30.0, pool=20.0)) as client:
@@ -15728,6 +15887,7 @@ async def model_capability_dry_run(payload: ModelCapabilityDryRunRequest):
             input_roles=payload.input_roles,
             parameters=payload.parameters,
             operation=payload.operation,
+            providers=[get_api_provider(payload.provider_id, region=payload.region)],
         )
         metadata = canvas_input_metadata(profile, payload.inputs, payload.input_metadata)
         MODEL_CAPABILITY_REGISTRY.validate_input_metadata(profile, metadata)
@@ -15747,7 +15907,13 @@ async def canvas_preflight(payload: CanvasPreflightRequest):
     if node_type == "ai_application":
         if payload.provider_id != "runninghub":
             raise HTTPException(status_code=400, detail="AI 应用预检只支持 RunningHub")
-        provider = next((item for item in canvas_api_providers() if item.get("id") == "runninghub"), None)
+        if str(payload.region or "").strip():
+            provider = runninghub_provider(payload.region, require_enabled=True)
+        else:
+            provider = next((item for item in canvas_api_providers() if item.get("id") == "runninghub"), None)
+            selected_config = (provider or {}).get("rh_regions", {}).get((provider or {}).get("rh_region"), {})
+            if isinstance(selected_config, dict) and selected_config.get("enabled") is False:
+                raise HTTPException(status_code=400, detail=f"RunningHub {(provider or {}).get('rh_region') or 'global'} 站点尚未启用")
         if not provider:
             raise HTTPException(status_code=400, detail="RunningHub 未启用")
         result = runninghub_preflight_app(provider, payload.ai_app_id, payload.app_field_values)
@@ -15765,6 +15931,7 @@ async def canvas_preflight(payload: CanvasPreflightRequest):
                 input_roles=payload.input_roles,
                 parameters=payload.parameters,
                 operation=payload.operation,
+                providers=[get_api_provider(payload.provider_id, region=payload.region)],
             )
             metadata = canvas_input_metadata(profile, payload.inputs, payload.input_metadata)
             MODEL_CAPABILITY_REGISTRY.validate_input_metadata(profile, metadata)
@@ -15856,7 +16023,7 @@ async def save_providers(payload: List[ApiProviderPayload]):
         provider = normalize_provider(item.dict(exclude={"api_key"}))
         if provider["id"] == "runninghub":
             provider = preserve_runninghub_hidden_overrides(provider)
-            prune_runninghub_workflow_store_for_provider(provider)
+            prune_runninghub_workflow_store_for_provider(provider, region=provider.get("rh_region", ""))
         if any(existing["id"] == provider["id"] for existing in providers):
             raise HTTPException(status_code=400, detail=f"API 平台 ID 重复：{provider['id']}")
         providers.append(provider)
@@ -15926,7 +16093,10 @@ async def save_providers(payload: List[ApiProviderPayload]):
     save_api_providers(providers)
     runninghub_provider = next((item for item in providers if item.get("id") == "runninghub"), None)
     if runninghub_provider:
-        sync_runninghub_provider_workflows_to_static_template(runninghub_provider)
+        sync_runninghub_provider_workflows_to_static_template(
+            runninghub_provider,
+            region=runninghub_provider.get("rh_region", ""),
+        )
     if env_updates:
         update_env_values(env_updates)
         reload_env_globals()   # 立即将最新 env 值同步回模块全局变量，无需重启
@@ -16667,24 +16837,32 @@ async def fetch_upstream_models_from_payload(payload: TestConnectionPayload):
     return await fetch_models_from_upstream(payload.base_url, api_key, protocol, payload.image_request_mode, payload.region)
 
 @app.get("/api/providers/{provider_id}/fetch-models")
-async def fetch_upstream_models(provider_id: str):
+async def fetch_upstream_models(provider_id: str, region: str = ""):
     """从已保存的上游 OpenAI 兼容接口拉取 /v1/models 列表，按名称智能分类为 image/chat/video。"""
     provider = get_api_provider_exact(provider_id)
     if is_codex_provider(provider):
         return await fetch_models_from_upstream("", "", "codex", provider.get("image_request_mode") or "openai")
     if is_gemini_cli_provider(provider):
         return await fetch_models_from_upstream("", "", "gemini-cli", provider.get("image_request_mode") or "openai")
-    api_key = os.getenv(runninghub_wallet_key_env(), "") if provider["id"] == "runninghub" else ""
+    if provider_protocol(provider) == "jimeng":
+        return await fetch_models_from_upstream("", "", "jimeng", provider.get("image_request_mode") or "openai")
+    selected_region = runninghub_normalize_region(region or provider.get("rh_region")) if provider["id"] == "runninghub" else ""
+    api_key = os.getenv(runninghub_wallet_key_env(selected_region), "") if provider["id"] == "runninghub" else ""
     if not api_key:
         api_key = provider_env_key_value(provider["id"])
-    if not api_key:
+    if not api_key and provider["id"] != "runninghub":
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
-    payload = await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
-    save_provider_catalog_snapshot(Path(BASE_DIR), provider["id"], payload, source=upstream_models_url(provider.get("base_url") or "", provider_protocol(provider)))
+    base_url = provider.get("base_url") or ""
+    if provider["id"] == "runninghub":
+        region_config = (provider.get("rh_regions") or {}).get(selected_region) or {}
+        base_url = region_config.get("base_url") or RUNNINGHUB_REGION_DEFAULTS[selected_region]["base_url"]
+    payload = await fetch_models_from_upstream(base_url, api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai", selected_region)
+    if provider["id"] != "runninghub":
+        save_provider_catalog_snapshot(Path(BASE_DIR), provider["id"], payload, source=upstream_models_url(base_url, provider_protocol(provider)))
     return payload
 
 async def build_online_image_result(payload: OnlineImageRequest):
-    provider = get_api_provider(payload.provider_id)
+    provider = get_api_provider(payload.provider_id, region=payload.region)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
     model = selected_model(payload.model, default_model)
     refs = [ref.dict() for ref in payload.reference_images if ref.url]
@@ -16711,6 +16889,7 @@ async def build_online_image_result(payload: OnlineImageRequest):
             "reference": len(image_refs),
         },
         parameters=capability_parameters,
+        providers=[provider],
     )
     model = str(profile.get("model_id") or model)
     payload.model = model
@@ -16739,7 +16918,7 @@ async def build_online_image_result(payload: OnlineImageRequest):
         else:
             image_data, raw_item = await generate_ai_image(
                 payload.prompt, request_size, payload.quality, model, image_refs, provider["id"],
-                payload.aspect_ratio, payload.resolution, platform_parameters,
+                payload.aspect_ratio, payload.resolution, platform_parameters, payload.region,
             )
         try:
             image_items = extract_images(raw_item) if isinstance(raw_item, dict) else [image_data]
@@ -17109,7 +17288,14 @@ async def get_midjourney_task(task_id: str, provider_id: str):
 
 @app.post("/api/image-task-query")
 async def query_image_task(payload: ImageTaskQueryRequest):
-    provider = get_api_provider(payload.provider_id)
+    query_region = str(payload.region or "").strip()
+    if not query_region and str(payload.provider_id or "").strip().lower() == "runninghub":
+        stored_task = PROJECT_STORAGE.get_canvas_task(str(payload.task_id or "").strip())
+        if not stored_task:
+            with CANVAS_TASK_LOCK:
+                stored_task = dict(CANVAS_TASKS.get(str(payload.task_id or "").strip()) or {})
+        query_region = str((stored_task or {}).get("region") or "").strip()
+    provider = get_api_provider(payload.provider_id, region=query_region, require_enabled=False)
     task_id = str(payload.task_id or "").strip()
     if is_runninghub_provider(provider):
         api_key = runninghub_api_key(provider)
@@ -17270,6 +17456,7 @@ async def create_canvas_image_task(payload: OnlineImageRequest):
             "result": None,
             "error": "",
             "provider_id": payload.provider_id,
+            "region": payload.region,
             "model": payload.model,
         }
     PROJECT_STORAGE.create_canvas_task(task)
@@ -18252,7 +18439,7 @@ def volcengine_video_prompt_text(prompt, aspect_ratio="", duration=None):
 
 async def canvas_audio_generation(payload: CanvasAudioRequest, node_type: str = "audio_generation"):
     references = payload.reference_audios or ([payload.reference_audio] if payload.reference_audio else [])
-    provider = get_api_provider(payload.provider_id)
+    provider = get_api_provider(payload.provider_id, region=payload.region)
     if is_codex_provider(provider):
         raise HTTPException(status_code=400, detail="OpenAI Codex CLI 当前只支持文本生成，不支持音频或音乐生成。")
     if not (is_ai_money_provider(provider) or is_runninghub_provider(provider)):
@@ -18275,6 +18462,7 @@ async def canvas_audio_generation(payload: CanvasAudioRequest, node_type: str = 
             "reference_audio": len(references),
         },
         parameters=canvas_audio_capability_parameters(payload),
+        providers=[provider],
     )
     model = str(profile.get("model_id") or model)
     payload.model = model
@@ -18323,7 +18511,7 @@ async def canvas_music(payload: CanvasAudioRequest):
 
 @app.post("/api/canvas-video")
 async def canvas_video(payload: CanvasVideoRequest):
-    provider = get_api_provider(payload.provider_id)
+    provider = get_api_provider(payload.provider_id, region=payload.region)
     if is_codex_provider(provider):
         raise HTTPException(status_code=400, detail="OpenAI Codex CLI 当前只支持文本生成，不支持视频生成。")
     model = selected_model(payload.model, (provider.get("video_models") or ["veo3-fast"])[0])
@@ -18348,6 +18536,7 @@ async def canvas_video(payload: CanvasVideoRequest):
             "reference_audio": len(payload.audios or []),
         },
         parameters=capability_parameters,
+        providers=[provider],
     )
     validate_canvas_video_prompt(profile, payload.prompt)
     model = str(profile.get("model_id") or model)
@@ -18944,7 +19133,7 @@ async def generate_ai_money_special_text(payload, provider, profile, platform_pa
 
 @app.post("/api/canvas-llm")
 async def canvas_llm(payload: CanvasLLMRequest):
-    _provider = get_api_provider(payload.provider)
+    _provider = get_api_provider(payload.provider, region=payload.region)
     if is_codex_provider(_provider):
         model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
@@ -18966,6 +19155,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
                 "reference_audio": len(payload.audios or []),
             },
             parameters=payload.parameters,
+            providers=[_provider],
         )
         model = str(profile.get("model_id") or model)
         payload.model = model
@@ -18992,12 +19182,13 @@ async def canvas_llm(payload: CanvasLLMRequest):
                 "reference_audio": len(payload.audios or []),
             },
             parameters=payload.parameters,
+            providers=[_provider],
         )
         model = str(profile.get("model_id") or model)
         payload.model = model
         text, raw = await gemini_cli_chat_text(payload, payload.messages)
         return {"text": text, "model": model, "raw_usage": None, "raw": raw}
-    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
+    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model, payload.region)
     profile = resolve_model_capability_request(
         _provider.get("id") or payload.provider,
         model,
@@ -19016,6 +19207,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
             "reference_audio": len(payload.audios or []),
         },
         parameters=payload.parameters,
+        providers=[_provider],
     )
     model = str(profile.get("model_id") or model)
     payload.model = model
@@ -19025,7 +19217,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
     if payload.audios:
         raise HTTPException(status_code=400, detail="当前模型虽声明音频理解能力，但该平台的音频消息适配器尚未完成。")
     # 判断协议：APIMart 异步 vs 标准 OpenAI
-    _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+    _llm_provider = get_api_provider(payload.provider, region=payload.region) if payload.provider not in ("modelscope",) else {}
     _is_apimart = is_apimart_provider(_llm_provider)
     system_prompt = (payload.system_prompt or "").strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
@@ -19114,6 +19306,8 @@ from hypit_runtime import HypitRuntime
 from studio_execution import StudioExecution
 from studio_app_execution import StudioAppExecution
 from studio_hypit_models import create_hypit_models_router
+import studio_model_selection
+import studio_module_models
 
 
 def studio_canvas_rename(canvas_id, name, expected_revision=None):
@@ -19165,7 +19359,7 @@ async def studio_notify(canvas):
 async def studio_preflight(canvas, node, request, request_id):
     return await canvas_preflight(CanvasPreflightRequest(
         canvas_id=canvas['id'], node_id=node['id'], client_operation_id=request_id,
-        provider_id=request['provider_id'], model_id=request['model'],
+        provider_id=request['provider_id'], region=request.get('region', ''), model_id=request['model'],
         node_type=request['kind'] + '_generation', inputs=request['inputs'],
         input_counts=request['input_counts'], input_roles=request['input_roles'],
         parameters=request['parameters'], nodes=canvas['nodes'], connections=canvas.get('connections', [])))
@@ -19174,12 +19368,12 @@ async def studio_preflight(canvas, node, request, request_id):
 async def studio_generate(request):
     kind, inputs = request['kind'], request['inputs']
     common = dict(provider_id=request['provider_id'], model=request['model'],
-                  parameters=request['parameters'], input_roles=request['input_roles'])
+                  region=request.get('region', ''), parameters=request['parameters'], input_roles=request['input_roles'])
     images = inputs.get('first_frame', []) + inputs.get('last_frame', []) + inputs.get('reference', [])
     refs = [{'url': url, 'kind': 'image'} for url in images]
     if kind == 'text':
         return await canvas_llm(CanvasLLMRequest(
-            provider=common['provider_id'], model=common['model'], parameters=common['parameters'],
+            provider=common['provider_id'], region=common['region'], model=common['model'], parameters=common['parameters'],
             input_roles=common['input_roles'], message=request['prompt'], system_prompt=request.get('system_prompt', ''),
             images=images, videos=inputs.get('source_video', []), audios=inputs.get('reference_audio', [])))
     if kind == 'image':
@@ -19195,7 +19389,7 @@ async def studio_generate(request):
 
 async def studio_hypit_validate(request):
     return await canvas_preflight(CanvasPreflightRequest(
-        provider_id=request['provider_id'], model_id=request['model'],
+        provider_id=request['provider_id'], region=request.get('region', ''), model_id=request['model'],
         node_type=request['kind'] + '_generation', inputs=request['inputs'],
         input_counts=request['input_counts'], input_roles=request['input_roles'],
         parameters=request['parameters']))
@@ -19251,6 +19445,7 @@ async def studio_app_preflight(canvas, node, request, request_id):
     if request['kind'] == 'ai_application':
         return await canvas_preflight(CanvasPreflightRequest(canvas_id=canvas['id'], node_id=node['id'],
             client_operation_id=request_id, provider_id='runninghub', node_type='ai_application',
+            region=request.get('region', ''),
             ai_app_id=request['app_id'], app_field_values=request['app_field_values'],
             nodes=canvas['nodes'], connections=canvas.get('connections', [])))
     graph = validate_canvas_preflight_graph(canvas['nodes'], canvas.get('connections', []))
@@ -19295,9 +19490,14 @@ async def studio_comfy_upload(ref, request):
 
 async def studio_app_fields(app_id, node, canvas):
     settings = node.get('runSettings') or {}
+    region = str(settings.get('rhRegion') or settings.get('region') or '').strip()
+    source_provider = next((p for p in load_api_providers() if p.get('id') == 'runninghub'), None)
+    provider = runninghub_provider_for_region(source_provider, region, require_enabled=bool(region)) if source_provider else {}
     if str(settings.get('rhConfigKey') or '').startswith('workflow:') or settings.get('rhMode') == 'workflow':
-        return get_runninghub_workflow(app_id)['workflow']
-    provider = next((p for p in canvas_api_providers() if p.get('id') == 'runninghub'), {})
+        workflow = runninghub_provider_workflow_config(app_id, region=region)
+        if workflow:
+            return workflow
+        return get_runninghub_workflow(app_id, region=region)['workflow']
     return next((item for item in provider.get('rh_apps', []) if str(item.get('id') or item.get('appId')) == str(app_id)), {})
 
 
@@ -19353,6 +19553,7 @@ async def studio_cancel_node(canvas, node, task_id):
 
 STUDIO_CANVAS = HeadlessCanvas(load_canvas, save_canvas, CANVAS_LOCK, studio_submit_node,
                               studio_cancel_node, studio_validate_model, studio_notify)
+app.include_router(studio_module_models.create_module_models_router(build_model_capability_catalog))
 app.include_router(create_agent_router(BASE_DIR, load_canvas, executor=STUDIO_CANVAS))
 
 @app.get("/api/canvases")
@@ -21296,25 +21497,147 @@ def save_runninghub_workflow_store(store):
     with open(RUNNINGHUB_WORKFLOW_STORE_FILE, "w", encoding="utf-8") as f:
         json.dump(store, f, ensure_ascii=False, indent=2)
 
-def prune_runninghub_workflow_store_for_provider(provider):
+def runninghub_workflow_store_region_key(workflow_id: str, region: str) -> str:
+    key = runninghub_workflow_store_key(workflow_id)
+    selected = runninghub_normalize_region(region)
+    return f"{selected}::{key}" if key else ""
+
+def runninghub_workflow_store_region_from_key(store_key: str) -> str:
+    text = str(store_key or "").strip()
+    for region in RUNNINGHUB_REGION_DEFAULTS:
+        if text.startswith(f"{region}::"):
+            return region
+    return ""
+
+def runninghub_workflow_store_id_from_key(store_key: str) -> str:
+    text = str(store_key or "").strip()
+    region = runninghub_workflow_store_region_from_key(text)
+    if region:
+        return text[len(region) + 2:].strip()
+    return runninghub_workflow_store_key(text)
+
+def runninghub_workflow_store_legacy_region(workflow_id: str, cfg=None, provider=None) -> str:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    cfg_region = str(cfg.get("region") or "").strip().lower()
+    if cfg_region in RUNNINGHUB_REGION_DEFAULTS:
+        return cfg_region
+    if isinstance(provider, dict) and provider.get("id") == "runninghub":
+        regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+        owners = []
+        key = runninghub_workflow_store_key(workflow_id)
+        for region in RUNNINGHUB_REGION_DEFAULTS:
+            config = regions.get(region) if isinstance(regions.get(region), dict) else {}
+            for entry in config.get("rh_workflows") or []:
+                if not isinstance(entry, dict):
+                    continue
+                entry_key = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
+                if entry_key == key:
+                    owners.append(region)
+                    break
+        if len(set(owners)) == 1:
+            return owners[0]
+        return runninghub_provider_region(provider)
+    return "global"
+
+def runninghub_workflow_store_config(store, workflow_id: str, region: str, provider=None):
+    if not isinstance(store, dict):
+        return None
+    key = runninghub_workflow_store_key(workflow_id)
+    selected = runninghub_normalize_region(region)
+    scoped_key = runninghub_workflow_store_region_key(key, selected)
+    scoped = store.get(scoped_key)
+    if isinstance(scoped, dict):
+        return scoped
+    legacy = store.get(key)
+    if isinstance(legacy, dict) and runninghub_workflow_store_legacy_region(key, legacy, provider) == selected:
+        return legacy
+    return None
+
+def runninghub_workflow_store_entries_for_region(store, region: str, provider=None):
+    if not isinstance(store, dict):
+        return {}
+    selected = runninghub_normalize_region(region)
+    entries = {}
+    # 旧平面 store 没有站点身份，只允许归属原编辑站，不能广播到两站。
+    for store_key, cfg in store.items():
+        if runninghub_workflow_store_region_from_key(store_key) or not isinstance(cfg, dict):
+            continue
+        workflow_id = runninghub_workflow_store_key(cfg.get("workflowId") or store_key)
+        if workflow_id and runninghub_workflow_store_legacy_region(workflow_id, cfg, provider) == selected:
+            entries[workflow_id] = cfg
+    # 新写入使用带 region 的键，覆盖同 ID 的旧平面历史副本。
+    for store_key, cfg in store.items():
+        if not isinstance(cfg, dict) or runninghub_workflow_store_region_from_key(store_key) != selected:
+            continue
+        workflow_id = runninghub_workflow_store_key(cfg.get("workflowId") or runninghub_workflow_store_id_from_key(store_key))
+        if workflow_id:
+            entries[workflow_id] = cfg
+    return entries
+
+def runninghub_workflow_region_context(region: str = ""):
+    requested = runninghub_request_region(region)
+    providers = load_api_providers()
+    provider = next((item for item in providers if item.get("id") == "runninghub"), None)
+    selected = requested or (runninghub_provider_region(provider) if provider else "global")
+    return requested, selected, provider
+
+def prune_runninghub_workflow_store_for_provider(provider, region: str = ""):
     if not isinstance(provider, dict) or provider.get("id") != "runninghub":
         return
     store = load_runninghub_workflow_store()
     if not store:
         return
+    selected = runninghub_workflow_region(region, provider)
+    regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+    active = regions.get(selected) if isinstance(regions.get(selected), dict) else {}
+    source_region = runninghub_provider_region(provider)
+    source_entries = active.get("rh_workflows") if isinstance(active, dict) else None
+    if not isinstance(source_entries, list) and selected == source_region:
+        source_entries = provider.get("rh_workflows") or []
     keep_ids = {
         runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
-        for entry in provider.get("rh_workflows") or []
+        for entry in source_entries or []
         if isinstance(entry, dict) and entry.get("hidden") is not True
     }
     keep_ids.discard("")
     removed = False
-    for workflow_id in list(store.keys()):
-        if runninghub_workflow_store_key(workflow_id) not in keep_ids:
-            store.pop(workflow_id, None)
-            removed = True
+    for store_key in list(store.keys()):
+        stored_region = runninghub_workflow_store_region_from_key(store_key)
+        if stored_region and stored_region != selected:
+            continue
+        cfg = store.get(store_key) if isinstance(store.get(store_key), dict) else {}
+        workflow_id = runninghub_workflow_store_key(
+            cfg.get("workflowId") or runninghub_workflow_store_id_from_key(store_key)
+        )
+        if stored_region == selected or runninghub_workflow_store_legacy_region(workflow_id, cfg, provider) == selected:
+            if workflow_id not in keep_ids:
+                store.pop(store_key, None)
+                removed = True
     if removed:
         save_runninghub_workflow_store(store)
+
+def runninghub_workflow_region(region: str = "", provider=None) -> str:
+    requested = runninghub_request_region(region)
+    if requested:
+        return requested
+    if isinstance(provider, dict) and provider.get("id") == "runninghub":
+        return runninghub_provider_region(provider)
+    return "global"
+
+def runninghub_workflow_store_remove(store, workflow_id: str, region: str, provider=None) -> bool:
+    if not isinstance(store, dict):
+        return False
+    key = runninghub_workflow_store_key(workflow_id)
+    selected = runninghub_normalize_region(region)
+    removed = False
+    scoped_key = runninghub_workflow_store_region_key(key, selected)
+    if scoped_key in store:
+        store.pop(scoped_key, None)
+        removed = True
+    if key in store and runninghub_workflow_store_legacy_region(key, store.get(key), provider) == selected:
+        store.pop(key, None)
+        removed = True
+    return removed
 
 def runninghub_workflow_config_has_payload(cfg):
     if not isinstance(cfg, dict):
@@ -21371,7 +21694,7 @@ def runninghub_workflow_entry_from_config(cfg, fallback=None):
         "updatedAt": (cfg or {}).get("updatedAt") or fallback.get("updatedAt") or 0,
     }, "workflow")
 
-def runninghub_saved_hidden_workflow_ids():
+def runninghub_saved_hidden_workflow_ids(region: str = ""):
     if not os.path.exists(API_PROVIDERS_FILE):
         return set()
     try:
@@ -21379,11 +21702,21 @@ def runninghub_saved_hidden_workflow_ids():
             raw = json.load(f)
     except Exception:
         return set()
+    requested = runninghub_request_region(region)
     hidden = set()
     for provider in raw if isinstance(raw, list) else []:
         if not isinstance(provider, dict) or str(provider.get("id") or "").strip().lower() != "runninghub":
             continue
-        for entry in provider.get("rh_workflows") or []:
+        selected = requested or runninghub_provider_region(provider)
+        regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+        config = regions.get(selected) if isinstance(regions.get(selected), dict) else {}
+        if regions:
+            entries = config.get("rh_workflows") or []
+        elif selected == runninghub_provider_region(provider):
+            entries = provider.get("rh_workflows") or []
+        else:
+            entries = []
+        for entry in entries or []:
             if not isinstance(entry, dict) or entry.get("hidden") is not True:
                 continue
             key = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
@@ -21391,33 +21724,41 @@ def runninghub_saved_hidden_workflow_ids():
                 hidden.add(key)
     return hidden
 
-def runninghub_provider_with_workflow_store(provider):
+def runninghub_provider_with_workflow_store(provider, region: str = ""):
     if not isinstance(provider, dict) or provider.get("id") != "runninghub":
         return provider
+    selected_region = runninghub_workflow_region(region, provider)
+    source_region = runninghub_provider_region(provider)
+    merged = (
+        runninghub_provider_for_region(provider, selected_region, require_enabled=False)
+        if selected_region != source_region else dict(provider)
+    )
     store = load_runninghub_workflow_store()
-    if not store:
-        return provider
-    merged = dict(provider)
-    workflows = [dict(item) for item in (merged.get("rh_workflows") or []) if isinstance(item, dict)]
+    regions = merged.get("rh_regions") if isinstance(merged.get("rh_regions"), dict) else {}
+    active = regions.get(selected_region) if isinstance(regions.get(selected_region), dict) else {}
+    source_workflows = active.get("rh_workflows") if isinstance(active, dict) else None
+    if not isinstance(source_workflows, list):
+        source_workflows = merged.get("rh_workflows") or []
+    workflows = [dict(item) for item in source_workflows if isinstance(item, dict)]
     hidden_ids = {
         runninghub_workflow_store_key(item.get("workflowId") or item.get("id"))
         for item in workflows
         if item.get("hidden") is True and runninghub_workflow_store_key(item.get("workflowId") or item.get("id"))
     }
-    hidden_ids.update(runninghub_saved_hidden_workflow_ids())
+    hidden_ids.update(runninghub_saved_hidden_workflow_ids(selected_region))
     by_id = {
         runninghub_workflow_store_key(item.get("workflowId") or item.get("id")): item
         for item in workflows
         if runninghub_workflow_store_key(item.get("workflowId") or item.get("id"))
     }
-    for workflow_id, cfg in store.items():
+    for workflow_id, cfg in runninghub_workflow_store_entries_for_region(store, selected_region, provider).items():
         if workflow_id in hidden_ids:
             continue
         if not isinstance(cfg, dict) or not runninghub_workflow_config_has_payload(cfg):
             continue
         existing = by_id.get(workflow_id)
-        selected = runninghub_select_workflow_config(existing, cfg, workflow_id)
-        entry = runninghub_workflow_entry_from_config(selected, existing)
+        selected_cfg = runninghub_select_workflow_config(existing, cfg, workflow_id, region=selected_region)
+        entry = runninghub_workflow_entry_from_config(selected_cfg, existing)
         if not entry:
             continue
         if existing is None:
@@ -21425,18 +21766,29 @@ def runninghub_provider_with_workflow_store(provider):
         else:
             existing.update(entry)
     merged["rh_workflows"] = normalize_runninghub_entries(workflows, "workflow")
+    if regions:
+        region_map = {
+            key: dict(value) if isinstance(value, dict) else value
+            for key, value in regions.items()
+        }
+        selected_config = dict(region_map.get(selected_region) or {})
+        selected_config["rh_workflows"] = merged["rh_workflows"]
+        region_map[selected_region] = selected_config
+        merged["rh_regions"] = region_map
     return merged
 
-def runninghub_provider_workflow_config(workflow_id: str):
+def runninghub_provider_workflow_config(workflow_id: str, region: str = ""):
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         return None
-    if key in runninghub_saved_hidden_workflow_ids():
+    if key in runninghub_saved_hidden_workflow_ids(region):
         return None
     providers = load_api_providers()
     provider = next((item for item in providers if item.get("id") == "runninghub"), None)
     if not provider:
         return None
+    selected_region = runninghub_workflow_region(region, provider)
+    provider = runninghub_provider_for_region(provider, region, require_enabled=bool(str(region or "").strip()))
     for entry in provider.get("rh_workflows") or []:
         entry_key = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
         if entry_key != key:
@@ -21456,12 +21808,15 @@ def runninghub_provider_workflow_config(workflow_id: str):
             "raw": entry.get("raw") if isinstance(entry.get("raw"), dict) else {},
             "updatedAt": entry.get("updatedAt") or 0,
             "source": "api_providers",
+            "region": selected_region,
         }
         return cfg if runninghub_workflow_config_has_payload(cfg) else None
     return None
 
-def runninghub_select_workflow_config(local_cfg, provider_cfg, workflow_id: str = ""):
-    static_cfg = runninghub_static_workflow_config(workflow_id)
+def runninghub_select_workflow_config(local_cfg, provider_cfg, workflow_id: str = "", region: str = ""):
+    static_cfg = runninghub_static_workflow_config(workflow_id) if (
+        not str(region or "").strip() or runninghub_normalize_region(region) == "global"
+    ) else None
     if isinstance(local_cfg, dict) and isinstance(provider_cfg, dict):
         try:
             local_updated = int(local_cfg.get("updatedAt") or 0)
@@ -21480,19 +21835,26 @@ def runninghub_select_workflow_config(local_cfg, provider_cfg, workflow_id: str 
         return static_cfg
     return None
 
-def sync_runninghub_workflow_to_provider(cfg):
+def sync_runninghub_workflow_to_provider(cfg, region: str = ""):
     if not isinstance(cfg, dict):
         return
     key = runninghub_workflow_store_key(cfg.get("workflowId"))
     if not key:
         return
+    requested = runninghub_request_region(region or cfg.get("region"))
     providers = load_api_providers()
     provider = next((item for item in providers if item.get("id") == "runninghub"), None)
     if not provider:
+        selected_region = requested or "global"
         provider = {
             "id": "runninghub",
             "name": "RunningHub",
-            "base_url": RUNNINGHUB_DEFAULT_BASE_URL,
+            "base_url": RUNNINGHUB_REGION_DEFAULTS[selected_region]["base_url"],
+            "rh_region": selected_region,
+            "rh_regions": {
+                region_name: runninghub_empty_region_config(region_name)
+                for region_name in RUNNINGHUB_REGION_DEFAULTS
+            },
             "protocol": "runninghub",
             "image_generation_endpoint": "",
             "image_edit_endpoint": "",
@@ -21508,7 +21870,12 @@ def sync_runninghub_workflow_to_provider(cfg):
             "rh_workflows": [],
         }
         providers.append(provider)
-    workflows = provider.setdefault("rh_workflows", [])
+    selected_region = runninghub_workflow_region(requested, provider)
+    regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+    if not regions:
+        _, regions = normalize_runninghub_regions(provider)
+    active = dict(regions.get(selected_region) or runninghub_empty_region_config(selected_region))
+    workflows = list(active.get("rh_workflows") or [])
     entry = None
     for item in workflows:
         item_key = runninghub_workflow_store_key(item.get("workflowId") or item.get("id"))
@@ -21543,22 +21910,31 @@ def sync_runninghub_workflow_to_provider(cfg):
         entry["enabled"] = True
     if "thumbnail" not in entry:
         entry["thumbnail"] = ""
+    active["rh_workflows"] = workflows
+    regions[selected_region] = active
+    provider["rh_regions"] = regions
+    if runninghub_provider_region(provider) == selected_region:
+        provider["rh_workflows"] = workflows
     normalized_providers = [normalize_provider(item) for item in providers]
     save_api_providers(normalized_providers)
     runninghub_provider = next((item for item in normalized_providers if item.get("id") == "runninghub"), None)
     if runninghub_provider:
-        sync_runninghub_provider_workflows_to_static_template(runninghub_provider)
+        sync_runninghub_provider_workflows_to_static_template(runninghub_provider, region=selected_region)
 
-def remove_runninghub_workflow_from_provider(workflow_id: str):
+def remove_runninghub_workflow_from_provider(workflow_id: str, region: str = ""):
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         return
+    requested = runninghub_request_region(region)
     providers = load_api_providers()
     changed = False
     for provider in providers:
         if provider.get("id") != "runninghub":
             continue
-        workflows = provider.get("rh_workflows") or []
+        selected_region = runninghub_workflow_region(requested, provider)
+        regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+        active = regions.get(selected_region) if isinstance(regions.get(selected_region), dict) else {}
+        workflows = list(active.get("rh_workflows") or []) if regions else list(provider.get("rh_workflows") or [])
         removed = next((
             item for item in workflows
             if runninghub_workflow_store_key(item.get("workflowId") or item.get("id")) == key
@@ -21577,14 +21953,24 @@ def remove_runninghub_workflow_from_provider(workflow_id: str):
             if tombstone:
                 kept.append(tombstone)
         if static_workflow or len(kept) != len(workflows):
-            provider["rh_workflows"] = kept
+            if regions:
+                active["rh_workflows"] = kept
+                regions[selected_region] = active
+                provider["rh_regions"] = regions
+                if runninghub_provider_region(provider) == selected_region:
+                    provider["rh_workflows"] = kept
+            else:
+                provider["rh_workflows"] = kept
             changed = True
     if changed:
         normalized_providers = [normalize_provider(item) for item in providers]
         save_api_providers(normalized_providers)
         runninghub_provider = next((item for item in normalized_providers if item.get("id") == "runninghub"), None)
         if runninghub_provider:
-            sync_runninghub_provider_workflows_to_static_template(runninghub_provider)
+            sync_runninghub_provider_workflows_to_static_template(
+                runninghub_provider,
+                region=requested or runninghub_provider_region(runninghub_provider),
+            )
 
 def runninghub_workflow_store_key(workflow_id: str) -> str:
     return str(workflow_id or "").strip()

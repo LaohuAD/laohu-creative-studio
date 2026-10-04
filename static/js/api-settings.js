@@ -1,9 +1,10 @@
 let providers = [];
 let selectedId = '';
-let onboardingRunningHubRegion = '';
 let modelCapabilityCatalog = {providers:[]};
 const providerList = document.getElementById('providerList');
+const cliProviderList = document.getElementById('cliProviderList');
 const editorTitle = document.getElementById('editorTitle');
+const editorSub = document.getElementById('editorSub');
 const statusEl = document.getElementById('status');
 const nameInput = document.getElementById('nameInput');
 const idInput = document.getElementById('idInput');
@@ -13,10 +14,6 @@ const imageRequestModeInput = document.getElementById('imageRequestModeInput');
 const imageEditRouteInput = document.getElementById('imageEditRouteInput');
 const keyInput = document.getElementById('keyInput');
 const keyHint = document.getElementById('keyHint');
-const rhFreeKeyInput = document.getElementById('rhFreeKeyInput');
-const rhWalletKeyInput = document.getElementById('rhWalletKeyInput');
-const rhFreeKeyHint = document.getElementById('rhFreeKeyHint');
-const rhWalletKeyHint = document.getElementById('rhWalletKeyHint');
 const volcArkKeyHint = document.getElementById('volcArkKeyHint');
 const volcAkInput = document.getElementById('volcAkInput');
 const volcSkInput = document.getElementById('volcSkInput');
@@ -43,15 +40,17 @@ const geminiCliHelpOverlay = document.getElementById('geminiCliHelpOverlay');
 const geminiCliHelpCommand = document.getElementById('geminiCliHelpCommand');
 const geminiCliHelpOutput = document.getElementById('geminiCliHelpOutput');
 const runninghubConfigBlock = document.getElementById('runninghubConfigBlock');
-const rhRegionInput = document.getElementById('rhRegionInput');
-const rhPasteInput = document.getElementById('rhPasteInput');
-const rhAppsList = document.getElementById('rhAppsList');
+const rhGlobalAppsList = document.getElementById('rhGlobalAppsList');
+const rhCnAppsList = document.getElementById('rhCnAppsList');
+const rhGlobalAppsCount = document.getElementById('rhGlobalAppsCount');
+const rhCnAppsCount = document.getElementById('rhCnAppsCount');
 const rhWorkflowsList = document.getElementById('rhWorkflowsList');
-const rhAppsCount = document.getElementById('rhAppsCount');
 const rhWorkflowsCount = document.getElementById('rhWorkflowsCount');
-const rhPasteAddBtn = document.querySelector('.rh-paste-row .action-btn');
+const runningHubModelRegionTabs = document.getElementById('runningHubModelRegionTabs');
 const settingsContent = document.getElementById('settingsContent');
 const providerSettingsView = document.getElementById('providerSettingsView');
+const canvasModelSettingsBlock = document.getElementById('canvasModelSettingsBlock');
+const canvasModelProviderSelect = document.getElementById('canvasModelProviderSelect');
 const comfyuiSettingsBlock = document.getElementById('comfyuiSettingsBlock');
 const comfyuiSubnav = document.getElementById('comfyuiSubnav');
 const localComfyuiNav = document.getElementById('localComfyuiNav');
@@ -64,7 +63,6 @@ const customProviderGuide = document.getElementById('customProviderGuide');
 const rhWorkflowEditorOverlay = document.getElementById('rhWorkflowEditorOverlay');
 const rhWorkflowEditorTitle = document.getElementById('rhWorkflowEditorTitle');
 const rhWorkflowEditorSub = document.getElementById('rhWorkflowEditorSub');
-const rhWorkflowSaveBtn = document.getElementById('rhWorkflowSaveBtn');
 const rhWorkflowEditName = document.getElementById('rhWorkflowEditName');
 const rhWorkflowEditNote = document.getElementById('rhWorkflowEditNote');
 const rhWorkflowEditorSummary = document.getElementById('rhWorkflowEditorSummary');
@@ -76,6 +74,7 @@ const imageModelList = document.getElementById('imageModelList');
 const chatModelList = document.getElementById('chatModelList');
 const videoModelList = document.getElementById('videoModelList');
 const audioModelList = document.getElementById('audioModelList');
+const musicModelList = document.getElementById('musicModelList');
 const msLoraBlock = document.getElementById('msLoraBlock');
 const msLoraList = document.getElementById('msLoraList');
 const recommendApiOverlay = document.getElementById('recommendApiOverlay');
@@ -108,9 +107,243 @@ const RUNNINGHUB_REGIONS = {
         walletUrl:'https://www.runninghub.ai/enterprise-api/sharedApi?inviteCode=rh-v1001'
     }
 };
+const RUNNINGHUB_REGION_UI = {
+    global: {
+        enabled: 'rhGlobalEnabledInput',
+        free: 'rhGlobalFreeKeyInput',
+        wallet: 'rhGlobalWalletKeyInput',
+        freeHint: 'rhGlobalFreeKeyHint',
+        walletHint: 'rhGlobalWalletKeyHint',
+        paste: 'rhGlobalPasteInput',
+        apps: 'rhGlobalAppsList',
+        count: 'rhGlobalAppsCount'
+    },
+    cn: {
+        enabled: 'rhCnEnabledInput',
+        free: 'rhCnFreeKeyInput',
+        wallet: 'rhCnWalletKeyInput',
+        freeHint: 'rhCnFreeKeyHint',
+        walletHint: 'rhCnWalletKeyHint',
+        paste: 'rhCnPasteInput',
+        apps: 'rhCnAppsList',
+        count: 'rhCnAppsCount'
+    }
+};
+function runningHubRegionUi(region, part){
+    const ids = RUNNINGHUB_REGION_UI[region];
+    return ids?.[part] ? document.getElementById(ids[part]) : null;
+}
+function runningHubRegionInput(region, kind){
+    return runningHubRegionUi(region, kind === 'wallet' ? 'wallet' : 'free');
+}
+function runningHubRegionEnabledInput(region){
+    return runningHubRegionUi(region, 'enabled');
+}
+function runningHubRegionAppInput(region){
+    return runningHubRegionUi(region, 'paste');
+}
 let rhAppSyncState = null;
 let comfyuiSettingsMode = false;
 let comfyuiSettingsSection = 'local';
+let apiSettingsSection = 'connections';
+let canvasModelCategory = 'all';
+let runningHubModelRegion = '';
+const API_AUTOSAVE_DELAY = 360;
+const HIDDEN_PROVIDER_IDS = new Set(['agnes', 'openai-compatible', 'modelscope', 'volcengine']);
+const HIDDEN_RECOMMENDED_API_IDS = HIDDEN_PROVIDER_IDS;
+const apiAutosavePendingByKey = new Map();
+const apiAutosaveTimersByKey = new Map();
+const apiAutosaveObjectRevision = new Map();
+const apiAutosaveDirtyObjects = new Set();
+const apiAutosaveInFlightByKey = new Map();
+let apiAutosaveSerial = Promise.resolve();
+let apiAutosaveLastWriteRevision = 0;
+let apiAutosaveRevision = 0;
+let apiNavigationCaptureInProgress = false;
+let apiClosingHypitSettings = false;
+
+function closeHypitSettingsForApiNavigation(){
+    if(apiClosingHypitSettings) return;
+    const layout = document.querySelector('.layout');
+    if(!layout?.classList?.contains('hypit-settings-mode')) return;
+    if(typeof window.closeHypitSettings !== 'function') return;
+    apiClosingHypitSettings = true;
+    try {
+        // 切换只更新右侧内容，递归保护避免重复进入。
+        window.closeHypitSettings({deferEditor:true});
+    } finally {
+        apiClosingHypitSettings = false;
+    }
+}
+
+function apiAutosaveRegion(item, region=''){
+    if(item?.id !== 'runninghub') return '';
+    return String(region || runningHubRegionFromItem(item) || 'global');
+}
+
+function apiAutosaveObjectKey(providerId, region=''){
+    return `${String(providerId || '')}::${String(region || '')}`;
+}
+
+function cloneApiSettingsValue(value){
+    return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function captureApiAutosaveDraft(item, region='', revision=apiAutosaveRevision){
+    if(!item) return null;
+    const resolvedRegion = apiAutosaveRegion(item, region);
+    const objectId = apiAutosaveObjectKey(item.id, resolvedRegion);
+    const objectRevision = (apiAutosaveObjectRevision.get(objectId) || 0) + 1;
+    apiAutosaveObjectRevision.set(objectId, objectRevision);
+    return {
+        objectId,
+        providerId:item.id,
+        region:resolvedRegion,
+        revision,
+        objectRevision,
+        providers:cloneApiSettingsValue(providers)
+    };
+}
+
+function captureApiObjectBeforeNavigation({immediate=true}={}){
+    if(apiNavigationCaptureInProgress) return Promise.resolve(false);
+    if(rhWorkflowEditorState?.open) closeRhWorkflowEditor();
+    const item = provider();
+    if(!item) return Promise.resolve(false);
+    apiNavigationCaptureInProgress = true;
+    try {
+        syncEditor();
+        const objectId = apiAutosaveObjectKey(item.id, apiAutosaveRegion(item));
+        if(!apiAutosaveDirtyObjects.has(objectId)) return Promise.resolve(false);
+        if(!apiAutosavePendingByKey.has(objectId) && apiAutosaveInFlightByKey.has(objectId)){
+            return apiAutosaveSerial;
+        }
+        return scheduleProviderAutosave({
+            providerId:item.id,
+            region:apiAutosaveRegion(item),
+            immediate,
+            sync:false,
+        });
+    } finally {
+        apiNavigationCaptureInProgress = false;
+    }
+}
+
+function clearProviderAutosaveTimer(objectId){
+    const timer = apiAutosaveTimersByKey.get(objectId);
+    if(timer) clearTimeout(timer);
+    apiAutosaveTimersByKey.delete(objectId);
+}
+
+function discardProviderAutosave(providerId, region=''){
+    const objectId = apiAutosaveObjectKey(providerId, region);
+    clearProviderAutosaveTimer(objectId);
+    apiAutosavePendingByKey.delete(objectId);
+    apiAutosaveDirtyObjects.delete(objectId);
+    apiAutosaveObjectRevision.set(objectId, (apiAutosaveObjectRevision.get(objectId) || 0) + 1);
+    apiAutosaveRevision += 1;
+}
+
+function latestApiAutosaveDraft(objectId){
+    return apiAutosavePendingByKey.get(objectId) || null;
+}
+
+function flushProviderAutosave(objectId, waitForWrite=false){
+    clearProviderAutosaveTimer(objectId);
+    const draft = latestApiAutosaveDraft(objectId);
+    if(!draft) return waitForWrite ? apiAutosaveSerial : Promise.resolve(false);
+    apiAutosavePendingByKey.delete(objectId);
+    const write = apiAutosaveSerial.then(() => {
+        apiAutosaveInFlightByKey.set(objectId, draft);
+        return saveProviders(draft);
+    }).finally(() => {
+        if(apiAutosaveInFlightByKey.get(objectId) === draft) apiAutosaveInFlightByKey.delete(objectId);
+    });
+    // 队列失败后必须恢复可写状态；失败本身由 saveProviders 设置草稿失败状态。
+    apiAutosaveSerial = write.catch(() => false);
+    return waitForWrite ? apiAutosaveSerial : write;
+}
+
+function scheduleProviderAutosave({providerId='', region='', immediate=false, sync=true}={}){
+    if(sync) syncEditor();
+    const item = providers.find(candidate => candidate?.id === providerId) || provider();
+    if(!item) return Promise.resolve(false);
+    const resolvedRegion = apiAutosaveRegion(item, region);
+    const objectId = apiAutosaveObjectKey(item.id, resolvedRegion);
+    const revision = ++apiAutosaveRevision;
+    const draft = captureApiAutosaveDraft(item, resolvedRegion, revision);
+    apiAutosaveDirtyObjects.add(objectId);
+    apiAutosavePendingByKey.set(objectId, draft);
+    clearProviderAutosaveTimer(objectId);
+    setStatus(tr('api.autosaving') || tr('api.saving'));
+    if(immediate) return flushProviderAutosave(objectId, true);
+    const timer = setTimeout(() => {
+        apiAutosaveTimersByKey.delete(objectId);
+        void flushProviderAutosave(objectId, false);
+    }, API_AUTOSAVE_DELAY);
+    apiAutosaveTimersByKey.set(objectId, timer);
+    return Promise.resolve(true);
+}
+
+function scheduleCurrentProviderAutosave(immediate=false){
+    const item = provider();
+    if(!item) return Promise.resolve(false);
+    return scheduleProviderAutosave({
+        providerId:item.id,
+        region:apiAutosaveRegion(item),
+        immediate,
+    });
+}
+
+function isCliProvider(item){
+    return CLI_PROTOCOLS.has(String(item?.protocol || '').toLowerCase());
+}
+function syncApiSettingsView(){
+    const models = !comfyuiSettingsMode && apiSettingsSection === 'models';
+    const connections = !comfyuiSettingsMode && !models;
+    if(providerSettingsView) providerSettingsView.hidden = models;
+    if(canvasModelSettingsBlock) canvasModelSettingsBlock.hidden = !models;
+    document.getElementById('canvasModelsNav')?.classList.toggle('active', models);
+}
+function setApiSettingsSection(section='connections'){
+    void captureApiObjectBeforeNavigation({immediate:true});
+    closeHypitSettingsForApiNavigation();
+    if(comfyuiSettingsMode) closeComfyUiSettings();
+    apiSettingsSection = section === 'models' ? 'models' : 'connections';
+    if(apiSettingsSection === 'models') canvasModelCategory = 'all';
+    syncApiSettingsView();
+    renderEditor();
+    refreshIcons();
+}
+function selectCanvasModelProvider(id){
+    const next = visibleProviders().find(item => item.id === id);
+    if(!next) return;
+    void captureApiObjectBeforeNavigation({immediate:true});
+    clearFetchedModelState();
+    selectedId = next.id;
+    apiSettingsSection = 'models';
+    syncApiSettingsView();
+    renderEditor();
+}
+function selectCanvasModelCategory(category='all'){
+    const allowed = new Set(['all','text','image','video','audio','music']);
+    canvasModelCategory = allowed.has(category) ? category : 'all';
+    document.querySelectorAll('.canvas-model-category-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.cat === canvasModelCategory);
+    });
+    document.querySelectorAll('.canvas-model-category').forEach(block => {
+        block.hidden = canvasModelCategory !== 'all' && block.dataset.modelCategory !== canvasModelCategory;
+    });
+}
+function syncCanvasModelCategoryAvailability(item=provider()){
+    // 只有 GPT CLI 被项目契约限定为文本；即梦等 CLI 的图片/视频能力仍按已有模型白名单展示。
+    const textOnly = String(item?.protocol || '').toLowerCase() === 'codex' || String(item?.id || '').toLowerCase() === 'codex';
+    document.querySelectorAll('.canvas-model-category-tab').forEach(tab => {
+        const restricted = textOnly && !['all','text'].includes(tab.dataset.cat);
+        tab.hidden = restricted;
+    });
+    if(textOnly && !['all','text'].includes(canvasModelCategory)) canvasModelCategory = 'text';
+}
 function syncComfyUiNavigation(){
     const local = comfyuiSettingsMode && comfyuiSettingsSection === 'local';
     const runninghub = comfyuiSettingsMode && comfyuiSettingsSection === 'runninghub';
@@ -133,11 +366,13 @@ function setComfyUiSection(section='local'){
     refreshIcons();
 }
 function openComfyUiSettings(section='local'){
+    void captureApiObjectBeforeNavigation({immediate:true});
+    closeHypitSettingsForApiNavigation();
     comfyuiSettingsMode = true;
     providerSettingsView?.classList.add('comfyui-embedded-mode');
     if(comfyuiSettingsBlock) comfyuiSettingsBlock.hidden = false;
+    syncApiSettingsView();
     document.querySelector('.api-page-delete-btn')?.setAttribute('hidden', 'hidden');
-    document.querySelector('.api-page-save-btn')?.setAttribute('hidden', 'hidden');
     renderProviderList();
     setComfyUiSection(section);
 }
@@ -145,15 +380,13 @@ function closeComfyUiSettings(){
     comfyuiSettingsMode = false;
     providerSettingsView?.classList.remove('comfyui-embedded-mode');
     if(comfyuiSettingsBlock) comfyuiSettingsBlock.hidden = true;
+    syncApiSettingsView();
     document.querySelector('.api-page-delete-btn')?.removeAttribute('hidden');
-    document.querySelector('.api-page-save-btn')?.removeAttribute('hidden');
     syncComfyUiNavigation();
     renderEditor();
 }
 function setRhAppSyncState(nextState){
     rhAppSyncState = nextState;
-    if(rhPasteInput) rhPasteInput.disabled = Boolean(nextState);
-    if(rhPasteAddBtn) rhPasteAddBtn.disabled = Boolean(nextState);
     renderRunningHubCards();
 }
 function updateRhAppSyncPhase(phase){
@@ -166,17 +399,29 @@ function runningHubRegionFromItem(item){
     if(RUNNINGHUB_REGIONS[raw]) return raw;
     return runningHubRegionFromBase(item?.base_url || '') || 'global';
 }
+function runningHubRegionEnabledValue(region, selected, sourceRegion){
+    if(sourceRegion && typeof sourceRegion === 'object'
+        && Object.prototype.hasOwnProperty.call(sourceRegion, 'enabled')
+        && typeof sourceRegion.enabled === 'boolean'){
+        return sourceRegion.enabled === true;
+    }
+    // 旧配置没有区域 enabled 时，只迁移原来正在编辑的站点为启用。
+    return region === selected;
+}
 function runningHubEmptyRegion(region){
     const config = RUNNINGHUB_REGIONS[region] || RUNNINGHUB_REGIONS.global;
     return {
         base_url:config.baseUrl,
+        enabled:false,
         image_models:[], chat_models:[], video_models:[], audio_models:[],
         model_names:{},
         rh_apps:[], rh_workflows:[]
     };
 }
+const normalizedRunningHubRegions = new WeakMap();
 function ensureRunningHubRegions(item){
     if(!item || item.id !== 'runninghub') return {};
+    if(normalizedRunningHubRegions.get(item) === item.rh_regions && item.rh_regions) return item.rh_regions;
     const selected = runningHubRegionFromItem(item);
     const source = item.rh_regions && typeof item.rh_regions === 'object' ? item.rh_regions : {};
     const legacy = {
@@ -191,11 +436,13 @@ function ensureRunningHubRegions(item){
     };
     const regions = {};
     Object.keys(RUNNINGHUB_REGIONS).forEach(region => {
+        const rawRegion = source[region] && typeof source[region] === 'object' ? source[region] : {};
         regions[region] = {
             ...runningHubEmptyRegion(region),
-            ...(source[region] && typeof source[region] === 'object' ? source[region] : {})
+            ...rawRegion
         };
         if(region === selected && !source[region]) regions[region] = {...regions[region], ...legacy};
+        regions[region].enabled = runningHubRegionEnabledValue(region, selected, rawRegion);
         regions[region].base_url = RUNNINGHUB_REGIONS[region].baseUrl;
         ['image_models','chat_models','video_models','audio_models'].forEach(key => {
             regions[region][key] = unique(regions[region][key] || []);
@@ -206,7 +453,21 @@ function ensureRunningHubRegions(item){
     });
     item.rh_region = selected;
     item.rh_regions = regions;
+    normalizedRunningHubRegions.set(item, regions);
     return regions;
+}
+function runningHubProviderItem(){
+    return providers.find(item => item?.id === 'runninghub') || null;
+}
+function runningHubHasEnabledRegion(item){
+    if(!item || item.id !== 'runninghub') return false;
+    const regions = ensureRunningHubRegions(item);
+    return Object.values(regions).some(region => region?.enabled === true);
+}
+function syncRunningHubProviderEnabled(item){
+    if(!item || item.id !== 'runninghub') return false;
+    item.enabled = runningHubHasEnabledRegion(item);
+    return item.enabled;
 }
 function activateRunningHubRegion(item, region){
     if(!item || item.id !== 'runninghub') return null;
@@ -271,18 +532,6 @@ const ONBOARDING_GUIDES = {
         primaryUrl:'https://www.modelscope.cn/my/access/token',
         secondaryUrl:'https://www.modelscope.ai/my/access/token'
     },
-    runninghub:{
-        titleKey:'api.rhOnboardingTitle',
-        descKey:'api.rhOnboardingDesc',
-        cnLabelKey:'api.rhGetKeyCn',
-        cnUrl:RUNNINGHUB_REGIONS.cn.consumerUrl,
-        globalLabelKey:'api.rhGetKeyGlobal',
-        globalUrl:RUNNINGHUB_REGIONS.global.consumerUrl,
-        walletCnLabelKey:'api.rhGetWalletKeyCn',
-        walletCnUrl:RUNNINGHUB_REGIONS.cn.walletUrl,
-        walletGlobalLabelKey:'api.rhGetWalletKeyGlobal',
-        walletGlobalUrl:RUNNINGHUB_REGIONS.global.walletUrl
-    },
     'ai-money':{
         titleKey:'api.aiMoneyOnboardingTitle',
         descKey:'api.aiMoneyOnboardingDesc',
@@ -326,15 +575,20 @@ function applyCliProtocolDefaults(item, protocol, seedModels=false){
         item.video_models = [];
         item.audio_models = [];
     } else if(value === 'gemini-cli'){
-        item.image_models = unique([...(item.image_models || []), ...GEMINI_CLI_DEFAULT_IMAGE_MODELS]);
-        item.chat_models = unique([...(item.chat_models || []), ...GEMINI_CLI_DEFAULT_CHAT_MODELS]);
+        item.image_models = unique(seedModels ? [...(item.image_models || []), ...GEMINI_CLI_DEFAULT_IMAGE_MODELS] : (item.image_models || []));
+        item.chat_models = unique(seedModels ? [...(item.chat_models || []), ...GEMINI_CLI_DEFAULT_CHAT_MODELS] : (item.chat_models || []));
         item.video_models = [];
         item.audio_models = [];
     }
 }
 let rhWorkflowEditorState = { open:false, index:-1, entry:null, config:null, expanded:{}, activeNodeId:'', graph:{ k:1, x:0, y:0, w:0, h:0 }, pan:null, bound:false, previewParams:{}, previewRunning:false, previewStatus:'', previewOutputs:[] };
 let rhEditorMode = 'workflow';
+let rhWorkflowAutosaveTimer = null;
+let rhWorkflowAutosavePending = null;
+let rhWorkflowAutosaveSerial = Promise.resolve();
+let rhWorkflowAutosaveRevision = 0;
 let recommendInlineOpen = false;
+const recommendedKeySaveTimers = new Map();
 let providerDragId = '';
 let fetchModelsController = null;
 // 推荐平台是管理员审核后的公开白名单，不能从可适配平台或历史配置自动扩展。
@@ -424,6 +678,9 @@ function tr(key){
         'api.localComfyuiNav':'本地 ComfyUI',
         'api.runningHubComfyuiNav':'RunningHub ComfyUI',
         'api.comfyuiSettingsDesc':'在这里统一管理 RunningHub AI 应用和本地 ComfyUI 工作流。RunningHub 的 API Key 仍在对应平台中保存。',
+        'api.keyConfigured':'已配置',
+        'api.keyNotConfigured':'未配置',
+        'api.rhSiteDisabled':'此站点已停用',
         'api.runningHubLegacyWorkflowDeprecated':'已废弃：RunningHub 旧工作流入口只用于历史画布兼容；新导演台和新节点仅使用已同步的 AI 应用。',
         'api.comfyuiSettingsBack':'返回平台设置'
     };
@@ -462,32 +719,64 @@ function runningHubRegionFromBase(value){
 }
 function syncRunningHubRegion(replaceBase=false){
     const item = provider();
-    const region = item?.id === 'runninghub' ? runningHubRegionFromItem(item) : runningHubRegionFromBase(baseInput?.value || '');
-    if(rhRegionInput) rhRegionInput.value = region;
+    const region = item?.id === 'runninghub'
+        ? (RUNNINGHUB_REGIONS[runningHubModelRegion] ? runningHubModelRegion : runningHubRegionFromItem(item))
+        : runningHubRegionFromBase(baseInput?.value || '');
+    if(item?.id === 'runninghub'){
+        const regions = ensureRunningHubRegions(item);
+        Object.keys(RUNNINGHUB_REGIONS).forEach(site => {
+            const enabledInput = runningHubRegionEnabledInput(site);
+            if(enabledInput) enabledInput.checked = regions[site]?.enabled === true;
+        });
+    }
     if(replaceBase && baseInput && RUNNINGHUB_REGIONS[region]){
         baseInput.value = RUNNINGHUB_REGIONS[region].baseUrl;
     }
 }
-function changeRunningHubRegion(region){
-    if(!RUNNINGHUB_REGIONS[region] || !baseInput) return;
+function selectRunningHubModelRegion(region){
+    if(!RUNNINGHUB_REGIONS[region]) return;
     const item = provider();
-    if(item?.id === 'runninghub'){
-        syncEditor();
-        activateRunningHubRegion(item, region);
-        baseInput.value = item.base_url;
-    } else {
-        baseInput.value = RUNNINGHUB_REGIONS[region].baseUrl;
-    }
-    if(rhRegionInput) rhRegionInput.value = region;
+    if(!item || item.id !== 'runninghub') return;
+    void captureApiObjectBeforeNavigation({immediate:true});
+    runningHubModelRegion = region;
+    activateRunningHubRegion(item, region);
+    if(baseInput) baseInput.value = item.base_url;
     clearFetchedModelState();
     renderEditor();
     updateApimartDomesticHint(item);
+    void scheduleProviderAutosave({providerId:item.id, region, immediate:true, sync:false});
+}
+function updateRunningHubKeyInput(region, kind, value){
+    if(!RUNNINGHUB_REGIONS[region] || !['free','wallet'].includes(kind)) return;
+    const item = runningHubProviderItem();
+    if(!item) return;
+    const trimmed = String(value || '').trim();
+    const keyName = kind === 'wallet' ? '_pendingRhWalletKey' : '_pendingRhApiKey';
+    const pending = {...(item[keyName] || {})};
+    if(trimmed) pending[region] = trimmed;
+    else delete pending[region];
+    if(Object.keys(pending).length) item[keyName] = pending;
+    else delete item[keyName];
+    void scheduleProviderAutosave({providerId:item.id, region, immediate:false, sync:false});
 }
 function broadcastStudioApiChange(type='providers-changed'){
     const message = { type, updated_at:Date.now() };
     try { new BroadcastChannel('studio-api').postMessage(message); } catch(e) {}
     try { window.parent?.postMessage(message, '*'); } catch(e) {}
     try { window.top?.postMessage(message, '*'); } catch(e) {}
+}
+function toggleRunningHubRegionEnabled(region, enabled){
+    if(!RUNNINGHUB_REGIONS[region]) return;
+    const item = runningHubProviderItem();
+    if(!item) return;
+    if(provider()?.id === 'runninghub') syncEditor();
+    const regions = ensureRunningHubRegions(item);
+    regions[region].enabled = enabled === true;
+    item.rh_regions = regions;
+    syncRunningHubProviderEnabled(item);
+    if(selectedId === item.id) renderEditor();
+    else renderProviderList();
+    void scheduleProviderAutosave({providerId:item.id, region, immediate:true, sync:false});
 }
 function rhEditorSideScrollEl(){
     return rhWorkflowEditorNodeList?.closest?.('.rh-workflow-editor-side') || rhWorkflowEditorNodeList;
@@ -539,7 +828,7 @@ function findRhAppFieldCard(key){
 function normalizeId(value){
     return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').replace(/-+/g, '-').slice(0, 40);
 }
-// 平台 Key 按 ID 写入 API/.env；ID 一旦创建就保持稳定，避免改名或中文名称导致 Key 看起来丢失。
+// 平台 Key 按稳定 ID 保存；ID 一旦创建就保持稳定，避免改名或中文名称导致 Key 看起来丢失。
 function deriveIdFromName(name, existingId){
     if(existingId) return existingId;
     let id = normalizeId(name);
@@ -565,10 +854,10 @@ function updateIdPreview(){
     idPreview.textContent = deriveIdFromName(nameInput.value, item.id);
 }
 function provider(){
-    return visibleProviders().find(item => item.id === selectedId) || visibleProviders()[0] || providers[0];
+    return visibleProviders().find(item => item.id === selectedId) || visibleProviders()[0];
 }
 function isProviderTemporarilyHidden(item){
-    return false;
+    return HIDDEN_PROVIDER_IDS.has(String(item?.id || '').trim().toLowerCase());
 }
 function visibleProviders(){
     return (providers || []).filter(item => !isProviderTemporarilyHidden(item));
@@ -712,6 +1001,9 @@ function runningHubLocalizedTitle(entry, region=currentRunningHubRegion(provider
     const selected = values.find(value => String(value || '').trim());
     return String(selected || entry?.title || entry?.name || '').trim();
 }
+function runningHubRegionBadge(region=currentRunningHubRegion(provider())){
+    return tr(String(region || '').toLowerCase() === 'cn' ? 'api.rhRegionBadgeCn' : 'api.rhRegionBadgeGlobal');
+}
 function parseRunningHubRunRef(value){
     const text = String(value || '').trim();
     const match = text.match(/\/(?:run\/)?(ai-app|workflow)\/([0-9A-Za-z_-]+)/i);
@@ -843,24 +1135,26 @@ function rhEditorSortedFields(fields){
         return String(a.nodeId || '').localeCompare(String(b.nodeId || ''), undefined, {numeric:true}) || String(a.fieldName || '').localeCompare(String(b.fieldName || ''));
     });
 }
-function rhFreeKeyHintText(item){
-    return item?.has_key ? `${tr('api.rhCoinKeySaved')}${item.key_env || 'API/.env'} ${item.key_preview || ''}` : tr('api.rhNoCoinKey');
+function keyStatusText(configured){
+    return configured ? tr('api.keyConfigured') : tr('api.keyNotConfigured');
 }
-function rhWalletKeyHintText(item){
-    return item?.has_wallet_key ? `${tr('api.rhWalletKeySaved')}${item.wallet_key_env || 'API/.env'} ${item.wallet_key_preview || ''}` : tr('api.rhNoWalletKey');
+function rhFreeKeyHintText(regionState){
+    return keyStatusText(Boolean(regionState?.has_key));
+}
+function rhWalletKeyHintText(regionState){
+    return keyStatusText(Boolean(regionState?.has_wallet_key));
 }
 function volcengineArkKeyHintText(item){
-    return item?.has_key ? `方舟 API Key 已保存：${item.key_env || 'API/.env'} ${item.key_preview || ''}` : '还没有保存方舟 API Key。';
+    return keyStatusText(Boolean(item?.has_key));
 }
 function volcengineAssetKeyHintText(item){
-    const ak = item?.has_volcengine_access_key ? `AK 已保存：${item.volcengine_access_key_env || 'API/.env'} ${item.volcengine_access_key_preview || ''}` : 'AK 未保存';
-    const sk = item?.has_volcengine_secret_key ? `SK 已保存：${item.volcengine_secret_key_env || 'API/.env'} ${item.volcengine_secret_key_preview || ''}` : 'SK 未保存';
+    const ak = `AK：${keyStatusText(Boolean(item?.has_volcengine_access_key))}`;
+    const sk = `SK：${keyStatusText(Boolean(item?.has_volcengine_secret_key))}`;
     return `${ak} · ${sk}`;
 }
 function isNewUserProvider(item){
     if(!item) return false;
     if(item.id === 'modelscope') return !item.has_key;
-    if(item.id === 'runninghub') return !item.has_key && !item.has_wallet_key;
     if(item.id === 'ai-money') return !item.has_key;
     if(item.id === 'agnes') return !item.has_key;
     return false;
@@ -925,79 +1219,7 @@ function renderProviderOnboarding(item){
                         <a href="https://www.modelscope.ai/binding" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span>${escapeHtml(tr('api.msBindingGlobal'))}</span></a>
                     </div>
                 </div>
-                <div class="onboarding-rh-save-line">
-                    <button class="onboarding-save-btn onboarding-rh-save-all" type="button" onclick="saveKeyOnly()"><i data-lucide="check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.save'))}</span></button>
-                </div>
-            </div>
-        `;
-        refreshIcons();
-        return;
-    }
-    if(item.id === 'runninghub'){
-        const regionConfig = RUNNINGHUB_REGIONS[onboardingRunningHubRegion] || null;
-        const regionLabel = onboardingRunningHubRegion === 'cn'
-            ? tr('api.rhRegionCn')
-            : onboardingRunningHubRegion === 'global'
-            ? tr('api.rhRegionGlobal')
-            : tr('api.rhChooseRegion');
-        const keyLinkAttrs = regionConfig
-            ? 'target="_blank" rel="noopener noreferrer"'
-            : 'aria-disabled="true" tabindex="-1"';
-        providerOnboardingCard.innerHTML = `
-            <div class="onboarding-head">
-                <div>
-                    <div class="onboarding-title">${escapeHtml(tr(guide.titleKey))}</div>
-                    <div class="onboarding-desc">${escapeHtml(tr(guide.descKey))}</div>
-                </div>
-                <span class="onboarding-badge">${escapeHtml(tr('api.onboardingNew'))}</span>
-            </div>
-            <div class="onboarding-step-panel onboarding-rh-linear-panel">
-                <div class="onboarding-rh-panel-head">
-                    <div>
-                        <div class="onboarding-step-title">${escapeHtml(tr('api.rhOnboardingStep'))}</div>
-                    </div>
-                    <i data-lucide="key-round" class="onboarding-rh-icon w-4 h-4"></i>
-                </div>
-                <label class="onboarding-rh-region-field">
-                    <span>${escapeHtml(tr('api.rhRegionLabel'))}</span>
-                    <select onchange="changeOnboardingRunningHubRegion(this.value)">
-                        <option value="" ${onboardingRunningHubRegion ? '' : 'selected'}>${escapeHtml(tr('api.rhChooseRegion'))}</option>
-                        <option value="cn" ${onboardingRunningHubRegion === 'cn' ? 'selected' : ''}>${escapeHtml(tr('api.rhRegionCn'))}</option>
-                        <option value="global" ${onboardingRunningHubRegion === 'global' ? 'selected' : ''}>${escapeHtml(tr('api.rhRegionGlobal'))}</option>
-                    </select>
-                    <small>${escapeHtml(tr('api.rhOnboardingRegionHint'))}</small>
-                </label>
-                <div class="onboarding-rh-linear-rows">
-                    <div class="onboarding-rh-linear-row">
-                        <div class="onboarding-rh-source-group">
-                            <div class="onboarding-rh-source-label">${escapeHtml(tr('api.rhCoinKey'))}</div>
-                            <div class="onboarding-key-actions onboarding-rh-key-actions">
-                                <a class="onboarding-key-btn ${regionConfig ? '' : 'is-disabled'}" ${regionConfig ? `href="${escapeAttr(regionConfig.consumerUrl)}"` : ''} ${keyLinkAttrs}><i data-lucide="external-link" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.rhGetSelectedCoinKey').replace('{region}', regionLabel))}</span></a>
-                            </div>
-                        </div>
-                        <div class="recommend-flow-arrow onboarding-flow-arrow onboarding-rh-row-arrow" aria-hidden="true"><span></span><b></b></div>
-                        <label class="onboarding-key-field onboarding-rh-row-field">
-                            <span>${escapeHtml(tr('api.rhCoinApiKeyRequired'))}</span>
-                            <input type="password" value="${escapeAttr(rhFreeKeyInput?.value || '')}" placeholder="${escapeAttr(tr('api.rhCoinPlaceholder'))}" oninput="syncOnboardingKeyInput('free', this.value)">
-                        </label>
-                    </div>
-                    <div class="onboarding-rh-linear-row">
-                        <div class="onboarding-rh-source-group">
-                            <div class="onboarding-rh-source-label">${escapeHtml(tr('api.rhWalletKey'))}</div>
-                            <div class="onboarding-key-actions onboarding-rh-key-actions">
-                                <a class="onboarding-key-btn ${regionConfig ? '' : 'is-disabled'}" ${regionConfig ? `href="${escapeAttr(regionConfig.walletUrl)}"` : ''} ${keyLinkAttrs}><i data-lucide="external-link" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.rhGetSelectedWalletKey').replace('{region}', regionLabel))}</span></a>
-                            </div>
-                        </div>
-                        <div class="recommend-flow-arrow onboarding-flow-arrow onboarding-rh-row-arrow" aria-hidden="true"><span></span><b></b></div>
-                        <label class="onboarding-key-field onboarding-rh-row-field">
-                            <span>${escapeHtml(tr('api.rhWalletApiKeyOptional'))}</span>
-                            <input type="password" value="${escapeAttr(rhWalletKeyInput?.value || '')}" placeholder="${escapeAttr(tr('api.rhWalletPlaceholder'))}" oninput="syncOnboardingKeyInput('wallet', this.value)">
-                        </label>
-                    </div>
-                </div>
-                <div class="onboarding-rh-save-line">
-                    <button class="onboarding-save-btn onboarding-rh-save-all" type="button" onclick="saveOnboardingRunningHubKey()"><i data-lucide="check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.save'))}</span></button>
-                </div>
+                <div class="onboarding-autosave-note"><i data-lucide="cloud-check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.autosaveHint'))}</span></div>
             </div>
         `;
         refreshIcons();
@@ -1027,9 +1249,7 @@ function renderProviderOnboarding(item){
                         <input type="password" value="${escapeAttr(keyInput?.value || '')}" placeholder="${escapeAttr(tr('api.aiMoneyKeyPlaceholder'))}" oninput="syncOnboardingKeyInput('standard', this.value)">
                     </label>
                 </div>
-                <div class="onboarding-rh-save-line">
-                    <button class="onboarding-save-btn onboarding-rh-save-all" type="button" onclick="saveKeyOnly()"><i data-lucide="check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.save'))}</span></button>
-                </div>
+                <div class="onboarding-autosave-note"><i data-lucide="cloud-check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.autosaveHint'))}</span></div>
             </div>
         `;
         refreshIcons();
@@ -1058,43 +1278,11 @@ function renderProviderOnboarding(item){
                         <input type="password" value="${escapeAttr(keyInput?.value || '')}" placeholder="${escapeAttr(tr('api.enterKey'))}" oninput="syncOnboardingKeyInput('standard', this.value)">
                     </label>
                 </div>
-                <div class="onboarding-rh-save-line">
-                    <button class="onboarding-save-btn onboarding-rh-save-all" type="button" onclick="saveKeyOnly()"><i data-lucide="check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.save'))}</span></button>
-                </div>
+                <div class="onboarding-autosave-note"><i data-lucide="cloud-check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.autosaveHint'))}</span></div>
             </div>
         `;
         refreshIcons();
         return;
-    }
-}
-function syncOnboardingKeyInput(kind, value){
-    if(kind === 'free' && rhFreeKeyInput) rhFreeKeyInput.value = value || '';
-    else if(kind === 'wallet' && rhWalletKeyInput) rhWalletKeyInput.value = value || '';
-    else if(keyInput) keyInput.value = value || '';
-}
-function changeOnboardingRunningHubRegion(region){
-    onboardingRunningHubRegion = RUNNINGHUB_REGIONS[region] ? region : '';
-    if(onboardingRunningHubRegion){
-        const config = RUNNINGHUB_REGIONS[onboardingRunningHubRegion];
-        const item = provider();
-        if(item?.id === 'runninghub') item.base_url = config.baseUrl;
-        if(baseInput) baseInput.value = config.baseUrl;
-        if(rhRegionInput) rhRegionInput.value = onboardingRunningHubRegion;
-    }
-    refreshProviderOnboarding();
-}
-async function saveOnboardingRunningHubKey(){
-    if(!onboardingRunningHubRegion){ await StudioDialog.alert(tr('api.rhChooseRegionAlert'), {type:'warning'}); return; }
-    const freeKey = rhFreeKeyInput?.value.trim() || '';
-    if(!freeKey){ await StudioDialog.alert(tr('api.rhEnterCoinAlert'), {type:'warning'}); return; }
-    const item = provider();
-    if(!item || item.id !== 'runninghub') return;
-    item.base_url = RUNNINGHUB_REGIONS[onboardingRunningHubRegion].baseUrl;
-    syncEditor();
-    const ok = await saveProviders();
-    if(ok){
-        if(rhFreeKeyInput) rhFreeKeyInput.value = '';
-        if(rhWalletKeyInput) rhWalletKeyInput.value = '';
     }
 }
 function applyProviderOnboardingDefaults(id){
@@ -1149,7 +1337,7 @@ function applyProviderOnboardingDefaults(id){
     clearFetchedModelState();
     selectedId = item.id;
     renderEditor();
-    setStatus('已显示默认配置，填写 Key 后点击保存生效');
+    setStatus(tr('api.autosaveHint') || '填写 Key 后自动保存');
 }
 function refreshProviderOnboarding(){
     renderProviderOnboarding(provider());
@@ -1210,10 +1398,18 @@ function syncEditor(){
         item.base_url = RUNNINGHUB_REGIONS[activeRegion].baseUrl;
         const active = persistActiveRunningHubRegion(item);
         activateRunningHubRegion(item, activeRegion);
-        const freeKey = rhFreeKeyInput?.value.trim() || '';
-        const walletKey = rhWalletKeyInput?.value.trim() || '';
-        if(freeKey) item._pendingRhApiKey = {...(item._pendingRhApiKey || {}), [activeRegion]:freeKey};
-        if(walletKey) item._pendingRhWalletKey = {...(item._pendingRhWalletKey || {}), [activeRegion]:walletKey};
+        const pendingApiKeys = {...(item._pendingRhApiKey || {})};
+        const pendingWalletKeys = {...(item._pendingRhWalletKey || {})};
+        Object.keys(RUNNINGHUB_REGIONS).forEach(region => {
+            const freeKey = runningHubRegionInput(region, 'free')?.value.trim() || '';
+            const walletKey = runningHubRegionInput(region, 'wallet')?.value.trim() || '';
+            if(freeKey) pendingApiKeys[region] = freeKey;
+            if(walletKey) pendingWalletKeys[region] = walletKey;
+        });
+        if(Object.keys(pendingApiKeys).length) item._pendingRhApiKey = pendingApiKeys;
+        else delete item._pendingRhApiKey;
+        if(Object.keys(pendingWalletKeys).length) item._pendingRhWalletKey = pendingWalletKeys;
+        else delete item._pendingRhWalletKey;
     }
     if(item.id === 'volcengine'){
         const ak = volcAkInput?.value.trim() || '';
@@ -1256,6 +1452,7 @@ function updateProtocolFromInput(){
     renderEditor();
     if(keyInput) keyInput.value = savedKey;
     updateApimartDomesticHint(item);
+    void scheduleProviderAutosave({providerId:item.id, region:apiAutosaveRegion(item), immediate:true, sync:false});
 }
 function isVolcengineProvider(item){
     return String(item?.protocol || '').toLowerCase() === 'volcengine';
@@ -1265,24 +1462,47 @@ function handleRhPasteInput(value){
     if(parsed?.type === 'app') setStatus('已识别 AI 应用 ID，点击右侧添加并同步');
     else if(parsed) setStatus('这里只支持 AI 应用，不支持工作流');
 }
-async function createRhEntryFromPaste(){
+function runningHubRegionState(item, region){
+    if(!item || item.id !== 'runninghub' || !RUNNINGHUB_REGIONS[region]) return null;
+    const regions = ensureRunningHubRegions(item);
+    if(!regions[region]) regions[region] = runningHubEmptyRegion(region);
+    return regions[region];
+}
+function runningHubRegionEntries(item, region, kind='app'){
+    const state = runningHubRegionState(item, region);
+    if(!state) return [];
+    const listKey = kind === 'app' ? 'rh_apps' : 'rh_workflows';
+    state[listKey] = normalizeRhEntries(state[listKey] || [], kind);
+    if(runningHubRegionFromItem(item) === region) item[listKey] = state[listKey];
+    return state[listKey];
+}
+function runningHubRegionPendingKey(item, region){
+    const free = item?._pendingRhApiKey?.[region] || runningHubRegionInput(region, 'free')?.value || '';
+    const wallet = item?._pendingRhWalletKey?.[region] || runningHubRegionInput(region, 'wallet')?.value || '';
+    return String(free || wallet || '').trim();
+}
+async function createRhEntryFromPaste(region=''){
     let item = provider();
     if(!item || item.id !== 'runninghub') return;
-    const parsed = parseRunningHubRunRef(rhPasteInput?.value || '');
+    const targetRegion = RUNNINGHUB_REGIONS[region] ? region : runningHubRegionFromItem(item);
+    const pasteInput = runningHubRegionAppInput(targetRegion);
+    const parsed = parseRunningHubRunRef(pasteInput?.value || '');
     if(!parsed || parsed.type !== 'app'){ setStatus('请输入 AI 应用 ID'); return; }
+    const activeConfig = runningHubRegionState(item, targetRegion);
+    if(activeConfig?.enabled !== true){
+        setStatus(tr('api.rhSiteDisabled'));
+        return false;
+    }
     if(rhAppSyncState){
         setStatus(tr('api.rhAppSyncBusy'));
         return false;
     }
-    syncEditor();
-    const activeRegion = currentRunningHubRegion(item);
-    const pendingKey = rhFreeKeyInput?.value.trim() || rhWalletKeyInput?.value.trim();
-    const activeConfig = runningHubRegionPublicState(item, activeRegion);
-    ensureRunningHubLists(item);
-    const currentEntry = item.rh_apps.find(entry => String(entry?.id || entry?.appId || '') === parsed.id && entry?.hidden !== true);
+    const entries = runningHubRegionEntries(item, targetRegion, 'app');
+    const pendingKey = runningHubRegionPendingKey(item, targetRegion);
+    const currentEntry = entries.find(entry => String(entry?.id || entry?.appId || '') === parsed.id && entry?.hidden !== true);
     setRhAppSyncState({
         id:parsed.id,
-        region:activeRegion,
+        region:targetRegion,
         isNew:!currentEntry,
         phase:pendingKey && !activeConfig.has_key && !activeConfig.has_wallet_key ? tr('api.rhAppPhaseSaveKey') : tr('api.rhAppPhasePrepare')
     });
@@ -1295,19 +1515,18 @@ async function createRhEntryFromPaste(){
         }
         item = provider();
     }
-    ensureRunningHubLists(item);
-    const listKey = 'rh_apps';
-    const previousEntries = JSON.parse(JSON.stringify(item[listKey] || []));
-    const existingIndex = item[listKey].findIndex(entry => String(entry?.id || entry?.appId || '').trim() === parsed.id);
-    const exists = existingIndex >= 0 && item[listKey][existingIndex]?.hidden !== true;
-    if(existingIndex >= 0 && item[listKey][existingIndex]?.hidden === true){
-        item[listKey][existingIndex] = {
-            ...item[listKey][existingIndex],
+    const targetEntries = runningHubRegionEntries(item, targetRegion, 'app');
+    const previousEntries = JSON.parse(JSON.stringify(targetEntries));
+    const existingIndex = targetEntries.findIndex(entry => String(entry?.id || entry?.appId || '').trim() === parsed.id);
+    const exists = existingIndex >= 0 && targetEntries[existingIndex]?.hidden !== true;
+    if(existingIndex >= 0 && targetEntries[existingIndex]?.hidden === true){
+        targetEntries[existingIndex] = {
+            ...targetEntries[existingIndex],
             enabled:true,
             hidden:false
         };
     } else if(!exists){
-        item[listKey].unshift({
+        targetEntries.unshift({
             id:parsed.id,
             appId:parsed.id,
             title:`AI 应用 ${parsed.id.slice(-6)}`,
@@ -1316,27 +1535,24 @@ async function createRhEntryFromPaste(){
             enabled:true
         });
     }
-    // 同步函数会从当前站点的持久化分区重新构建列表；先提交新条目，避免它被重建过程丢失。
-    persistActiveRunningHubRegion(item);
+    runningHubRegionState(item, targetRegion).rh_apps = targetEntries;
     updateRhAppSyncPhase(tr('api.rhAppPhaseRead'));
     setStatus(exists ? '正在重新同步 AI 应用...' : '正在验证并同步 AI 应用...');
     try {
         const current = provider();
+        const currentEntries = current?.id === 'runninghub' ? runningHubRegionEntries(current, targetRegion, 'app') : [];
         const targetIndex = current?.id === 'runninghub'
-            ? current.rh_apps.findIndex(entry => String(entry?.id || entry?.appId || '') === parsed.id)
+            ? currentEntries.findIndex(entry => String(entry?.id || entry?.appId || '') === parsed.id)
             : -1;
         if(targetIndex < 0) throw new Error('应用没有写入当前站点，请切换到对应站点后重试');
-        const synced = await syncRhAppFromOfficial(targetIndex);
+        const synced = await syncRhAppFromOfficial(targetIndex, targetRegion);
         if(!synced) throw new Error('官方信息已读取，但保存配置失败');
-        if(rhPasteInput) rhPasteInput.value = '';
+        if(pasteInput) pasteInput.value = '';
         setRhAppSyncState(null);
         setStatus(tr('api.rhAppSaved'));
     } catch(error) {
-        item[listKey] = JSON.parse(JSON.stringify(previousEntries));
         const regions = ensureRunningHubRegions(item);
-        const rollbackRegion = currentRunningHubRegion(item);
-        regions[rollbackRegion].rh_apps = JSON.parse(JSON.stringify(previousEntries));
-        persistActiveRunningHubRegion(item);
+        regions[targetRegion].rh_apps = JSON.parse(JSON.stringify(previousEntries));
         const rollbackSaved = await saveProviders();
         setRhAppSyncState(null);
         const rollbackHint = rollbackSaved ? '' : tr('api.rhAppRollbackFailed');
@@ -1344,18 +1560,28 @@ async function createRhEntryFromPaste(){
         return false;
     }
 }
-async function syncRhAppFromOfficial(index){
-    const item = provider();
+async function syncRhAppFromOfficial(index, region=''){
+    let item = provider();
     if(!item || item.id !== 'runninghub') return false;
-    ensureRunningHubLists(item);
-    const entry = item.rh_apps[index];
+    const targetRegion = RUNNINGHUB_REGIONS[region] ? region : runningHubRegionFromItem(item);
+    const regionState = runningHubRegionState(item, targetRegion);
+    if(regionState?.enabled !== true){
+        setStatus(tr('api.rhSiteDisabled'));
+        return false;
+    }
+    const entries = runningHubRegionEntries(item, targetRegion, 'app');
+    let entry = entries[index];
     const appId = String(entry?.appId || entry?.id || '').trim();
     if(!appId) return false;
     setStatus('正在从 RunningHub 同步 AI 应用信息...');
-    const region = currentRunningHubRegion(item);
-    const res = await fetch(`/api/runninghub/app-info?webappId=${encodeURIComponent(appId)}&region=${encodeURIComponent(region)}`);
+    const res = await fetch(`/api/runninghub/app-info?webappId=${encodeURIComponent(appId)}&region=${encodeURIComponent(targetRegion)}`);
     const data = await readApiResponse(res, '拉取 AI 应用信息失败');
     if(data.success === false) throw new Error(apiResponseDetail(data, '拉取 AI 应用信息失败'));
+    // 等待网络期间可能切换页面或保存了其他配置，重新定位原站点条目。
+    item = providers.find(candidate => candidate?.id === 'runninghub');
+    if(!item || runningHubRegionState(item, targetRegion)?.enabled !== true) return false;
+    entry = runningHubRegionEntries(item, targetRegion, 'app').find(candidate => String(candidate?.appId || candidate?.id || '') === appId && candidate.hidden !== true);
+    if(!entry) throw new Error(tr('api.rhAppMissing'));
     const raw = data.data || {};
     const officialTitle = String(raw.webappName || raw.title || raw.name || '').trim();
     if(!officialTitle || !Array.isArray(raw.nodeInfoList)){
@@ -1379,12 +1605,11 @@ async function syncRhAppFromOfficial(index){
     entry.enabled = true;
     entry.hidden = false;
     if(rhAppSyncState?.id === appId) updateRhAppSyncPhase(tr('api.rhAppPhaseSave'));
-    const saved = await saveProviders();
+    const saved = await scheduleProviderAutosave({providerId:item.id, region:targetRegion, immediate:true, sync:false});
     if(!saved) return false;
     const savedProvider = providers.find(candidate => candidate?.id === 'runninghub');
-    const savedRegion = savedProvider?.rh_regions?.[region];
+    const savedRegion = savedProvider?.rh_regions?.[targetRegion];
     const persisted = [
-        ...(savedProvider?.rh_apps || []),
         ...(savedRegion?.rh_apps || [])
     ].some(candidate => String(candidate?.id || candidate?.appId || '') === appId && candidate?.hidden !== true);
     if(!persisted) throw new Error('服务器未返回已保存的 AI 应用 ID，请检查当前站点和配置保存状态');
@@ -1392,15 +1617,19 @@ async function syncRhAppFromOfficial(index){
     setStatus(tr('api.rhAppSaved'));
     return true;
 }
-function updateRhEntry(kind, index, prop, value){
+function updateRhEntry(kind, index, prop, value, region=''){
     const item = provider();
     if(!item || item.id !== 'runninghub') return;
-    const listKey = kind === 'app' ? 'rh_apps' : 'rh_workflows';
-    ensureRunningHubLists(item);
-    if(!item[listKey][index]) return;
-    item[listKey][index][prop] = value;
-    if(prop === 'title') setStatus('名称已修改，点保存生效');
-    if(prop === 'note') setStatus('备注已修改，点保存生效');
+    const targetRegion = RUNNINGHUB_REGIONS[region] ? region : runningHubRegionFromItem(item);
+    const regionState = runningHubRegionState(item, targetRegion);
+    if(regionState?.enabled !== true){
+        setStatus(tr('api.rhSiteDisabled'));
+        return;
+    }
+    const entries = runningHubRegionEntries(item, targetRegion, kind);
+    if(!entries[index]) return;
+    entries[index][prop] = value;
+    void scheduleProviderAutosave({providerId:item.id, region:targetRegion, immediate:false, sync:false});
 }
 function isStaticRunningHubEntry(kind, entry){
     const id = String((kind === 'app' ? (entry?.appId || entry?.id) : (entry?.workflowId || entry?.id)) || '').trim();
@@ -1410,35 +1639,41 @@ function isStaticRunningHubEntry(kind, entry){
     // 静态模板会随 /api/providers 合并返回完整字段；手动粘贴的新卡片通常没有这些配置。
     return Array.isArray(entry?.fields) || (entry?.workflowJson && typeof entry.workflowJson === 'object') || (entry?.raw && typeof entry.raw === 'object');
 }
-async function removeRhEntry(kind, index){
+async function removeRhEntry(kind, index, region=''){
     const item = provider();
     if(!item || item.id !== 'runninghub') return;
+    const targetRegion = RUNNINGHUB_REGIONS[region] ? region : runningHubRegionFromItem(item);
+    const regionState = runningHubRegionState(item, targetRegion);
+    if(regionState?.enabled !== true){
+        setStatus(tr('api.rhSiteDisabled'));
+        return false;
+    }
     const listKey = kind === 'app' ? 'rh_apps' : 'rh_workflows';
-    ensureRunningHubLists(item);
-    const entry = item[listKey][index];
+    const entries = runningHubRegionEntries(item, targetRegion, kind);
+    const entry = entries[index];
     if(!entry) return;
-    const previousEntries = JSON.parse(JSON.stringify(item[listKey] || []));
+    const previousEntries = JSON.parse(JSON.stringify(entries || []));
     const entryId = String((kind === 'workflow' ? (entry.workflowId || entry.id) : (entry.appId || entry.id)) || '').trim();
     if(isStaticRunningHubEntry(kind, entry)){
-        item[listKey][index] = {
+        entries[index] = {
             ...entry,
             enabled:false,
             hidden:true
         };
     } else {
-        item[listKey].splice(index, 1);
+        entries.splice(index, 1);
     }
+    regionState[listKey] = entries;
     renderRunningHubCards();
     setStatus('已删除，正在保存...');
     let workflowBodyDeleted = false;
     if(kind === 'workflow' && entryId){
         try {
-            const response = await fetch(`/api/runninghub/workflows/${encodeURIComponent(entryId)}`, {method:'DELETE'});
+            const response = await fetch(`/api/runninghub/workflows/${encodeURIComponent(entryId)}?region=${encodeURIComponent(targetRegion)}`, {method:'DELETE'});
             if(!response.ok) throw new Error('工作流主体删除失败');
             workflowBodyDeleted = true;
         } catch(error) {
-            item[listKey] = previousEntries;
-            persistActiveRunningHubRegion(item);
+            regionState[listKey] = previousEntries;
             renderRunningHubCards();
             setStatus(error.message || '删除失败');
             return;
@@ -1449,13 +1684,11 @@ async function removeRhEntry(kind, index){
         setStatus('已删除并保存');
     } else {
         if(workflowBodyDeleted){
-            persistActiveRunningHubRegion(item);
             renderRunningHubCards();
-            setStatus('工作流主体已删除，但平台目录保存失败；请再次点击保存同步列表');
+            setStatus('工作流主体已删除，但平台目录保存失败；请刷新后重试');
             return;
         }
-        item[listKey] = previousEntries;
-        persistActiveRunningHubRegion(item);
+        regionState[listKey] = previousEntries;
         renderRunningHubCards();
         setStatus('删除未保存，已恢复原列表');
     }
@@ -1507,14 +1740,126 @@ function pickRhThumbnail(kind, index){
             const thumbnail = await createRhThumbnailDataUrl(file);
             updateRhEntry(kind, index, 'thumbnail', thumbnail);
             renderRunningHubCards();
-            setStatus('缩略图已更新，点保存生效');
+            setStatus(tr('api.autosaving') || '正在自动保存');
         } catch(e) {
             await StudioDialog.alert(e.message || '上传缩略图失败', {type:'warning'});
         }
     };
     input.click();
 }
+function isCurrentRhWorkflowDraft(draft){
+    return Boolean(draft
+        && rhWorkflowEditorState === draft.stateRef
+        && rhWorkflowAutosaveRevision === draft.revision
+        && rhWorkflowEditorState.open);
+}
+function clearRhWorkflowAutosaveTimer(){
+    if(rhWorkflowAutosaveTimer) clearTimeout(rhWorkflowAutosaveTimer);
+    rhWorkflowAutosaveTimer = null;
+}
+function updateRunningHubEditorEntry(draft, config){
+    const item = providers.find(candidate => candidate?.id === draft.providerId);
+    if(!item || item.id !== 'runninghub') throw new Error('RunningHub 平台已不存在');
+    const regions = ensureRunningHubRegions(item);
+    const regionState = regions[draft.region] || runningHubEmptyRegion(draft.region);
+    const listKey = draft.mode === 'app' ? 'rh_apps' : 'rh_workflows';
+    const entryId = String(draft.entryId || '').trim();
+    const entries = normalizeRhEntries(regionState[listKey] || [], draft.mode);
+    const entry = entries.find(candidate => String((draft.mode === 'app'
+        ? (candidate?.appId || candidate?.id)
+        : (candidate?.workflowId || candidate?.id)) || '').trim() === entryId);
+    if(!entry) throw new Error('RunningHub 当前站点目录中找不到正在编辑的条目');
+    entry.title = config.title || entry.title || entryId;
+    entry.note = config.description || '';
+    entry.fields = (config.fields || []).map(normalizeRhWorkflowField);
+    if(draft.mode === 'workflow'){
+        entry.workflowJson = config.workflowJson || {};
+        entry.optionalImageMode = config.optionalImageMode || 'prune-workflow';
+        entry.updatedAt = Number(config.updatedAt || Date.now());
+    }
+    entry.raw = config.raw || {};
+    regionState[listKey] = entries;
+    regions[draft.region] = regionState;
+    item.rh_regions = regions;
+    if(runningHubRegionFromItem(item) === draft.region){
+        activateRunningHubRegion(item, draft.region);
+        renderRunningHubCards();
+    }
+    return item;
+}
+async function persistRhWorkflowEditorDraft(draft){
+    const config = cloneApiSettingsValue(draft.config) || {};
+    if(draft.mode === 'workflow'){
+        const res = await fetch(`/api/runninghub/workflows/${encodeURIComponent(config.workflowId)}`, {
+            method:'PUT',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                workflowId:config.workflowId,
+                title:config.title,
+                description:config.description,
+                fields:(config.fields || []).map(normalizeRhWorkflowField),
+                workflowJson:config.workflowJson || {},
+                optionalImageMode:config.optionalImageMode || 'prune-workflow',
+                raw:config.raw || {}
+            })
+        });
+        const data = await res.json();
+        if(!res.ok || data.success === false) throw new Error(data.detail || '保存失败');
+        Object.assign(config, data.workflow || {});
+        config.updatedAt = Number(data.workflow?.updatedAt || Date.now());
+    }
+    const item = updateRunningHubEditorEntry(draft, config);
+    const saved = await scheduleProviderAutosave({
+        providerId:item.id,
+        region:draft.region,
+        immediate:true,
+        sync:false,
+    });
+    if(!saved) throw new Error('RunningHub 条目已经修改，但平台配置保存失败');
+    if(isCurrentRhWorkflowDraft(draft)){
+        setStatus(tr('api.autosaved'));
+        if(draft.mode === 'workflow') broadcastStudioApiChange('workflows-changed');
+        else broadcastStudioApiChange('providers-changed');
+    }
+    return true;
+}
+function flushRhWorkflowEditorAutosave(waitForWrite=false){
+    clearRhWorkflowAutosaveTimer();
+    const draft = rhWorkflowAutosavePending;
+    if(!draft) return waitForWrite ? rhWorkflowAutosaveSerial : Promise.resolve(false);
+    rhWorkflowAutosavePending = null;
+    const write = rhWorkflowAutosaveSerial.then(() => persistRhWorkflowEditorDraft(draft));
+    rhWorkflowAutosaveSerial = write.catch(error => {
+        if(isCurrentRhWorkflowDraft(draft)) setStatus(error.message || tr('api.autosaveFailed'));
+        return false;
+    });
+    return waitForWrite ? rhWorkflowAutosaveSerial : write;
+}
+function scheduleRhWorkflowEditorAutosave(immediate=false){
+    const state = rhWorkflowEditorState;
+    if(!state.open || !state.config) return Promise.resolve(false);
+    clearRhWorkflowAutosaveTimer();
+    const item = provider();
+    const revision = ++rhWorkflowAutosaveRevision;
+    rhWorkflowAutosavePending = {
+        stateRef:state,
+        revision,
+        mode:rhEditorMode,
+        providerId:item?.id || 'runninghub',
+        region:apiAutosaveRegion(item, currentRunningHubRegion(item)),
+        entryId:String(state.entry?.appId || state.entry?.workflowId || state.entry?.id || '').trim(),
+        config:cloneApiSettingsValue(state.config)
+    };
+    setStatus(tr('api.autosaving') || tr('api.saving'));
+    if(immediate) return flushRhWorkflowEditorAutosave(true);
+    rhWorkflowAutosaveTimer = setTimeout(() => {
+        rhWorkflowAutosaveTimer = null;
+        void flushRhWorkflowEditorAutosave(false);
+    }, API_AUTOSAVE_DELAY);
+    return Promise.resolve(true);
+}
 async function openRhWorkflowEditor(index){
+    if(rhWorkflowEditorState.open) await flushRhWorkflowEditorAutosave(true);
     const item = provider();
     if(!item || item.id !== 'runninghub') return;
     ensureRunningHubLists(item);
@@ -1532,6 +1877,7 @@ async function openRhWorkflowEditor(index){
     }
 }
 function closeRhWorkflowEditor(){
+    void flushRhWorkflowEditorAutosave(false);
     if(rhWorkflowEditorOverlay) rhWorkflowEditorOverlay.classList.remove('open');
     rhWorkflowEditorState.open = false;
 }
@@ -1539,9 +1885,7 @@ function renderRhWorkflowEditorLoading(text){
     if(rhWorkflowEditorTitle) rhWorkflowEditorTitle.textContent = rhWorkflowEditorState.entry?.title || (rhEditorMode === 'app' ? 'RunningHub AI 应用' : 'RunningHub 工作流');
     if(rhWorkflowEditName) rhWorkflowEditName.value = rhWorkflowEditorState.entry?.title || '';
     if(rhWorkflowEditNote) rhWorkflowEditNote.value = rhWorkflowEditorState.entry?.note || '';
-    if(rhWorkflowEditorSub) rhWorkflowEditorSub.textContent = rhEditorMode === 'app'
-        ? `/run/ai-app/${rhWorkflowEditorState.entry?.appId || rhWorkflowEditorState.entry?.id || ''}`
-        : `/run/workflow/${rhWorkflowEditorState.entry?.workflowId || rhWorkflowEditorState.entry?.id || ''}`;
+    if(rhWorkflowEditorSub) rhWorkflowEditorSub.textContent = '';
     if(rhWorkflowEditorSummary) rhWorkflowEditorSummary.innerHTML = `<div class="rh-editor-empty">${escapeHtml(text)}</div>`;
     if(rhWorkflowEditorNodeList) rhWorkflowEditorNodeList.innerHTML = '';
     if(rhEditorMode === 'workflow') {
@@ -1601,6 +1945,7 @@ function setRhWorkflowOptionalImageMode(value){
     if(!config || rhEditorMode !== 'workflow') return;
     config.optionalImageMode = value || 'prune-workflow';
     withRhEditorScrollPreserved(() => renderRhMappedPreview());
+    void scheduleRhWorkflowEditorAutosave(true);
 }
 function rhAppFieldSourceList(raw){
     const data = raw?.data && typeof raw.data === 'object' ? raw.data : raw;
@@ -1741,6 +2086,7 @@ function extractRhEditorFieldOptions(field, allowKnown=true){
     return [];
 }
 async function fetchRhWorkflowEditor(force=false){
+    if(force) await flushRhWorkflowEditorAutosave(true);
     const state = rhWorkflowEditorState;
     const entry = state.entry;
     if(!entry) return null;
@@ -1778,6 +2124,7 @@ function updateRhWorkflowEditorMeta(prop, value){
     if(prop === 'title') config.title = value;
     if(prop === 'description') config.description = value;
     withRhEditorScrollPreserved(() => renderRhMappedPreview());
+    void scheduleRhWorkflowEditorAutosave(false);
 }
 function toggleRhWorkflowEditorGroup(groupId){
     const expanded = rhWorkflowEditorState.expanded;
@@ -1858,6 +2205,7 @@ function toggleRhWorkflowEditorField(key){
             if(active) openRhAppFieldPopover(key, active);
         }
     });
+    void scheduleRhWorkflowEditorAutosave(true);
 }
 function updateRhWorkflowEditorField(key, prop, value){
     const config = rhWorkflowEditorState.config;
@@ -1879,87 +2227,21 @@ function updateRhWorkflowEditorField(key, prop, value){
             }
         });
     }
-}
-function setRhWorkflowSaveButtonState(state, text){
-    if(!rhWorkflowSaveBtn) return;
-    const label = rhWorkflowSaveBtn.querySelector('span');
-    rhWorkflowSaveBtn.classList.toggle('is-saved', state === 'saved');
-    rhWorkflowSaveBtn.disabled = state === 'saving';
-    if(label) label.textContent = text || (state === 'saved' ? '已保存' : state === 'saving' ? '保存中...' : '保存');
-    const icon = rhWorkflowSaveBtn.querySelector('i');
-    if(icon) icon.setAttribute('data-lucide', state === 'saved' ? 'check' : 'save');
-    refreshIcons();
+    void scheduleRhWorkflowEditorAutosave(['random_enabled','fieldType','required','sourceFromUpstream'].includes(prop));
 }
 async function saveRhWorkflowEditor(){
     const state = rhWorkflowEditorState;
     const config = state.config;
     if(!config){ await StudioDialog.alert(rhEditorMode === 'app' ? '请先加载应用参数' : '请先加载工作流', {type:'warning'}); return; }
-    setRhWorkflowSaveButtonState('saving', '保存中...');
     config.title = rhWorkflowEditName?.value.trim() || config.title || config.workflowId;
     config.description = rhWorkflowEditNote?.value.trim() || config.description || '';
-    try {
-        if(rhEditorMode === 'app'){
-            const item = provider();
-            if(item?.id === 'runninghub' && item.rh_apps?.[state.index]){
-                const entry = item.rh_apps[state.index];
-                entry.title = config.title || entry.title;
-                entry.note = config.description || '';
-                entry.fields = (config.fields || []).map(normalizeRhWorkflowField);
-                entry.raw = config.raw || {};
-                renderRunningHubCards();
-                if(!await saveProviders()) throw new Error('应用参数已经修改，但保存到平台配置失败，请重试');
-            }
-            setStatus('应用参数配置已保存');
-            setRhWorkflowSaveButtonState('saved', '已保存');
-            setTimeout(() => setRhWorkflowSaveButtonState('idle', '保存'), 1600);
-            broadcastStudioApiChange('providers-changed');
-            renderRhWorkflowEditor();
-            return;
-        }
-        const res = await fetch(`/api/runninghub/workflows/${encodeURIComponent(config.workflowId)}`, {
-            method:'PUT',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({
-                workflowId:config.workflowId,
-                title:config.title,
-                description:config.description,
-                fields:(config.fields || []).map(normalizeRhWorkflowField),
-                workflowJson:config.workflowJson || {},
-                optionalImageMode:config.optionalImageMode || 'prune-workflow',
-                raw:config.raw || {}
-            })
-        });
-        const data = await res.json();
-        if(!res.ok || data.success === false) throw new Error(data.detail || '保存失败');
-        state.config = normalizeRhWorkflowConfig(data.workflow || config, state.entry);
-        const item = provider();
-        if(item?.id === 'runninghub' && item.rh_workflows?.[state.index]){
-            const entry = item.rh_workflows[state.index];
-            entry.title = state.config.title;
-            entry.note = state.config.description;
-            entry.fields = (state.config.fields || []).map(normalizeRhWorkflowField);
-            entry.workflowJson = state.config.workflowJson || {};
-            entry.optionalImageMode = state.config.optionalImageMode || 'prune-workflow';
-            entry.raw = state.config.raw || {};
-            entry.updatedAt = Number(data.workflow?.updatedAt || Date.now());
-            renderRunningHubCards();
-            if(!await saveProviders()) throw new Error('工作流主体已保存，但平台目录同步失败，请重试保存');
-        }
-        setStatus('工作流配置已保存');
-        setRhWorkflowSaveButtonState('saved', '已保存');
-        setTimeout(() => setRhWorkflowSaveButtonState('idle', '保存'), 1600);
-        broadcastStudioApiChange('workflows-changed');
-        renderRhWorkflowEditor();
-    } catch(err) {
-        setRhWorkflowSaveButtonState('idle', '保存');
-        await StudioDialog.alert(err.message || '保存失败', {type:'warning'});
-    }
+    return scheduleRhWorkflowEditorAutosave(true);
 }
 function renderRhWorkflowEditor(){
     const config = rhWorkflowEditorState.config;
     if(!config){ renderRhWorkflowEditorLoading(rhEditorMode === 'app' ? '应用参数未加载' : '工作流未加载'); return; }
     if(rhWorkflowEditorTitle) rhWorkflowEditorTitle.textContent = config.title || (rhEditorMode === 'app' ? 'RunningHub AI 应用' : 'RunningHub 工作流');
-    if(rhWorkflowEditorSub) rhWorkflowEditorSub.textContent = rhEditorMode === 'app' ? `/run/ai-app/${config.appId}` : `/run/workflow/${config.workflowId}`;
+    if(rhWorkflowEditorSub) rhWorkflowEditorSub.textContent = '';
     if(rhWorkflowEditName) rhWorkflowEditName.value = config.title || '';
     if(rhWorkflowEditNote) rhWorkflowEditNote.value = config.description || '';
     applyRhImageSlotDefaults(config);
@@ -2012,7 +2294,6 @@ function renderRhMappedPreviewHtml(config){
                 <div class="rh-mapped-icon"><i data-lucide="${rhEditorMode === 'app' ? 'sparkles' : 'workflow'}" class="w-4 h-4"></i></div>
                 <div>
                     <div class="rh-mapped-title">${escapeHtml(title)}</div>
-                    <div class="rh-mapped-sub">${rhEditorMode === 'app' ? `/run/ai-app/${escapeHtml(config.appId || '')}` : `/run/workflow/${escapeHtml(config.workflowId || '')}`}</div>
                 </div>
             </div>
             <div class="rh-mapped-stats">
@@ -2619,17 +2900,33 @@ function bindRhWorkflowEditorPanZoom(){
 function renderRunningHubCards(){
     const item = provider();
     if(!item || item.id !== 'runninghub'){
-        if(rhAppsList) rhAppsList.innerHTML = '';
+        if(rhGlobalAppsList) rhGlobalAppsList.innerHTML = '';
+        if(rhCnAppsList) rhCnAppsList.innerHTML = '';
         if(rhWorkflowsList) rhWorkflowsList.innerHTML = '';
         return;
     }
-    ensureRunningHubLists(item);
-    const apps = item.rh_apps
-        .map((entry, index) => ({...entry, _rhIndex:index}))
-        .filter(entry => entry?.hidden !== true)
-        .filter(entry => !(rhAppSyncState && String(entry?.id || entry?.appId || '') === rhAppSyncState.id));
-    if(rhAppsCount) rhAppsCount.textContent = apps.length;
-    renderRhEntryList(rhAppsList, apps, 'app', rhAppSyncState);
+    ensureRunningHubRegions(item);
+    Object.keys(RUNNINGHUB_REGIONS).forEach(region => {
+        const state = runningHubRegionState(item, region);
+        const enabled = state?.enabled === true;
+        const apps = runningHubRegionEntries(item, region, 'app')
+            .map((entry, index) => ({...entry, _rhIndex:index}))
+            .filter(entry => entry?.hidden !== true)
+            .filter(entry => !(rhAppSyncState?.region === region && String(entry?.id || entry?.appId || '') === rhAppSyncState.id));
+        const target = runningHubRegionUi(region, 'apps');
+        const count = runningHubRegionUi(region, 'count');
+        const card = document.querySelector(`[data-rh-app-region="${region}"]`);
+        const status = card?.querySelector?.(`[data-rh-app-status="${region}"]`);
+        const input = runningHubRegionAppInput(region);
+        const addButton = card?.querySelector?.(`[data-rh-app-add="${region}"]`);
+        const busy = rhAppSyncState?.region === region && Boolean(rhAppSyncState);
+        card?.classList?.toggle('is-disabled', !enabled);
+        if(status) status.textContent = enabled ? '' : tr('api.rhSiteDisabled');
+        if(input) input.disabled = !enabled || busy;
+        if(addButton) addButton.disabled = !enabled || busy;
+        if(count) count.textContent = apps.length;
+        renderRhEntryList(target, apps, 'app', busy ? rhAppSyncState : null, region, enabled);
+    });
     refreshIcons();
 }
 function rhEntryThumbnailCandidates(kind, entry){
@@ -2685,13 +2982,20 @@ function renderRhSyncCard(state){
         '</div>'
     ].join('');
 }
-function renderRhEntryList(target, list, kind, syncState=null){
+function renderRhEntryList(target, list, kind, syncState=null, region='', enabled=true){
     if(!target) return;
+    if(!enabled && !list.length && !syncState){
+        target.innerHTML = '';
+        return;
+    }
     if(!list.length && !(kind === 'app' && syncState)){
         target.innerHTML = `<div class="rh-empty">${kind === 'app' ? '输入 AI 应用 ID 后点击添加并同步' : '粘贴 /run/workflow/... 后点击创建工作流卡片'}</div>`;
         return;
     }
     const pendingCard = kind === 'app' ? renderRhSyncCard(syncState) : '';
+    const regionBadge = kind === 'app' ? runningHubRegionBadge(region || currentRunningHubRegion(provider())) : '';
+    const regionArg = region ? `, '${escapeAttr(region)}'` : '';
+    const disabledAttr = enabled ? '' : ' disabled';
     target.innerHTML = pendingCard + list.map((entry, index) => `
         <div class="rh-config-card">
             ${kind === 'app'
@@ -2699,18 +3003,18 @@ function renderRhEntryList(target, list, kind, syncState=null){
                 : `<button class="rh-thumb" type="button" onclick="pickRhThumbnail('${kind}', ${entry._rhIndex ?? index})" title="上传缩略图">${renderRhEntryThumbnail(kind, entry)}</button>`}
             <div class="rh-card-main">
                 ${kind === 'app'
-                    ? `<div class="rh-card-title-field"><span>RunningHub 官方应用</span><strong>${escapeHtml(runningHubLocalizedTitle(entry) || `AI 应用 ${entry.id || ''}`)}</strong></div>`
-                    : `<label class="rh-card-title-field"><span>名称</span><input type="text" value="${escapeAttr(entry.title || '')}" oninput="updateRhEntry('${kind}', ${entry._rhIndex ?? index}, 'title', this.value)" placeholder="工作流名称"></label>`}
+                    ? `<div class="rh-card-title-field"><span>RunningHub 官方应用 <em class="rh-region-badge">${escapeHtml(regionBadge)}</em></span><strong>${escapeHtml(runningHubLocalizedTitle(entry, region) || `AI 应用 ${entry.id || ''}`)}</strong></div>`
+                    : `<label class="rh-card-title-field"><span>名称</span><input type="text" value="${escapeAttr(entry.title || '')}" oninput="updateRhEntry('${kind}', ${entry._rhIndex ?? index}, 'title', this.value${regionArg})" placeholder="工作流名称"${disabledAttr}></label>`}
                 <div class="rh-id-line"><i data-lucide="hash" class="w-3 h-3"></i><span>${escapeHtml(entry.id)}</span></div>
                 ${kind === 'app'
                     ? `<div class="rh-card-note">${escapeHtml(String(entry.note || '').replace(/<[^>]*>/g, ' ') || '官方参数将在画布中自动生成')}</div>`
-                    : `<textarea oninput="updateRhEntry('${kind}', ${entry._rhIndex ?? index}, 'note', this.value)" placeholder="备注、用途、参数说明">${escapeHtml(entry.note || '')}</textarea>`}
+                    : `<textarea oninput="updateRhEntry('${kind}', ${entry._rhIndex ?? index}, 'note', this.value${regionArg})" placeholder="备注、用途、参数说明"${disabledAttr}>${escapeHtml(entry.note || '')}</textarea>`}
             </div>
             <div class="rh-card-actions">
                 ${kind === 'workflow'
-                    ? `<button class="rh-card-action" type="button" onclick="openRhWorkflowEditor(${entry._rhIndex ?? index})" title="编辑工作流"><i data-lucide="settings-2" class="w-3.5 h-3.5"></i></button>`
-                    : `<button class="rh-card-action" type="button" onclick="syncRhAppFromOfficial(${entry._rhIndex ?? index}).catch(error => StudioDialog.alert(error.message || '同步失败', {type:'warning'}))" title="重新同步官方应用信息"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i></button>`}
-                <button class="rh-card-action danger" type="button" onclick="removeRhEntry('${kind}', ${entry._rhIndex ?? index})" title="删除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                    ? `<button class="rh-card-action" type="button" onclick="openRhWorkflowEditor(${entry._rhIndex ?? index})" title="编辑工作流"${disabledAttr}><i data-lucide="settings-2" class="w-3.5 h-3.5"></i></button>`
+                    : `<button class="rh-card-action" type="button" onclick="syncRhAppFromOfficial(${entry._rhIndex ?? index}, '${escapeAttr(region)}').catch(error => StudioDialog.alert(error.message || '同步失败', {type:'warning'}))" title="重新同步官方应用信息"${disabledAttr}><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i></button>`}
+                <button class="rh-card-action danger" type="button" onclick="removeRhEntry('${kind}', ${entry._rhIndex ?? index}${regionArg})" title="删除"${disabledAttr}><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
             </div>
         </div>
     `).join('');
@@ -2782,7 +3086,7 @@ function renderRecommendApi(){
                     <div class="recommend-setup-title">${escapeHtml(tr('api.recommendAddTitle'))}</div>
                     <p class="recommend-platform-summary">${escapeHtml(tr('api.recommendAddDesc'))}</p>
                 </div>
-                <button class="onboarding-save-btn recommend-add-platform-btn" type="button" onclick="addRecommendedApi(${index})">
+                <button class="action-btn recommend-add-platform-btn" type="button" onclick="addRecommendedApi(${index})">
                     <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                     <span>${escapeHtml(tr(providers.some(provider => provider.id === api.id) ? 'api.openPlatformConfig' : 'api.addPlatform'))}</span>
                 </button>
@@ -2805,9 +3109,9 @@ function renderRecommendApi(){
                     <div class="recommend-guide-save">
                         <label class="onboarding-key-field onboarding-rh-row-field">
                             <span class="recommend-api-key-label">API Key${api.keyHint ? `<em class="recommend-key-inline-hint">${escapeHtml(api.keyHint)}</em>` : ''}</span>
-                            <input type="password" data-recommend-key="${index}" placeholder="${escapeAttr(trf('api.recommendKeyPlaceholder', {name:api.name}))}">
+                            <input type="password" data-recommend-key="${index}" placeholder="${escapeAttr(trf('api.recommendKeyPlaceholder', {name:api.name}))}" oninput="queueRecommendedApiKey(${index}, this.value)">
                         </label>
-                        <button class="onboarding-save-btn recommend-guide-save-btn" type="button" onclick="saveRecommendedApi(${index})"><span>${escapeHtml(tr('api.save'))}</span></button>
+                        <span class="onboarding-autosave-note"><i data-lucide="cloud-check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.autosaveHint'))}</span></span>
                     </div>
                 </div>
             </div>`}
@@ -2817,6 +3121,7 @@ function renderRecommendApi(){
     const html = RECOMMEND_GROUPS.map(group => {
         const items = RECOMMENDED_APIS
             .map((api, index) => ({api, index}))
+            .filter(item => !HIDDEN_RECOMMENDED_API_IDS.has(String(item.api.id || '').toLowerCase()))
             .filter(item => (item.api.category || 'cheap') === group.key);
         if(!items.length) return '';
         return `
@@ -2840,6 +3145,7 @@ function renderRecommendApi(){
     refreshIcons();
 }
 function recommendedProviderForApi(api){
+    if(!api || HIDDEN_RECOMMENDED_API_IDS.has(String(api.id || '').toLowerCase())) return null;
     let item = providers.find(provider =>
         (api.id && String(provider.id || '').toLowerCase() === String(api.id).toLowerCase())
         || String(provider.name || '').toLowerCase() === api.name.toLowerCase()
@@ -2891,11 +3197,12 @@ function recommendedProviderForApi(api){
 }
 async function addRecommendedApi(index){
     const api = RECOMMENDED_APIS[index];
-    if(!api) return;
+    if(!api || HIDDEN_RECOMMENDED_API_IDS.has(String(api.id || '').toLowerCase())) return;
     syncEditor();
     const previousProviders = JSON.parse(JSON.stringify(providers));
     const previousSelectedId = selectedId;
     const item = recommendedProviderForApi(api);
+    if(!item) return;
     clearFetchedModelState();
     selectedId = item.id;
     recommendInlineOpen = false;
@@ -2914,16 +3221,26 @@ async function addRecommendedApi(index){
         renderEditor();
     }
 }
-async function saveRecommendedApi(index){
+function queueRecommendedApiKey(index, value){
+    const previous = recommendedKeySaveTimers.get(index);
+    if(previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+        recommendedKeySaveTimers.delete(index);
+        void saveRecommendedApi(index, value);
+    }, API_AUTOSAVE_DELAY);
+    recommendedKeySaveTimers.set(index, timer);
+}
+async function saveRecommendedApi(index, suppliedKey=''){
     const api = RECOMMENDED_APIS[index];
-    if(!api) return;
+    if(!api || HIDDEN_RECOMMENDED_API_IDS.has(String(api.id || '').toLowerCase())) return;
     const input = recommendPanel?.querySelector(`[data-recommend-key="${index}"]`);
-    const key = input?.value.trim() || '';
+    const key = String(suppliedKey || input?.value || '').trim();
     if(!key){ await StudioDialog.alert(tr('api.enterApiKey'), {type:'warning'}); return; }
     syncEditor();
     const previousProviders = JSON.parse(JSON.stringify(providers));
     const previousSelectedId = selectedId;
     const item = recommendedProviderForApi(api);
+    if(!item) return;
     clearFetchedModelState();
     selectedId = item.id;
     recommendInlineOpen = false;
@@ -2951,7 +3268,7 @@ async function saveRecommendedApi(index){
 }
 function sortedProviders(){
     const order = ['modelscope', 'runninghub', 'volcengine', 'ai-money', 'agnes'];
-    return visibleProviders().sort((a, b) => {
+    return visibleProviders().filter(item => !isCliProvider(item)).sort((a, b) => {
         const ai = order.indexOf(a.id);
         const bi = order.indexOf(b.id);
         if(ai === -1 && bi === -1) return 0;
@@ -2960,16 +3277,22 @@ function sortedProviders(){
         return ai - bi;
     });
 }
+function sortedCliProviders(){
+    return visibleProviders().filter(item => isCliProvider(item));
+}
 function providerDragAttrs(item){
     if(isFixedProvider(item)) return '';
     const id = escapeAttr(item.id);
     return ` draggable="true" data-provider-id="${id}" ondragstart="handleProviderDragStart(event,'${id}')" ondragover="handleProviderDragOver(event,'${id}')" ondrop="handleProviderDrop(event,'${id}')" ondragend="handleProviderDragEnd()"`;
 }
 function renderProviderList(){
+    if(!providerList) return;
     providerList.innerHTML = sortedProviders().map(item => {
         const active = item.id === selectedId ? 'active' : '';
         const itemProtocol = String(item.protocol || 'openai').toLowerCase();
-        const stateClass = item.enabled === false ? 'is-disabled' : (item.has_key || item.has_wallet_key || CLI_PROTOCOLS.has(itemProtocol) ? 'has-key' : 'missing-key');
+        const stateClass = item.id === 'runninghub'
+            ? (runningHubHasEnabledRegion(item) ? '' : 'is-disabled')
+            : item.enabled === false ? 'is-disabled' : (item.has_key || item.has_wallet_key || CLI_PROTOCOLS.has(itemProtocol) ? 'has-key' : 'missing-key');
         const protocolLabel = item.id === 'runninghub' ? 'RH' : String(item.protocol || 'openai').toUpperCase();
         if(item.id === 'modelscope'){
             return `
@@ -2987,16 +3310,18 @@ function renderProviderList(){
         }
         if(item.id === 'runninghub'){
             return `
-                <button class="provider-card provider-card-banner ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
-                    <span class="provider-banner-inner">
-                        <span class="provider-logo-wrap">
-                            <img src="/static/images/RunningHub-B.png" alt="RunningHub" class="runninghub-icon ms-icon-light">
-                            <img src="/static/images/RunningHub-W.png" alt="RunningHub" class="runninghub-icon ms-icon-dark">
-                            <span class="provider-logo-fallback">RunningHub</span>
+                <div class="provider-card provider-card-banner runninghub-provider-card ${active} ${stateClass}">
+                    <button class="provider-card-main" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
+                        <span class="provider-banner-inner">
+                            <span class="provider-logo-wrap">
+                                <img src="/static/images/RunningHub-B.png" alt="RunningHub" class="runninghub-icon ms-icon-light">
+                                <img src="/static/images/RunningHub-W.png" alt="RunningHub" class="runninghub-icon ms-icon-dark">
+                                <span class="provider-logo-fallback">RunningHub</span>
+                            </span>
+                            <span class="provider-protocol-pill">RH</span>
                         </span>
-                        <span class="provider-protocol-pill">RH</span>
-                    </span>
-                </button>
+                    </button>
+                </div>
             `;
         }
         if(item.id === 'volcengine'){
@@ -3019,7 +3344,7 @@ function renderProviderList(){
                     <span class="provider-banner-inner">
                         <span class="provider-logo-wrap provider-logo-ai-money">
                             <img src="/static/images/ai-money.png" alt="" aria-hidden="true" class="ai-money-icon">
-                            <span class="provider-logo-name">laohu</span>
+                            <img src="/static/images/laohu-wordmark.png" alt="laohu" class="laohu-wordmark">
                         </span>
                         <span class="provider-protocol-pill">API</span>
                     </span>
@@ -3042,6 +3367,45 @@ function renderProviderList(){
         `;
     }).join('');
     refreshIcons();
+    renderCliProviderList();
+}
+function cliCapabilityLabel(item){
+    const protocol = String(item?.protocol || item?.id || '').toLowerCase();
+    if(protocol === 'jimeng') return tr('api.cliJimengCapabilities');
+    if(protocol === 'codex') return tr('api.cliCodexCapabilities');
+    if(protocol === 'gemini-cli') return tr('api.cliGeminiCapabilities');
+    return tr('api.cliLocalSession');
+}
+function syncCliQuickActions(){
+    const configuredIds = new Set(sortedCliProviders().map(item => String(item.id || item.protocol || '').toLowerCase()));
+    document.querySelectorAll('.cli-quick-btn[data-cli-kind]').forEach(button => {
+        const kind = String(button.dataset.cliKind || '').toLowerCase();
+        const preset = CLI_PROVIDER_PRESETS[kind];
+        const configured = Boolean(preset && (configuredIds.has(String(preset.id).toLowerCase()) || configuredIds.has(String(preset.protocol).toLowerCase())));
+        button.hidden = configured;
+    });
+    const note = document.querySelector('.cli-quick-note');
+    if(note) note.hidden = ![...document.querySelectorAll('.cli-quick-btn[data-cli-kind]')].some(button => !button.hidden);
+}
+function renderCliProviderList(){
+    if(!cliProviderList) return;
+    const items = sortedCliProviders();
+    cliProviderList.innerHTML = items.length ? items.map(item => {
+        const active = item.id === selectedId ? 'active' : '';
+        const stateClass = item.enabled === false ? 'is-disabled' : 'has-key';
+        return `
+            <button class="provider-card cli-provider-card ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
+                <span class="provider-mark"><i data-lucide="terminal" class="w-4 h-4"></i></span>
+                <span class="provider-info">
+                    <span class="provider-name">${escapeHtml(item.name || item.id)}</span>
+                    <span class="provider-meta">${escapeHtml(cliCapabilityLabel(item))}</span>
+                </span>
+                <span class="provider-status-dot"></span>
+            </button>
+        `;
+    }).join('') : `<div class="cli-provider-empty" data-i18n="api.cliNone">${escapeHtml(tr('api.cliNone'))}</div>`;
+    refreshIcons();
+    syncCliQuickActions();
 }
 function handleProviderDragStart(event, id){
     const item = providers.find(provider => provider.id === id);
@@ -3087,10 +3451,24 @@ function handleProviderDragEnd(){
         el.classList.remove('is-dragging', 'provider-card-drop-target');
     });
 }
+function renderCanvasModelProviderSelect(){
+    if(!canvasModelProviderSelect) return;
+    const items = visibleProviders();
+    canvasModelProviderSelect.innerHTML = items.map(item => `<option value="${escapeAttr(item.id)}">${escapeHtml(item.name || item.id)}</option>`).join('');
+    const selected = items.some(item => item.id === selectedId) ? selectedId : (items[0]?.id || '');
+    canvasModelProviderSelect.value = selected;
+    canvasModelProviderSelect.disabled = !items.length;
+}
 function renderEditor(){
     const item = provider();
     if(!item) return;
-    editorTitle.textContent = comfyuiSettingsMode ? tr('api.comfyuiSettingsTitle') : (item.name || item.id);
+    syncApiSettingsView();
+    editorTitle.textContent = comfyuiSettingsMode
+        ? tr('api.aiAppsTitle')
+        : apiSettingsSection === 'models'
+        ? tr('api.canvasModelsTitle')
+        : (item.name || item.id);
+    if(editorSub) editorSub.textContent = '';
     nameInput.value = item.name || '';
     idInput.value = item.id || '';
     updateIdPreview();
@@ -3123,9 +3501,9 @@ function renderEditor(){
         imageEditRouteInput.value = normalizeImageEditRoute(item.image_edit_route);
         imageEditRouteInput.disabled = item.id === 'modelscope' || item.id === 'runninghub' || item.id === 'volcengine' || item.id === 'ai-money' || CLI_PROTOCOLS.has(String(protocolInput?.value || item.protocol || '').toLowerCase());
     }
-    keyInput.value = '';
+    keyInput.value = item.api_key || '';
     keyInput.placeholder = item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.enterKey');
-    keyHint.textContent = item.has_key ? `${tr('api.keySaved')}${item.key_env || 'API/.env'}` : tr('api.noKey');
+    keyHint.textContent = keyStatusText(item.has_key);
     const isModelScope = item.id === 'modelscope';
     const isRunningHub = item.id === 'runninghub';
     const isVolcengine = item.id === 'volcengine' || String(protocolInput?.value || item.protocol || '').toLowerCase() === 'volcengine';
@@ -3137,23 +3515,35 @@ function renderEditor(){
     const isGeminiCli = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'gemini-cli';
     const showCustomGuide = isCustomApiProvider(item);
     nameInput.disabled = isAiMoney || isAgnes;
-    baseInput.disabled = isRunningHub || isAiMoney || isAgnes;
+    baseInput.disabled = isModelScope || isRunningHub || isVolcengine || isAiMoney || isAgnes;
     if(isRunningHub){
-        ensureRunningHubLists(item);
-        activateRunningHubRegion(item, runningHubRegionFromItem(item));
+        ensureRunningHubRegions(item);
+        if(!RUNNINGHUB_REGIONS[runningHubModelRegion]) runningHubModelRegion = runningHubRegionFromItem(item);
+        activateRunningHubRegion(item, runningHubModelRegion);
         syncRunningHubRegion();
-        const region = runningHubRegionFromItem(item);
-        const regionState = runningHubRegionPublicState(item, region);
-        if(rhFreeKeyInput){
-            rhFreeKeyInput.value = '';
-            rhFreeKeyInput.placeholder = regionState.has_key ? `${tr('api.rhKeepCoinKey')} ${regionState.key_preview || ''}` : tr('api.rhEnterCoinKey');
-        }
-        if(rhWalletKeyInput){
-            rhWalletKeyInput.value = '';
-            rhWalletKeyInput.placeholder = regionState.has_wallet_key ? `${tr('api.rhKeepWalletKey')} ${regionState.wallet_key_preview || ''}` : tr('api.rhEnterWalletKey');
-        }
-        if(rhFreeKeyHint) rhFreeKeyHint.textContent = `${rhFreeKeyHintText(item)} · 当前为${region === 'cn' ? '国内站' : '国际站'}`;
-        if(rhWalletKeyHint) rhWalletKeyHint.textContent = `${rhWalletKeyHintText(item)} · 当前为${region === 'cn' ? '国内站' : '国际站'}`;
+        Object.keys(RUNNINGHUB_REGIONS).forEach(region => {
+            const regionState = runningHubRegionPublicState(item, region);
+            const enabledInput = runningHubRegionEnabledInput(region);
+            const freeInput = runningHubRegionInput(region, 'free');
+            const walletInput = runningHubRegionInput(region, 'wallet');
+            const freeHint = runningHubRegionUi(region, 'freeHint');
+            const walletHint = runningHubRegionUi(region, 'walletHint');
+            if(enabledInput) enabledInput.checked = regionState.enabled === true;
+            if(freeInput){
+                freeInput.value = '';
+                freeInput.placeholder = regionState.has_key
+                    ? `${tr('api.keepCurrentKey')} ${regionState.key_preview || ''}`
+                    : tr('api.rhEnterCoinKey');
+            }
+            if(walletInput){
+                walletInput.value = '';
+                walletInput.placeholder = regionState.has_wallet_key
+                    ? `${tr('api.keepCurrentKey')} ${regionState.wallet_key_preview || ''}`
+                    : tr('api.rhEnterWalletKey');
+            }
+            if(freeHint) freeHint.textContent = rhFreeKeyHintText(regionState);
+            if(walletHint) walletHint.textContent = rhWalletKeyHintText(regionState);
+        });
         renderRunningHubCards();
     }
     if(isVolcengine){
@@ -3184,7 +3574,7 @@ function renderEditor(){
         nameInput.value = item.name;
         baseInput.value = item.base_url;
         keyInput.placeholder = item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.aiMoneyKeyPlaceholder');
-        keyHint.textContent = item.has_key ? `${tr('api.keySaved')}${item.key_env || 'API/.env'}` : tr('api.aiMoneyKeyHint');
+        keyHint.textContent = keyStatusText(item.has_key);
     }
     if(isJimeng){
         applyCliProtocolDefaults(item, 'jimeng');
@@ -3223,11 +3613,25 @@ function renderEditor(){
         runninghubConfigBlock.style.display = showRunningHubConfig ? 'flex' : 'none';
     }
     if(!isRunningHub){
-        if(rhPasteInput) rhPasteInput.value = '';
-        if(rhAppsList) rhAppsList.innerHTML = '';
+        Object.keys(RUNNINGHUB_REGIONS).forEach(region => {
+            const input = runningHubRegionAppInput(region);
+            const list = runningHubRegionUi(region, 'apps');
+            const count = runningHubRegionUi(region, 'count');
+            if(input) input.value = '';
+            if(list) list.innerHTML = '';
+            if(count) count.textContent = '0';
+        });
         if(rhWorkflowsList) rhWorkflowsList.innerHTML = '';
-        if(rhAppsCount) rhAppsCount.textContent = '0';
         if(rhWorkflowsCount) rhWorkflowsCount.textContent = '0';
+    }
+    if(runningHubModelRegionTabs){
+        const showRegionTabs = !comfyuiSettingsMode && apiSettingsSection === 'models' && isRunningHub;
+        runningHubModelRegionTabs.hidden = !showRegionTabs;
+        runningHubModelRegionTabs.querySelectorAll?.('button[data-region]').forEach(button => {
+            const active = showRegionTabs && button.dataset.region === runningHubModelRegion;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
     }
     if(msLoraBlock) msLoraBlock.style.display = isModelScope ? 'flex' : 'none';
     if(jimengCliPanel){
@@ -3246,13 +3650,17 @@ function renderEditor(){
         if(isGeminiCli) refreshGeminiCliStatus(false);
     }
     const deleteBtn = document.getElementById('deleteBtn');
-    if(deleteBtn) deleteBtn.style.display = isFixedProvider(item) ? 'none' : 'inline-flex';
+    if(deleteBtn) deleteBtn.style.display = (apiSettingsSection === 'models' || comfyuiSettingsMode || isFixedProvider(item)) ? 'none' : 'inline-flex';
     renderModels('image');
     renderModels('chat');
     renderModels('video');
     renderModels('audio');
+    renderModels('music');
     if(isModelScope) renderMsLoras();
     else if(msLoraList) msLoraList.innerHTML = '';
+    renderCanvasModelProviderSelect();
+    syncCanvasModelCategoryAvailability(item);
+    selectCanvasModelCategory(canvasModelCategory);
     renderProviderList();
 }
 function showVerifyResult(html){ const el = document.getElementById('verifyResult'); if(el){ el.style.display = 'block'; el.innerHTML = html; } }
@@ -3575,9 +3983,12 @@ async function loadGeminiCliHelp(){
         geminiCliHelpOutput.textContent = e.message || String(e);
     }
 }
-function currentProviderApiKey(item){
+function currentProviderApiKey(item, region=''){
     if(item?.id === 'runninghub'){
-        return rhWalletKeyInput?.value.trim() || rhFreeKeyInput?.value.trim() || '';
+        const targetRegion = RUNNINGHUB_REGIONS[region] ? region : currentRunningHubRegion(item);
+        return runningHubRegionInput(targetRegion, 'wallet')?.value.trim()
+            || runningHubRegionInput(targetRegion, 'free')?.value.trim()
+            || '';
     }
     return keyInput.value.trim();
 }
@@ -3860,11 +4271,55 @@ function setFetchedModelState(data){
     lastFetchedSuggestion = {
         image: new Set(data?.image_models || []),
         chat: new Set(data?.chat_models || []),
+        text: new Set(data?.chat_models || []),
         video: new Set(data?.video_models || []),
         audio: new Set(data?.audio_models || []),
     };
     lastFetchedModelNames = (data?.model_names && typeof data.model_names === 'object') ? {...data.model_names} : {};
     lastFetchedModelAvailability = (data?.model_availability && typeof data.model_availability === 'object') ? {...data.model_availability} : {};
+}
+function modelPickerCapabilityCategories(item, model){
+    const nodeTypeToCategory = {
+        text_generation:'text',
+        image_generation:'image',
+        video_generation:'video',
+        audio_generation:'audio',
+        music_generation:'music'
+    };
+    const itemId = String(item?.id || '').trim().toLowerCase();
+    const protocol = String(item?.protocol || '').trim().toLowerCase();
+    const aliases = {jimeng:'jimeng-cli', codex:'codex-cli'};
+    const accepted = new Set([itemId, protocol, aliases[itemId], aliases[protocol]].filter(Boolean));
+    const provider = (modelCapabilityCatalog.providers || []).find(entry => [entry?.id, entry?.capability_provider_id]
+        .map(value => String(value || '').trim().toLowerCase())
+        .some(id => accepted.has(id)));
+    const categories = new Set();
+    (provider?.models || []).forEach(profile => {
+        if(String(profile?.model_id || '').trim() !== String(model || '').trim()) return;
+        const category = nodeTypeToCategory[profile?.node_type];
+        if(category) categories.add(category);
+    });
+    return categories;
+}
+function modelListForKind(item, kind){
+    if(!item) return [];
+    if(kind !== 'music'){
+        const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : kind === 'audio' ? 'audio_models' : 'chat_models';
+        const models = Array.isArray(item[key]) ? item[key] : [];
+        if(kind !== 'audio') return models;
+        return models.filter(model => {
+            const categories = modelPickerCapabilityCategories(item, model);
+            return !categories.has('music');
+        });
+    }
+    return (Array.isArray(item.audio_models) ? item.audio_models : []).filter(model =>
+        modelPickerCapabilityCategories(item, model).has('music') || lastFetchedSuggestion?.music?.has(model)
+    );
+}
+function modelStorageIndex(item, kind, index){
+    if(kind !== 'music') return index;
+    const model = modelListForKind(item, kind)[index];
+    return Array.isArray(item?.audio_models) ? item.audio_models.indexOf(model) : -1;
 }
 const RH_KNOWN_MODEL_LABELS = {
     'gpt-image-2.0/text-to-image-channel-low-price':'全能图片G2 · 文生图 · 低价渠道版',
@@ -4034,20 +4489,23 @@ function openModelPicker(){
     if(overlay && overlay.parentElement !== document.documentElement){
         document.documentElement.appendChild(overlay);
     }
-    const existing = { image: new Set(item.image_models||[]), chat: new Set(item.chat_models||[]), video: new Set(item.video_models||[]), audio: new Set(item.audio_models||[]) };
+    const existing = { image: new Set(item.image_models||[]), text: new Set(item.chat_models||[]), chat: new Set(item.chat_models||[]), video: new Set(item.video_models||[]), audio: new Set(item.audio_models||[]), music: new Set(item.audio_models||[]) };
     const allIds = new Set([...lastFetchedAll, ...(item.image_models||[]), ...(item.chat_models||[]), ...(item.video_models||[]), ...(item.audio_models||[])]);
     pickerState = { category: {}, selected: {} };
     allIds.forEach(id => {
-        // 类别归属：用户已配置 > 关键字建议 > 默认 chat
+        // 类别归属：能力档案 > 用户已配置 > 后端建议 > 默认文本；不把 AI 应用或本地工作流放进来。
         let cat;
-        if(existing.image.has(id)) cat = 'image';
-        else if(existing.video.has(id)) cat = 'video';
-        else if(existing.audio.has(id)) cat = 'audio';
-        else if(existing.chat.has(id)) cat = 'chat';
+        const capabilityCategories = modelPickerCapabilityCategories(item, id);
+        if(capabilityCategories.has('music')) cat = 'music';
+        else if(capabilityCategories.has('image') || existing.image.has(id)) cat = 'image';
+        else if(capabilityCategories.has('video') || existing.video.has(id)) cat = 'video';
+        else if(capabilityCategories.has('audio') || existing.audio.has(id)) cat = 'audio';
+        else if(capabilityCategories.has('text') || existing.text.has(id)) cat = 'text';
         else if(lastFetchedSuggestion?.image?.has(id)) cat = 'image';
         else if(lastFetchedSuggestion?.video?.has(id)) cat = 'video';
         else if(lastFetchedSuggestion?.audio?.has(id)) cat = 'audio';
-        else cat = 'chat';
+        else if(lastFetchedSuggestion?.text?.has(id) || lastFetchedSuggestion?.chat?.has(id)) cat = 'text';
+        else cat = 'text';
         pickerState.category[id] = cat;
         // 默认勾选状态：已在用户配置里的 = 勾选；新拉的 = 不勾选（让用户主动选）
         pickerState.selected[id] = existing.image.has(id) || existing.chat.has(id) || existing.video.has(id) || existing.audio.has(id);
@@ -4067,8 +4525,8 @@ function renderModelPicker(){
     const currentTab = document.querySelector('.picker-cat-tab.active')?.dataset.cat || 'all';
     const ids = Object.keys(pickerState.category).sort();
     // 各分类总数 / 已选数
-    const totals = { all: ids.length, image:0, chat:0, video:0, audio:0 };
-    const selecteds = { all:0, image:0, chat:0, video:0, audio:0 };
+    const totals = { all: ids.length, text:0, image:0, video:0, audio:0, music:0 };
+    const selecteds = { all:0, text:0, image:0, video:0, audio:0, music:0 };
     ids.forEach(id => {
         const cat = pickerState.category[id];
         totals[cat]++;
@@ -4084,7 +4542,7 @@ function renderModelPicker(){
     pickerVisibleIds = list;
     const availabilityGuide = document.getElementById('pickerAvailabilityGuide');
     if(availabilityGuide) availabilityGuide.hidden = !isRunningHubLike(item);
-    document.getElementById('pickerCount').textContent = `共 ${totals.all} 个模型 · 当前显示 ${list.length} 个`;
+    document.getElementById('pickerCount').textContent = trf('api.modelPickerCount', {total:totals.all, visible:list.length});
     document.querySelectorAll('.picker-cat-tab').forEach(tab => {
         const cat = tab.dataset.cat;
         tab.querySelector('.cat-count').textContent = `${selecteds[cat]}/${totals[cat]}`;
@@ -4107,22 +4565,25 @@ function renderModelPicker(){
             </div>
         `;
     }).join('');
-    document.getElementById('pickerList').innerHTML = html || `<div style="padding:32px;text-align:center;color:var(--faint);font-size:12px">无匹配</div>`;
+    document.getElementById('pickerList').innerHTML = html || `<div style="padding:32px;text-align:center;color:var(--faint);font-size:12px">${escapeHtml(tr('api.modelPickerNoMatch'))}</div>`;
     // 底部汇总
     const sumImage = document.getElementById('sumImage');
-    const sumChat = document.getElementById('sumChat');
     const sumVideo = document.getElementById('sumVideo');
     const sumAudio = document.getElementById('sumAudio');
     const sumUnsel = document.getElementById('sumUnsel');
-    if(sumImage){ sumImage.textContent = `生图 ${selecteds.image}`; sumImage.classList.toggle('picker-sum-chip-empty', selecteds.image === 0); }
-    if(sumChat){ sumChat.textContent = `LLM ${selecteds.chat}`; sumChat.classList.toggle('picker-sum-chip-empty', selecteds.chat === 0); }
-    if(sumVideo){ sumVideo.textContent = `视频 ${selecteds.video}`; sumVideo.classList.toggle('picker-sum-chip-empty', selecteds.video === 0); }
-    if(sumAudio){ sumAudio.textContent = `音频 ${selecteds.audio}`; sumAudio.classList.toggle('picker-sum-chip-empty', selecteds.audio === 0); }
-    if(sumUnsel){ sumUnsel.textContent = `未选 ${totals.all - selecteds.all}`; }
+    if(sumImage){ sumImage.textContent = `${tr('api.modelCategoryImage')} ${selecteds.image}`; sumImage.classList.toggle('picker-sum-chip-empty', selecteds.image === 0); }
+    const sumText = document.getElementById('sumText');
+    if(sumText){ sumText.textContent = `${tr('api.modelCategoryText')} ${selecteds.text}`; sumText.classList.toggle('picker-sum-chip-empty', selecteds.text === 0); }
+    if(sumVideo){ sumVideo.textContent = `${tr('api.modelCategoryVideo')} ${selecteds.video}`; sumVideo.classList.toggle('picker-sum-chip-empty', selecteds.video === 0); }
+    if(sumAudio){ sumAudio.textContent = `${tr('api.modelCategoryAudio')} ${selecteds.audio}`; sumAudio.classList.toggle('picker-sum-chip-empty', selecteds.audio === 0); }
+    const sumMusic = document.getElementById('sumMusic');
+    if(sumMusic){ sumMusic.textContent = `${tr('api.modelCategoryMusic')} ${selecteds.music}`; sumMusic.classList.toggle('picker-sum-chip-empty', selecteds.music === 0); }
+    if(sumUnsel){ sumUnsel.textContent = trf('api.modelPickerUnselected', {count:totals.all - selecteds.all}); }
 }
 function togglePickerRow(id){
     pickerState.selected[id] = !pickerState.selected[id];
     renderModelPicker();
+    void autosavePickerSelection();
 }
 function togglePickerRowByIndex(index){
     const id = pickerVisibleIds[index];
@@ -4149,13 +4610,13 @@ function selectPickerModels(mode){
         isRunningHubLike(item)
     );
     renderModelPicker();
+    void autosavePickerSelection();
 }
 function selectPickerCat(cat){
     document.querySelectorAll('.picker-cat-tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
     renderModelPicker();
 }
-async function applyModelPicker(){
-    const item = provider(); if(!item) return;
+function pickerSelectionForProvider(item){
     const image = [], chat = [], video = [], audio = [];
     const modelNames = {};
     const previouslyEnabled = new Set([
@@ -4169,6 +4630,7 @@ async function applyModelPicker(){
         if(cat === 'image') image.push(id);
         else if(cat === 'video') video.push(id);
         else if(cat === 'audio') audio.push(id);
+        else if(cat === 'music') audio.push(id);
         else chat.push(id);
         const label = modelDisplayName(id, item);
         if(label && label !== id) modelNames[id] = label;
@@ -4176,9 +4638,25 @@ async function applyModelPicker(){
             newlySelectedUnverified.push(label || id);
         }
     });
-    if(newlySelectedUnverified.length && !await StudioDialog.confirm(trf('api.rhEnableUnverifiedConfirm', {count:newlySelectedUnverified.length}), {type:'warning'})){
-        return;
-    }
+    return {image, chat, video, audio, modelNames, newlySelectedUnverified};
+}
+function applyPickerSelectionToProvider(item){
+    const selection = pickerSelectionForProvider(item);
+    item.image_models = selection.image;
+    item.chat_models = selection.chat;
+    item.video_models = selection.video;
+    item.audio_models = selection.audio;
+    item.model_names = selection.modelNames;
+    return selection;
+}
+function renderPickerSelection(item, selection){
+    renderModels('image'); renderModels('chat'); renderModels('video'); renderModels('audio'); renderModels('music');
+    renderMsLoras();
+    return `${tr('api.modelCategoryImage')} ${selection.image.length} / ${tr('api.modelCategoryText')} ${selection.chat.length} / ${tr('api.modelCategoryVideo')} ${selection.video.length} / ${tr('api.modelCategoryAudio')} ${selection.audio.length} / ${tr('api.modelCategoryMusic')} ${selection.audio.filter(model => pickerState.category[model] === 'music').length}`;
+}
+async function autosavePickerSelection(){
+    const item = provider();
+    if(!item) return false;
     const previousModels = {
         image_models:[...(item.image_models || [])],
         chat_models:[...(item.chat_models || [])],
@@ -4186,22 +4664,46 @@ async function applyModelPicker(){
         audio_models:[...(item.audio_models || [])],
         model_names:{...((item.model_names && typeof item.model_names === 'object') ? item.model_names : {})}
     };
-    item.image_models = image;
-    item.chat_models = chat;
-    item.video_models = video;
-    item.audio_models = audio;
-    item.model_names = modelNames;
-    renderModels('image'); renderModels('chat'); renderModels('video'); renderModels('audio');
-    renderMsLoras();
-    setStatus(`正在保存 · 生图 ${image.length} / LLM ${chat.length} / 视频 ${video.length} / 音频 ${audio.length}`);
-    const saved = await saveProviders();
+    const selection = applyPickerSelectionToProvider(item);
+    if(selection.newlySelectedUnverified.length && !await StudioDialog.confirm(trf('api.rhEnableUnverifiedConfirm', {count:selection.newlySelectedUnverified.length}), {type:'warning'})){
+        Object.assign(item, previousModels);
+        renderPickerSelection(item, {image:previousModels.image_models, chat:previousModels.chat_models, video:previousModels.video_models, audio:previousModels.audio_models, modelNames:previousModels.model_names});
+        return false;
+    }
+    const summary = renderPickerSelection(item, selection);
+    const saved = await scheduleProviderAutosave({providerId:item.id, region:apiAutosaveRegion(item), immediate:true, sync:false});
+    if(!saved){
+        Object.assign(item, previousModels);
+        renderPickerSelection(item, {image:previousModels.image_models, chat:previousModels.chat_models, video:previousModels.video_models, audio:previousModels.audio_models, modelNames:previousModels.model_names});
+        return false;
+    }
+    setStatus(`${tr('api.autosaved')} · ${summary}`);
+    return true;
+}
+async function applyModelPicker(){
+    // 保留脚本调用兼容；实际勾选已在每次变化时自动保存。
+    const item = provider(); if(!item) return;
+    const previousModels = {
+        image_models:[...(item.image_models || [])],
+        chat_models:[...(item.chat_models || [])],
+        video_models:[...(item.video_models || [])],
+        audio_models:[...(item.audio_models || [])],
+        model_names:{...((item.model_names && typeof item.model_names === 'object') ? item.model_names : {})}
+    };
+    const selection = applyPickerSelectionToProvider(item);
+    if(selection.newlySelectedUnverified.length && !await StudioDialog.confirm(trf('api.rhEnableUnverifiedConfirm', {count:selection.newlySelectedUnverified.length}), {type:'warning'})){
+        Object.assign(item, previousModels);
+        renderPickerSelection(item, {image:previousModels.image_models, chat:previousModels.chat_models, video:previousModels.video_models, audio:previousModels.audio_models, modelNames:previousModels.model_names});
+        return false;
+    }
+    const summary = renderPickerSelection(item, selection);
+    const saved = await scheduleProviderAutosave({providerId:item.id, region:apiAutosaveRegion(item), immediate:true, sync:false});
     if(saved){
         closeModelPicker();
-        setStatus(`已应用并保存 · 生图 ${image.length} / LLM ${chat.length} / 视频 ${video.length} / 音频 ${audio.length}`);
+        setStatus(`${tr('api.autosaved')} · ${summary}`);
     } else {
         Object.assign(item, previousModels);
-        renderModels('image'); renderModels('chat'); renderModels('video'); renderModels('audio');
-        renderMsLoras();
+        renderPickerSelection(item, {image:previousModels.image_models, chat:previousModels.chat_models, video:previousModels.video_models, audio:previousModels.audio_models, modelNames:previousModels.model_names});
     }
 }
 async function saveKeyOnly(){
@@ -4252,6 +4754,8 @@ function modelCapabilityStatus(item, kind, model){
         ? 'video_generation'
         : kind === 'audio'
         ? 'audio_generation'
+        : kind === 'music'
+        ? 'music_generation'
         : 'text_generation';
     const providerAliases = {jimeng:'jimeng-cli', codex:'codex-cli'};
     const itemId = String(item?.id || '').trim().toLowerCase();
@@ -4284,9 +4788,9 @@ function modelCapabilityStatus(item, kind, model){
 }
 function renderModels(kind){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : kind === 'audio' ? 'audio_models' : 'chat_models';
-    const list = kind === 'image' ? imageModelList : kind === 'video' ? videoModelList : kind === 'audio' ? audioModelList : chatModelList;
-    const models = item?.[key] || [];
+    const list = kind === 'image' ? imageModelList : kind === 'video' ? videoModelList : kind === 'audio' ? audioModelList : kind === 'music' ? musicModelList : chatModelList;
+    if(!list) return;
+    const models = modelListForKind(item, kind);
     if(!models.length){
         list.innerHTML = `<div class="empty">${tr('api.noModels')}</div>`;
         return;
@@ -4294,6 +4798,9 @@ function renderModels(kind){
     const showProtocol = kind !== 'video' && providerSupportsModelProtocol(item);
     list.innerHTML = models.map((model, index) => {
         const label = modelDisplayName(model, item);
+        const regionBadge = isRunningHubLike(item)
+            ? `<span class="model-region-badge">${escapeHtml(runningHubRegionBadge(currentRunningHubRegion(item)))}</span>`
+            : '';
         const capabilityStatus = modelCapabilityStatus(item, kind, model);
         const preflightButton = capabilityStatus.readiness === 'ready' && String(model || '').trim()
             ? `<button class="model-preflight-btn" type="button" onclick="preflightModel('${kind}', ${index})" title="${escapeAttr(tr('api.preflightModelHint'))}"><i data-lucide="shield-check" class="w-3.5 h-3.5"></i><span>${escapeHtml(tr('api.preflightModel'))}</span></button>`
@@ -4303,13 +4810,14 @@ function renderModels(kind){
                 <div class="model-id-field">
                     <div class="model-meta-line">
                         ${label && label !== model ? `<div class="model-display-name">${escapeHtml(label)}</div>` : '<span></span>'}
+                        ${regionBadge}
                         <span class="model-capability-status is-${escapeAttr(capabilityStatus.readiness)}" title="${escapeAttr(capabilityStatus.title)}">${escapeHtml(capabilityStatus.label)}</span>
                     </div>
                     <input value="${escapeAttr(model)}" oninput="updateModel('${kind}', ${index}, this.value)">
                 </div>
                 ${modelProtocolSelectHtml(kind, index, model, item)}
                 ${preflightButton}
-                <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="删除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                <button class="icon-btn" type="button" onclick="removeModel('${kind}', ${index})" title="${escapeAttr(tr('common.delete'))}"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
             </div>
         `;
     }).join('');
@@ -4318,8 +4826,7 @@ function renderModels(kind){
 async function preflightModel(kind, index){
     const item = provider();
     if(!item) return;
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : kind === 'audio' ? 'audio_models' : 'chat_models';
-    const model = String(item[key]?.[index] || '').trim();
+    const model = String(modelListForKind(item, kind)[index] || '').trim();
     if(!model) return;
     const nodeType = kind === 'image'
         ? 'image_generation'
@@ -4327,6 +4834,8 @@ async function preflightModel(kind, index){
         ? 'video_generation'
         : kind === 'audio'
         ? 'audio_generation'
+        : kind === 'music'
+        ? 'music_generation'
         : 'text_generation';
     const providerId = String(item.id || '').trim();
     setStatus(`${tr('api.preflightRunning')} · ${model}`);
@@ -4408,6 +4917,7 @@ function addMsLora(){
         note:''
     });
     renderMsLoras();
+    void scheduleProviderAutosave({providerId:item.id, immediate:true, sync:false});
 }
 function updateMsLora(index, field, value){
     const item = provider();
@@ -4417,6 +4927,7 @@ function updateMsLora(index, field, value){
     if(!lora) return;
     if(field === 'strength') lora.strength = normalizeLoraStrength(value);
     else lora[field] = value;
+    void scheduleProviderAutosave({providerId:item.id, immediate:false, sync:false});
 }
 function removeMsLora(index){
     const item = provider();
@@ -4424,19 +4935,26 @@ function removeMsLora(index){
     item.ms_loras = Array.isArray(item.ms_loras) ? item.ms_loras : [];
     item.ms_loras.splice(index, 1);
     renderMsLoras();
+    void scheduleProviderAutosave({providerId:item.id, immediate:true, sync:false});
 }
 function selectProvider(id){
+    closeHypitSettingsForApiNavigation();
     if(comfyuiSettingsMode) closeComfyUiSettings();
     if(isProviderTemporarilyHidden(providers.find(item => item.id === id))) return;
+    void captureApiObjectBeforeNavigation({immediate:true});
+    apiSettingsSection = 'connections';
     recommendInlineOpen = false;
     syncRecommendView();
     renderRecommendApi();
-    syncEditor();
     clearFetchedModelState();
     selectedId = id;
+    syncApiSettingsView();
     renderEditor();
 }
 function addProvider(){
+    closeHypitSettingsForApiNavigation();
+    void captureApiObjectBeforeNavigation({immediate:true});
+    apiSettingsSection = 'connections';
     recommendInlineOpen = false;
     syncRecommendView();
     renderRecommendApi();
@@ -4452,6 +4970,8 @@ function addProvider(){
 async function addCliProvider(kind){
     const preset = CLI_PROVIDER_PRESETS[kind];
     if(!preset) return;
+    closeHypitSettingsForApiNavigation();
+    void captureApiObjectBeforeNavigation({immediate:true});
     recommendInlineOpen = false;
     syncRecommendView();
     renderRecommendApi();
@@ -4514,6 +5034,8 @@ async function deleteProvider(){
     if(providers.length <= 1){ await StudioDialog.alert(tr('api.keepOne'), {type:'warning'}); return; }
     if(!await StudioDialog.confirm(`确认删除平台「${item.name || item.id}」？`, {type:'danger'})) return;
     syncEditor();
+    (item.id === 'runninghub' ? ['cn','global'] : [apiAutosaveRegion(item)])
+        .forEach(region => discardProviderAutosave(item.id, region));
     const previousProviders = providers;
     const previousSelectedId = selectedId;
     providers = providers.filter(p => p.id !== item.id);
@@ -4528,29 +5050,19 @@ async function deleteProvider(){
         renderEditor();
     }
 }
-async function saveRhKeyOnly(kind){
-    const item = provider();
-    if(!item || item.id !== 'runninghub') return;
-    const input = kind === 'wallet' ? rhWalletKeyInput : rhFreeKeyInput;
-    const key = input?.value.trim() || '';
-    if(!key){ await StudioDialog.alert('请输入 Key', {type:'warning'}); return; }
-    syncEditor();
-    const ok = await saveProviders();
-    if(ok && input) input.value = '';
-}
-async function clearRhKeyOnly(kind){
+async function clearRhKeyOnly(kind, region=''){
     const item = provider();
     if(!item || item.id !== 'runninghub') return;
     if(!await StudioDialog.confirm(tr('api.confirmClearKey') || '确认清除当前 Key？', {type:'danger'})) return;
-    const region = runningHubRegionFromItem(item);
+    const targetRegion = RUNNINGHUB_REGIONS[region] ? region : runningHubRegionFromItem(item);
+    const input = runningHubRegionInput(targetRegion, kind);
     const previousApiClears = [...(item._clearRhApiKeys || [])];
     const previousWalletClears = [...(item._clearRhWalletKeys || [])];
-    if(kind === 'wallet') item._clearRhWalletKeys = [...new Set([...(item._clearRhWalletKeys || []), region])];
-    else item._clearRhApiKeys = [...new Set([...(item._clearRhApiKeys || []), region])];
+    if(kind === 'wallet') item._clearRhWalletKeys = [...new Set([...(item._clearRhWalletKeys || []), targetRegion])];
+    else item._clearRhApiKeys = [...new Set([...(item._clearRhApiKeys || []), targetRegion])];
     const ok = await saveProviders();
     if(ok){
-        if(kind === 'wallet' && rhWalletKeyInput) rhWalletKeyInput.value = '';
-        if(kind !== 'wallet' && rhFreeKeyInput) rhFreeKeyInput.value = '';
+        if(input) input.value = '';
     } else {
         item._clearRhApiKeys = previousApiClears;
         item._clearRhWalletKeys = previousWalletClears;
@@ -4588,10 +5100,11 @@ async function clearVolcengineAssetKeys(){
 }
 function addModel(kind){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : kind === 'audio' ? 'audio_models' : 'chat_models';
+    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : ['audio','music'].includes(kind) ? 'audio_models' : 'chat_models';
     item[key] = [...(item[key] || []), ''];
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
+    void scheduleProviderAutosave({providerId:item.id, immediate:true, sync:false});
 }
 function modelProtocolStillUsed(item, name){
     if(!item || !name) return false;
@@ -4600,10 +5113,12 @@ function modelProtocolStillUsed(item, name){
 }
 function updateModel(kind, index, value){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : kind === 'audio' ? 'audio_models' : 'chat_models';
-    const oldName = String(item[key][index] || '').trim();
+    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : ['audio','music'].includes(kind) ? 'audio_models' : 'chat_models';
+    const storageIndex = modelStorageIndex(item, kind, index);
+    if(storageIndex < 0) return;
+    const oldName = String(item[key][storageIndex] || '').trim();
     const newName = String(value || '').trim();
-    item[key][index] = value;
+    item[key][storageIndex] = value;
     // 重命名时迁移该模型的协议覆盖
     if(item.model_protocols && typeof item.model_protocols === 'object' && oldName && oldName !== newName){
         if(Object.prototype.hasOwnProperty.call(item.model_protocols, oldName)){
@@ -4611,7 +5126,7 @@ function updateModel(kind, index, value){
             // 旧名称在其他列表里不再使用时才删除旧键
             const stillUsedElsewhere = (() => {
                 const lists = ['image_models', 'chat_models', 'video_models', 'audio_models'];
-                return lists.some(k => Array.isArray(item[k]) && item[k].some((m, i) => !(k === key && i === index) && String(m || '').trim() === oldName));
+                return lists.some(k => Array.isArray(item[k]) && item[k].some((m, i) => !(k === key && i === storageIndex) && String(m || '').trim() === oldName));
             })();
             if(!stillUsedElsewhere) delete item.model_protocols[oldName];
             if(newName) item.model_protocols[newName] = proto;
@@ -4625,11 +5140,13 @@ function updateModel(kind, index, value){
         }
     }
     if(kind === 'image') renderMsLoras();
+    void scheduleProviderAutosave({providerId:item.id, immediate:false, sync:false});
 }
 function updateModelProtocol(kind, index, value){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : kind === 'audio' ? 'audio_models' : 'chat_models';
-    const name = String(item[key]?.[index] || '').trim();
+    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : ['audio','music'].includes(kind) ? 'audio_models' : 'chat_models';
+    const storageIndex = modelStorageIndex(item, kind, index);
+    const name = String(item[key]?.[storageIndex] || '').trim();
     if(!name) return;
     if(!item.model_protocols || typeof item.model_protocols !== 'object') item.model_protocols = {};
     const proto = String(value || '').trim().toLowerCase();
@@ -4638,12 +5155,15 @@ function updateModelProtocol(kind, index, value){
     } else {
         delete item.model_protocols[name];
     }
+    void scheduleProviderAutosave({providerId:item.id, immediate:true, sync:false});
 }
 function removeModel(kind, index){
     const item = provider();
-    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : kind === 'audio' ? 'audio_models' : 'chat_models';
-    const removed = String(item[key][index] || '').trim();
-    item[key].splice(index, 1);
+    const key = kind === 'image' ? 'image_models' : kind === 'video' ? 'video_models' : ['audio','music'].includes(kind) ? 'audio_models' : 'chat_models';
+    const storageIndex = modelStorageIndex(item, kind, index);
+    if(storageIndex < 0) return;
+    const removed = String(item[key][storageIndex] || '').trim();
+    item[key].splice(storageIndex, 1);
     // 清理不再使用的协议覆盖
     if(removed && item.model_protocols && typeof item.model_protocols === 'object' && !modelProtocolStillUsed(item, removed)){
         delete item.model_protocols[removed];
@@ -4653,6 +5173,7 @@ function removeModel(kind, index){
     }
     renderModels(kind);
     if(kind === 'image') renderMsLoras();
+    void scheduleProviderAutosave({providerId:item.id, immediate:true, sync:false});
 }
 async function loadProviders(){
     setStatus(tr('api.loading'));
@@ -4673,9 +5194,25 @@ async function loadProviders(){
         setStatus(tr('api.loadFailed'));
     }
 }
-async function saveProviders(){
-    syncEditor();
-    providers.forEach(item => {
+async function saveProviders(draft=null){
+    let saveDraft = draft;
+    if(!saveDraft){
+        syncEditor();
+        const item = provider();
+        if(!item) return false;
+        const revision = ++apiAutosaveRevision;
+        saveDraft = captureApiAutosaveDraft(item, apiAutosaveRegion(item), revision);
+        clearProviderAutosaveTimer(saveDraft.objectId);
+        apiAutosavePendingByKey.delete(saveDraft.objectId);
+        const write = apiAutosaveSerial.then(() => saveProviders(saveDraft));
+        apiAutosaveSerial = write.catch(() => false);
+        return write;
+    }
+    // 每个请求包含完整配置；较早的防抖任务不能回写覆盖较新的即时修改。
+    if(saveDraft.revision < apiAutosaveLastWriteRevision) return true;
+    apiAutosaveLastWriteRevision = saveDraft.revision;
+    const requestProviders = cloneApiSettingsValue(saveDraft.providers || providers) || [];
+    requestProviders.forEach(item => {
         item.id = normalizeId(item.id);
         applyLockedRecommendedProtocol(item);
         item.protocol = item.id === 'runninghub'
@@ -4700,6 +5237,7 @@ async function saveProviders(){
         if(item.id === 'runninghub'){
             item.base_url = normalizeRunningHubBaseUrl(item.base_url);
             ensureRunningHubRegions(item);
+            syncRunningHubProviderEnabled(item);
             activateRunningHubRegion(item, runningHubRegionFromItem(item));
             item.image_models = unique(item.image_models || []);
             item.chat_models = unique(item.chat_models || []);
@@ -4743,16 +5281,19 @@ async function saveProviders(){
         })).filter(lora => lora.id && lora.target_model);
         if(item.id === 'runninghub') persistActiveRunningHubRegion(item);
     });
-    if(new Set(providers.map(item => item.id)).size !== providers.length){
+    if(new Set(requestProviders.map(item => item.id)).size !== requestProviders.length){
         await StudioDialog.alert(tr('api.duplicateId'), {type:'warning'});
+        if(draft) apiAutosaveDirtyObjects.delete(saveDraft.objectId);
         return false;
     }
-    setStatus(tr('api.saving'));
+    const isLatestDraft = () => saveDraft.revision === apiAutosaveRevision
+        && saveDraft.objectRevision === apiAutosaveObjectRevision.get(saveDraft.objectId);
+    setStatus(draft ? (tr('api.autosaving') || tr('api.saving')) : tr('api.saving'));
     try {
         const res = await fetch('/api/providers', {
             method:'PUT',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(providers.map(item => ({
+            body:JSON.stringify(requestProviders.map(item => ({
                 id:item.id,
                 name:item.name,
                 base_url:item.base_url,
@@ -4761,7 +5302,7 @@ async function saveProviders(){
                 image_edit_route:item.image_edit_route || 'general',
                 image_generation_endpoint:item.image_generation_endpoint || '',
                 image_edit_endpoint:item.image_edit_endpoint || '',
-                enabled:item.enabled !== false,
+                enabled:item.id === 'runninghub' ? runningHubHasEnabledRegion(item) : item.enabled !== false,
                 primary:false,
                 image_models:item.image_models || [],
                 chat_models:item.chat_models || [],
@@ -4792,29 +5333,38 @@ async function saveProviders(){
             })))
         });
         const data = await readApiResponse(res, tr('api.saveFailed'));
-        providers = data.providers || providers;
-        providers.forEach(item => {
-            delete item.api_key;
-            delete item.wallet_api_key;
-            delete item.volcengine_access_key_id;
-            delete item.volcengine_secret_access_key;
-            delete item._clearKey;
-            delete item._clearWalletKey;
-            delete item._pendingRhApiKey;
-            delete item._pendingRhWalletKey;
-            delete item._clearRhApiKeys;
-            delete item._clearRhWalletKeys;
-            delete item._clearVolcengineAccessKey;
-            delete item._clearVolcengineSecretKey;
-        });
-        selectedId = provider()?.id || providers[0]?.id || '';
-        renderEditor();
-        setStatus(tr('api.saved'));
-        // 广播变更，画布等其他 iframe 立即重新拉取最新平台/模型列表
-        broadcastStudioApiChange('providers-changed');
+        if(isLatestDraft()){
+            apiAutosaveDirtyObjects.clear();
+            apiAutosavePendingByKey.forEach((_, key) => clearProviderAutosaveTimer(key));
+            apiAutosavePendingByKey.clear();
+            providers = data.providers || providers;
+            providers.forEach(item => {
+                delete item.api_key;
+                delete item.wallet_api_key;
+                delete item.volcengine_access_key_id;
+                delete item.volcengine_secret_access_key;
+                delete item._clearKey;
+                delete item._clearWalletKey;
+                delete item._pendingRhApiKey;
+                delete item._pendingRhWalletKey;
+                delete item._clearRhApiKeys;
+                delete item._clearRhWalletKeys;
+                delete item._clearVolcengineAccessKey;
+                delete item._clearVolcengineSecretKey;
+            });
+            selectedId = provider()?.id || providers[0]?.id || '';
+            renderEditor();
+            setStatus(draft ? (tr('api.autosaved') || tr('api.saved')) : tr('api.saved'));
+            // 广播变更，画布等其他 iframe 立即重新拉取最新平台/模型列表
+            broadcastStudioApiChange('providers-changed');
+        }
         return true;
     } catch(err) {
-        setStatus(err.message || tr('api.saveFailed'));
+        if(isLatestDraft()){
+            apiAutosaveDirtyObjects.add(saveDraft.objectId);
+            apiAutosavePendingByKey.set(saveDraft.objectId, saveDraft);
+            setStatus(draft ? (tr('api.autosaveFailed') || tr('api.saveFailed')) : (err.message || tr('api.saveFailed')));
+        }
         return false;
     }
 }
@@ -4864,6 +5414,7 @@ document.addEventListener('keydown', event => {
     if(recommendApiOverlay && getComputedStyle(recommendApiOverlay).display !== 'none') closeRecommendApi();
 });
 window.addEventListener('studio-lang-change', () => {
+    document.title = tr('api.title');
     syncRecommendView();
     if(recommendInlineOpen) renderRecommendApi();
     else renderEditor();
@@ -4871,16 +5422,28 @@ window.addEventListener('studio-lang-change', () => {
 window.onload = () => {
     if(window.StudioTheme) window.StudioTheme.apply();
     if(window.StudioI18n) window.StudioI18n.apply();
+    document.title = tr('api.title');
     syncRecommendView();
     loadProviders();
     // 平台名输入时实时预览生成的 ID
-    if(nameInput) nameInput.addEventListener('input', updateIdPreview);
+    if(nameInput) nameInput.addEventListener('input', () => {
+        updateIdPreview();
+        void scheduleCurrentProviderAutosave(false);
+    });
     if(protocolInput) protocolInput.addEventListener('change', updateProtocolFromInput);
     if(baseInput) baseInput.addEventListener('input', () => {
         syncRunningHubRegion();
         updateApimartDomesticHint();
+        void scheduleCurrentProviderAutosave(false);
     });
-    if(rhRegionInput) rhRegionInput.addEventListener('change', () => changeRunningHubRegion(rhRegionInput.value));
+    Object.keys(RUNNINGHUB_REGIONS).forEach(region => {
+        ['free', 'wallet'].forEach(kind => {
+            const input = runningHubRegionInput(region, kind);
+            if(input) input.addEventListener('input', event => {
+                updateRunningHubKeyInput(region, kind, event?.target?.value ?? input.value);
+            });
+        });
+    });
     if(imageRequestModeInput) imageRequestModeInput.addEventListener('change', () => {
         const item = provider();
         if(!item) return;
@@ -4890,16 +5453,22 @@ window.onload = () => {
             return;
         }
         item.image_request_mode = normalizeImageRequestMode(imageRequestModeInput.value);
+        void scheduleCurrentProviderAutosave(true);
     });
     if(imageEditRouteInput) imageEditRouteInput.addEventListener('change', () => {
         const item = provider();
         if(!item) return;
         item.image_edit_route = normalizeImageEditRoute(imageEditRouteInput.value);
+        void scheduleCurrentProviderAutosave(true);
     });
-    [keyInput, rhFreeKeyInput, rhWalletKeyInput].forEach(input => {
+    [keyInput].forEach(input => {
         if(input) input.addEventListener('input', () => {
             refreshProviderOnboarding();
             if(input === keyInput) updateApimartDomesticHint();
+            void scheduleCurrentProviderAutosave(false);
         });
+    });
+    [volcAkInput, volcSkInput, volcProjectInput, volcRegionInput].forEach(input => {
+        if(input) input.addEventListener('input', () => void scheduleCurrentProviderAutosave(false));
     });
 };

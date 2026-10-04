@@ -1,31 +1,26 @@
 {
-  "version": "2026.09.19",
-  "updated_at": "2026-09-19T20:00:00+08:00",
+  "version": "2026.10.04",
+  "updated_at": "2026-10-04T12:00:00+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "新增 Hypit 项目与原生预览接入，复用已有模型配置与素材索引。",
-      "text_en": "Add Hypit projects and native previews using existing model settings and asset indexes."
-    },
-    {
-      "type": "improvement",
-      "text": "统一项目管理：创建后留在列表，手动打开作品，接入指令通过独立文档提供。",
-      "text_en": "Unified project management: creation stays in the list, works open explicitly, and connection prompts link to dedicated guides."
+      "text": "模型选择统一为家族、运行模式与支持平台，按精确模型契约展示和校验参数。",
+      "text_en": "Model selection groups families, run modes and supported providers, with parameters displayed and validated against exact model contracts."
     },
     {
       "type": "feature",
-      "text": "画布 Agent 支持无页面后台执行，增加稳定节点编号与多标签冲突合并。",
-      "text_en": "Canvas agents support headless execution, stable node numbers and multi-tab conflict merging."
+      "text": "画布创作输入支持 Enter 运行或保存、Shift+Enter 换行，并保护输入法确认与忙碌状态。",
+      "text_en": "Canvas creation inputs support Enter to run or save and Shift+Enter for new lines, with IME and busy-state protection."
     },
     {
       "type": "improvement",
-      "text": "抽出项目与任务编排模块，保留平台适配器复用；进一步底层统一仍在进行。",
-      "text_en": "Extract project and task orchestration modules while reusing provider adapters; further unification remains in progress."
+      "text": "Hypit 按生成用途选择模型，任务参数按请求校验，候选过滤区分语音、音效与音乐。",
+      "text_en": "Hypit selects models by generation purpose, validates task parameters per request and distinguishes speech, sound effects and music."
     },
     {
       "type": "fix",
-      "text": "修复 Hypit 打开地址、项目列表错误状态和新建项目提前打开标签的问题。",
-      "text_en": "Fix Hypit project URLs, project-list error states and premature tab opening."
+      "text": "完善模型身份归类、候选投影、请求幂等和参数契约回归，保留用户配置与模型真实 ID。",
+      "text_en": "Improve model identity classification, candidate projection, request idempotency and parameter contract regression while preserving user settings and real model IDs."
     }
   ]
 }
