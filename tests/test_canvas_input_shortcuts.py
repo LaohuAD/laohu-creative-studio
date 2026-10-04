@@ -17,6 +17,15 @@ class CanvasInputShortcutTests(unittest.TestCase):
         source = (ROOT / 'static/js/smart-canvas.js').read_text()
         helper = source[source.index('const SMART_TEXT_EDITABLE_SELECTOR'):source.index('function canvasEditableRootDescriptor')]
         handler = source[source.index('function canvasInputEnterAction'):source.index("promptInput.addEventListener('keydown'", source.index('function canvasInputEnterAction'))]
+        cls.addClassCleanup(browser.HypitSlotCandidateBrowserTests.tearDownClass)
+        cls.page.evaluate('''
+            (async () => {
+              for (let i=0; i<100 && !document.body; i++) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+              }
+              if (!document.body) throw new Error('测试页面正文未就绪');
+            })()
+        ''')
         cls.page.evaluate('''
             document.body.innerHTML = `<div id="composer" class="open" data-smart-node-id="n1">
               <div id="promptInput" contenteditable="true"></div>

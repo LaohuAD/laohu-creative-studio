@@ -137,7 +137,16 @@ class RealCatalogContractTests(unittest.TestCase):
     def setUpClass(cls):
         import main
 
-        cls.catalog = main.build_model_capability_catalog()
+        # 公开档案与明确双站启用清单，不能依赖维护者本机配置。
+        from provider_fixture import configured_providers
+        providers = configured_providers()
+        runninghub = next(provider for provider in providers if provider['id'] == 'runninghub')
+        fields = ('chat_models', 'image_models', 'video_models', 'audio_models')
+        runninghub['rh_regions'] = {
+            region: {'enabled': True, **{field: list(runninghub[field]) for field in fields}}
+            for region in ('global', 'cn')
+        }
+        cls.catalog = main.build_model_capability_catalog(providers)
         cls.options = cls.catalog.get("options") or []
 
     def test_catalog_exposes_options_and_contract_version(self):
