@@ -9,14 +9,13 @@ permissions:
   contents: read
 jobs:
   regression:
-    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    name: ${{ matrix.os }} / project Python
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
-        python: ['3.10', '3.14']
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
@@ -25,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version-file: .python-version
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -40,9 +39,39 @@ jobs:
                   path = root / subdir
                   path.mkdir(parents=True, exist_ok=True)
                   output.write(f'{key}={path}\n')
+      - name: 验证随项目提供的 Windows Python 与离线依赖包
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'python\python.exe'
+          if (-not (Test-Path $runtime)) { throw '缺少项目内置 Python runtime' }
+          $expectedVersion = (Get-Content -Raw .python-version).Trim()
+          if ($expectedVersion -notmatch '^\d+\.\d+\.\d+$') { throw '根目录 .python-version 格式无效' }
+          $version = (& $runtime -c "import platform; print(platform.python_version())").Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -ne $expectedVersion) { throw "项目内置 Python 版本错误：$version；预期 $expectedVersion" }
+          $venv = Join-Path $env:GITHUB_WORKSPACE 'cache\ci\bundled-python-venv'
+          & $runtime -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw '项目内置 Python 无法创建标准 venv' }
+          $venvPython = Join-Path $venv 'Scripts\python.exe'
+          & $venvPython -m pip install --no-index --find-links packages -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw '离线 wheelhouse 无法安装 requirements.txt' }
+          & $venvPython -m pip check
+          if ($LASTEXITCODE -ne 0) { throw '内置 runtime 离线环境依赖检查失败' }
+          & $venvPython -c "import fastapi,httpx,httpcore,pydantic,requests,uvicorn,websockets,watchfiles,socksio; from PIL import Image; import qrcode, multipart; print('bundled-runtime imports OK')"
+          if ($LASTEXITCODE -ne 0) { throw '内置 runtime 核心依赖导入失败' }
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $venv 'Scripts') -Encoding utf8
       - name: 安装明确版本的依赖
+        if: runner.os != 'Windows'
         run: python -m pip install -r requirements.txt
       - name: 检查依赖一致性
+        if: runner.os != 'Windows'
         run: python -m pip check
+      - name: 确认 Windows 回归使用项目内置运行环境
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $expected = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'cache\ci\bundled-python-venv\Scripts\python.exe'))
+          $actual = [System.IO.Path]::GetFullPath((& python -c "import sys; print(sys.executable)").Trim())
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) { throw "回归解释器不匹配：$actual" }
       - name: 验证完整回归案例与前端脚本
         run: python tools/check_regression.py

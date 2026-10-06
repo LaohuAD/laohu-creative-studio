@@ -116,6 +116,8 @@ cd laohu-creative-studio
 
 服务启动后，在浏览器打开 [本地工作台](http://127.0.0.1:3000/)。API Key 通过页面里的“API 设置”保存。
 
+本项目统一使用 Python 3.14.5，根目录 `.python-version` 是唯一版本真源；Mac/Windows 回归和 R2 发布均读取该文件。Windows 项目包提供完整官方解释器，启动器可据此建立标准虚拟环境。版本升级由受管更新流程准备，不要求用户手工替换运行环境。
+
 本地启动默认监控项目中的 Python 源码；保存后后端会自动重载，不需要手工结束并重启服务。HTML、CSS 和 JavaScript 使用动态资源版本，刷新页面即可获取更新。若特殊环境需要关闭 Python 自动重载，可在启动前设置 `INFINITE_CANVAS_AUTO_RELOAD=0`。
 
 不要把本机的 `API/.env`、`data/api_providers.json` 或包含密钥的备份上传到 GitHub。
@@ -272,7 +274,7 @@ python\python.exe tools\data_manager.py restore "backups\备份文件.zip"
 - macOS：`.venv/bin/python canvas_update.py --source github`；没有 `.venv` 时使用 `python3 canvas_update.py --source github`。
 - Windows：`python\python.exe canvas_update.py --source github`；没有内置 Python 时使用 `.venv\Scripts\python.exe` 或已安装的 `python` 运行同一脚本。
 
-该脚本独立于旧更新器，使用固定 GitHub 提交下载并校验。它不会强制结束运行中的服务；Python 必须为 3.10 或更高版本。依赖变更时在原安装目录的 `cache/update-environments/` 新建环境，需要联网安装依赖，不修改旧环境。准备或检查失败时不切换当前程序。升级成功后继续使用原启动脚本。
+该脚本独立于旧更新器，使用固定 GitHub 提交下载并校验。它不会强制结束运行中的服务；当前受支持的项目 Python 版本由根目录 `.python-version` 固定为 3.14.5。依赖变更时在原安装目录的 `cache/update-environments/` 新建环境，不修改旧环境。准备或检查失败时不切换当前程序。升级成功后继续使用原启动脚本。
 
 新版在线升级由统一启动器管理：暂停新的写入，准备新版和依赖，隔离启动验证，停止旧服务，备份并替换，再确认新版就绪。失败恢复程序、旧环境入口和本轮备份的结构化数据。用户素材、密钥与工作流不属于更新包，不因升级复制或清空。程序和结构化数据恢复点位于 `backups/application-updates/`，升级日志位于 `cache/update-jobs/`。
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -14,6 +15,18 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def smart_node_schema_version():
+    """从共享节点契约源码读取画布当前 schema，避免测试夹具落后于正式结构。"""
+    source = (ROOT / "static" / "js" / "smart-node-contract.js").read_text(encoding="utf-8")
+    match = re.search(r"^\s*const\s+SCHEMA_VERSION\s*=\s*(\d+)\s*;", source, re.MULTILINE)
+    if not match:
+        raise RuntimeError("SmartNodeContract 源码没有可识别的 SCHEMA_VERSION")
+    return int(match.group(1))
+
+
+SMART_NODE_SCHEMA_VERSION = smart_node_schema_version()
 
 
 def chrome_binary():
@@ -178,6 +191,24 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
 
             def do_GET(self):
                 path = urlsplit(self.path).path
+                if path == "/static/smart-canvas.html":
+                    body = (ROOT / "static/smart-canvas.html").read_text(encoding="utf-8")
+                    marker = "<head>"
+                    if marker not in body:
+                        self.send_error(500, "smart-canvas fixture head is missing")
+                        return
+                    ready_listener = (
+                        '<script>window.__hypitCanvasReadyListenerInstalled=true;'
+                        'window.addEventListener("canvas-ready",()=>{'
+                        'window.__hypitCanvasReadyForTest=true;},{once:true});</script>'
+                    )
+                    payload = body.replace(marker, marker + ready_listener, 1).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 if path == "/api/hypit/settings-canvas":
                     with cls.state.condition:
                         cls.state.settings_canvas_calls += 1
@@ -195,6 +226,7 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
                         return
                     self._json(200, {"id": "hypit-settings", "canvas": {
                         "id": "hypit-settings", "title": "Hypit settings", "revision": 1,
+                        "node_schema_version": SMART_NODE_SCHEMA_VERSION,
                         "nodes": [], "connections": [], "logs": [], "settings": {},
                         "viewport": {"x": 0, "y": 0, "scale": 1}, "test_statuses": {},
                     }, "url": "/static/smart-canvas.html?id=hypit-settings&mode=hypit-settings"})
@@ -205,6 +237,7 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
                         cls.state.condition.notify_all()
                     self._json(200, {"canvas": {
                         "id": "hypit-settings", "title": "Hypit settings", "revision": 1,
+                        "node_schema_version": SMART_NODE_SCHEMA_VERSION,
                         "nodes": [], "connections": [], "logs": [], "settings": {},
                         "viewport": {"x": 0, "y": 0, "scale": 1}, "test_statuses": {},
                     }})
@@ -425,6 +458,45 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
           return false;
         }})()""")
 
+    def wait_for_canvas_sync(self, timeout=12, quiet_ms=500):
+        return self.evaluate(f"""(async()=>{{
+          const deadline=Date.now()+{int(timeout * 1000)};
+          let previous='';
+          let stableSince=0;
+          let last=null;
+          while(Date.now()<deadline){{
+            const frame=document.getElementById('hypitSettingsCanvasFrame');
+            let state=null;
+            try{{
+              const raw=frame?.contentWindow?.eval(`JSON.stringify({{
+                ready:window.__hypitCanvasReadyForTest===true,
+                listenerInstalled:window.__hypitCanvasReadyListenerInstalled===true,
+                settingsMode:typeof isSettingsCanvasMode==='boolean'&&isSettingsCanvasMode,
+                canvasPath:location.pathname+location.search,
+                documentReady:document.readyState==='complete',
+                inFlight:Boolean(canvasSyncInFlight),
+                queued:Boolean(canvasSyncSaveQueued),
+                blocked:Boolean(canvasSyncSaveBlocked),
+                revision:Number(canvas?.revision||0),
+                baseRevision:Number(canvasSyncBase?.revision||0)
+              }})`);
+              state=raw?JSON.parse(raw):null;
+            }}catch(error){{state={{readError:String(error)}};}}
+            last=state;
+            const settled=Boolean(state?.ready&&state.documentReady&&!state.inFlight&&!state.queued
+              &&!state.blocked&&state.revision===state.baseRevision);
+            const signature=settled?JSON.stringify(state):'';
+            if(settled&&signature===previous){{
+              if(Date.now()-stableSince>={int(quiet_ms)})return JSON.stringify({{ok:true,state}});
+            }}else{{
+              stableSince=settled?Date.now():0;
+              previous=signature;
+            }}
+            await new Promise(resolve=>setTimeout(resolve,25));
+          }}
+          return JSON.stringify({{ok:false,state:last}});
+        }})()""")
+
     def test_api_startup_prefetches_canvas_bootstrap_and_entry_reuses_one_iframe(self):
         self.open_page()
         self.assertTrue(self.state.wait_for("settings_canvas_calls", timeout=3),
@@ -504,10 +576,15 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
         self.open_page()
         self.evaluate("window.openHypitSettings(); true")
         self.assertTrue(self.wait_for_canvas(), "专用画布未加载")
+        sync = json.loads(self.wait_for_canvas_sync(quiet_ms=500))
+        self.assertTrue(sync["ok"], f"旧 hook 检查前画布初始化/同步未结束：{sync}")
+        self.assertEqual(self.state.canvas_put_calls, 0, f"旧 hook 调用前不应混入启动迁移 PUT：{sync}")
         result = self.evaluate("window.saveHypitSettings()")
         self.assertFalse(result, "真实页面的旧六槽 save hook 必须拒绝写入")
         self.assertEqual(self.state.settings_put_calls,0)
-        self.assertEqual(self.state.canvas_put_calls,0,"调用旧 hook 不能被伪装成共享图 PUT")
+        sync = json.loads(self.wait_for_canvas_sync(timeout=4, quiet_ms=500))
+        self.assertTrue(sync["ok"], f"旧 hook 调用后画布同步状态未稳定：{sync}")
+        self.assertEqual(self.state.canvas_put_calls,0,"旧 hook 在超过 450ms 的静默观察期内不能写入共享图")
 
 
 if __name__ == "__main__":

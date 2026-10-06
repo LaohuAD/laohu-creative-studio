@@ -381,7 +381,9 @@ class BrowserBehaviourTests(unittest.TestCase):
                 with urllib.request.urlopen(f"http://127.0.0.1:{cls.port}/json/list", timeout=2) as response:
                     targets = json.loads(response.read().decode("utf-8"))
                 for target in targets:
-                    if target.get("type") == "page" and target.get("webSocketDebuggerUrl"):
+                    if (target.get("type") == "page"
+                            and target.get("webSocketDebuggerUrl")
+                            and target.get("url") == DEMO.as_uri()):
                         return target
             except Exception:
                 time.sleep(0.5)
@@ -404,6 +406,31 @@ class BrowserBehaviourTests(unittest.TestCase):
         if result.returncode != 0:
             raise AssertionError(f"CDP 调用失败：{result.stderr[:400]}")
         return json.loads(result.stdout)
+
+    def _wait_for_demo_ready(self, stage: str):
+        """等待当前目标文档与 fixture 脚本都就绪，再操作 demo 对象。"""
+        expected_url = json.dumps(DEMO.as_uri())
+        state = self._evaluate(f"""(async()=>{{
+          const expected={expected_url};
+          const deadline=Date.now()+12000;
+          let state=null;
+          do {{
+            state={{url:location.href,readyState:document.readyState,
+              reset:typeof window.__demo?.reset,destroyAll:typeof window.__demo?.destroyAll,
+              host:!!document.getElementById('host')}};
+            if(state.url===expected&&state.readyState==='complete'
+              &&state.reset==='function'&&state.destroyAll==='function'&&state.host){{
+              state.ready=true;return state;
+            }}
+            await new Promise(resolve=>setTimeout(resolve,50));
+          }} while(Date.now()<deadline);
+          state.ready=false;return state;
+        }})()""")
+        self.assertTrue(
+            state and state.get("ready"),
+            f"{stage}前 demo fixture 未完成初始化（12 秒超时）：{state!r}",
+        )
+        return state
 
     def _cdp(self, method: str, params: dict | None = None):
         script = (
@@ -827,8 +854,25 @@ class BrowserBehaviourTests(unittest.TestCase):
             });
             await send('Page.reload',{ignoreCache:true});
             await Promise.race([loaded,new Promise((_,reject)=>setTimeout(()=>reject(new Error('fixture reload timed out')),10000))]);
-            const result=await send('Runtime.evaluate',{expression:`JSON.stringify({width:innerWidth,height:innerHeight,meta:document.querySelector('meta[name="viewport"]')?.content})`,returnByValue:true});
-            console.log(result.result?.value||'null');
+            const expression=`(async()=>{
+              const expected=${JSON.stringify(process.argv[5])};
+              const deadline=Date.now()+12000;let state=null;
+              do {
+                state={url:location.href,readyState:document.readyState,
+                  width:innerWidth,height:innerHeight,
+                  meta:document.querySelector('meta[name="viewport"]')?.content,
+                  reset:typeof window.__demo?.reset,destroyAll:typeof window.__demo?.destroyAll,
+                  host:!!document.getElementById('host')};
+                if(state.url===expected&&state.readyState==='complete'
+                  &&state.reset==='function'&&state.destroyAll==='function'&&state.host){state.ready=true;return state;}
+                await new Promise(resolve=>setTimeout(resolve,50));
+              } while(Date.now()<deadline);
+              state.ready=false;return state;
+            })()`;
+            const result=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});
+            const readiness=result.result?.value||null;
+            if(!readiness?.ready)throw new Error('fixture reload did not initialize: '+JSON.stringify(readiness));
+            console.log(JSON.stringify(readiness));
           } catch(error) {console.error(JSON.stringify({message:error.message}));process.exitCode=3;}
           finally {ws.close();}
         })()'''
@@ -951,6 +995,7 @@ class BrowserBehaviourTests(unittest.TestCase):
         """)
 
     def setUp(self):
+        self._wait_for_demo_ready("每个浏览器用例初始化")
         self._evaluate("window.__demo.reset(); window.__demo.destroyAll(); window.StudioI18n = null; document.getElementById('canvasAgentDialog')?.remove(); document.getElementById('host').replaceChildren();")
         self._evaluate(
             "window.__demo.mount('host', {catalog: window.__demo.buildCatalog(0),"

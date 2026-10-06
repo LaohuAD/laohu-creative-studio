@@ -16,11 +16,11 @@ class ReleaseScopeTests(unittest.TestCase):
     def test_runtime_package_validator_exists(self):
         self.assertIsNotNone(importlib.util.find_spec('static.release_update'))
     def test_includes_program_and_capabilities(self):
-        for path in ['main.py', 'model_capabilities.py', 'project_storage.py', 'requirements.txt', 'static/js/smart-canvas.js', 'data/model_capabilities/providers/ai-money.json', 'run.bat', 'mac-启动服务.sh']:
+        for path in ['main.py', 'model_capabilities.py', 'project_storage.py', 'requirements.txt', '.python-version', 'static/js/smart-canvas.js', 'data/model_capabilities/providers/ai-money.json', 'run.bat', 'mac-启动服务.sh']:
             self.assertTrue(allowed(path), path)
 
     def test_excludes_private_and_historical_files(self):
-        for path in ['API/.env', 'data/api_providers.json', 'assets/output/image/a.png', '.git/config', '../main.py', '/main.py', 'static/js/smart-canvas.js.mojibake-backup', 'python/python.exe']:
+        for path in ['API/.env', 'data/api_providers.json', 'assets/output/image/a.png', '.git/config', '../main.py', '/main.py', 'static/js/smart-canvas.js.mojibake-backup', 'python/python.exe', 'python/Lib/venv/__init__.py', 'python/LICENSE.txt']:
             self.assertFalse(allowed(path), path)
 
 
@@ -40,7 +40,7 @@ class PackageValidationTests(unittest.TestCase):
 
     def test_package_integrity_and_private_paths(self):
         from static.release_update import validate_package
-        files = {'VERSION': b'2026.09.10', 'main.py': b'pass\n',
+        files = {'VERSION': b'2026.09.10', '.python-version': b'3.14.5\n', 'main.py': b'pass\n',
                  'requirements.txt': b'', 'model_capabilities.py': b'pass\n',
                  'project_storage.py': b'pass\n', 'static/release_update.py': b'pass\n',
                  'static/update-notes.json': b'{"version":"2026.09.10"}'}

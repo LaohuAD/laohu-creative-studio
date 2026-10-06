@@ -166,6 +166,19 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         cls.request_id = 0
         cls.cdp("Page.enable")
         cls.cdp("Runtime.enable")
+        cls.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": r"""(() => {
+          const state=window.__themeBrowserDiagnostics={errors:[],apiFetches:[]};
+          const pathOf=value=>{try{return new URL(value,location.href).pathname;}catch(_){return String(value||'');}};
+          addEventListener('error',event=>state.errors.push({type:'error',message:String(event.message||''),source:pathOf(event.filename||event.target?.src||''),line:Number(event.lineno||0)}));
+          addEventListener('unhandledrejection',event=>{const reason=event.reason;state.errors.push({type:'unhandledrejection',message:String(reason?.stack||reason?.message||reason||'')});});
+          const originalFetch=window.fetch;
+          if(typeof originalFetch==='function')window.fetch=function(input,init){
+            const path=pathOf(typeof input==='string'?input:input?.url||'');
+            if(!path.startsWith('/api/'))return originalFetch.apply(this,arguments);
+            const entry={path,state:'pending',status:null};state.apiFetches.push(entry);
+            return originalFetch.apply(this,arguments).then(response=>{entry.state='complete';entry.status=response.status;return response;},error=>{entry.state='error';entry.error=String(error?.message||error);throw error;});
+          };
+        })();"""})
 
     @classmethod
     def tearDownClass(cls):
@@ -225,9 +238,35 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         return result.get("result", {}).get("value")
 
     def navigate(self, path="/static/api-settings.html"):
-        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}{path}"})
-        ready = self.evaluate("(async()=>{for(let i=0;i<160;i++){if(document.readyState==='complete'&&window.StudioTheme)return true;await new Promise(r=>setTimeout(r,25));}return false;})()")
-        self.assertTrue(ready, f"主题页面未完成加载：{path}")
+        url = f"http://127.0.0.1:{self.http_port}{path}"
+        navigation = self.cdp("Page.navigate", {"url": url})
+        self.assertFalse(navigation.get("errorText"), f"主题页面导航失败：{navigation}")
+        deadline = time.monotonic() + 12
+        last_state = None
+        while time.monotonic() < deadline:
+            try:
+                last_state = self.evaluate("({url:location.href,readyState:document.readyState,hasStudioTheme:!!window.StudioTheme})")
+            except AssertionError:
+                # 导航期间旧执行上下文会被销毁；继续轮询目标文档，不重新导航。
+                time.sleep(0.05)
+                continue
+            if last_state and last_state.get("url") == url and last_state.get("readyState") == "complete" and last_state.get("hasStudioTheme"):
+                return
+            time.sleep(0.05)
+        try:
+            diagnostics = self.evaluate("""(() => ({
+              url:location.href,readyState:document.readyState,title:document.title,
+              hasStudioTheme:!!window.StudioTheme,themeType:typeof window.StudioTheme,
+              themeId:document.documentElement.dataset.studioTheme||null,
+              appearance:document.documentElement.dataset.studioAppearance||null,
+              navigation:performance.getEntriesByType('navigation').map(item=>({name:item.name,type:item.type,domComplete:Math.round(item.domComplete),loadEventEnd:Math.round(item.loadEventEnd)})),
+              scripts:performance.getEntriesByType('resource').filter(item=>item.initiatorType==='script'||item.name.split('?')[0].toLowerCase().endsWith('.js')).map(item=>({name:item.name,status:item.responseStatus,duration:Math.round(item.duration)})),
+              apiResources:performance.getEntriesByType('resource').filter(item=>item.name.includes('/api/')).map(item=>({name:item.name,status:item.responseStatus,duration:Math.round(item.duration)})),
+              apiFetches:window.__themeBrowserDiagnostics?.apiFetches||[],browserErrors:window.__themeBrowserDiagnostics?.errors||[]
+            }))()""")
+        except AssertionError as error:
+            diagnostics = {"evaluationError": str(error), "lastState": last_state}
+        self.fail(f"主题页面未在12秒内完成目标文档初始化：期望={url!r}，最近状态={last_state!r}，诊断={diagnostics!r}")
 
     def set_local_storage(self, values):
         items = json.dumps(values, ensure_ascii=False)

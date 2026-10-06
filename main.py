@@ -25149,6 +25149,19 @@ def local_server_uvicorn_options(root=None, env=None) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
+    import canvas_update
+
+    try:
+        required_python = canvas_update.required_python_version(BASE_DIR)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"无法确认项目要求的 Python 版本，请先运行安装依赖：{exc}") from exc
+    running_python = ".".join(str(part) for part in sys.version_info[:3])
+    if running_python != required_python:
+        raise SystemExit(
+            f"当前 Python 为 {running_python}，项目要求 {required_python}。"
+            "请先运行安装依赖，再启动画布。"
+        )
+
     import uvicorn
     # 画布采用统一的应用层心跳和断线重连，避免两套心跳策略互相干扰。
     launch = local_server_uvicorn_options()
