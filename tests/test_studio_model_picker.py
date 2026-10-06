@@ -54,7 +54,10 @@ class StudioModelPickerTests(unittest.TestCase):
         self.assertIn(".capability-settings-list { max-height", css)
         self.assertIn("display:flex; flex-direction:column", css)
         self.assertIn(".capability-settings-list .capability-option { min-width:0", css)
-        self.assertIn(".capability-settings-list .capability-option-drag-handle { display:none; }", css)
+        # 正式画布只读字段布局；canvas-settings 管理图才显示参数选项排序柄。
+        self.assertIn('html:not([data-canvas-settings="true"]) .capability-option-drag-handle { display:none; }', css)
+        self.assertIn("function renderCapabilityOptionOrderHandle(){\n    if(!isCanvasSettingsMode)return '';", js)
+        self.assertIn("data-capability-option-sort-handle", js)
         sort_start = js.index("function bindCapabilityOptionSort")
         sort_end = js.index("\nfunction preferenceListButtons", sort_start)
         self.assertNotIn("document.createElement('span')", js[sort_start:sort_end])

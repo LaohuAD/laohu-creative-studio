@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "static/js/hypit-settings.js"
 STYLES = ROOT / "static/css/hypit-settings.css"
 PAGE = ROOT / "static/api-settings.html"
+CANVAS_PAGE = ROOT / "static/smart-canvas.html"
 
 
 class HypitSettingsUiTests(unittest.TestCase):
@@ -32,106 +33,62 @@ class HypitSettingsUiTests(unittest.TestCase):
         self.assertIn("/static/css/model-config-control.css", self.page)
         self.assertIn("data-hypit-slot=\"${escapeHtml(slot)}\"", self.script)
 
-    def test_autosave_race_keeps_latest_draft_and_server_revision(self):
+    def test_hypit_canvas_description_explains_shared_flow_in_both_languages(self):
+        self.assertIn('hypit.canvasDescription', self.script)
+        self.assertIn('在画布中配置生成流程，将执行节点连接到对应输出端口。', self.script)
+        self.assertIn('Configure generation flows on the canvas and connect execution nodes to their matching output ports.', self.script)
+        self.assertIn('在画布中配置生成流程，将执行节点连接到对应输出端口。', self.page)
+        self.assertNotIn('连接完整流程后可测试', self.script + self.page)
+
+    def test_canvas_output_button_has_current_initial_bilingual_labels(self):
+        canvas_page = CANVAS_PAGE.read_text(encoding="utf-8")
+        self.assertIn('aria-label="添加输出端口"', canvas_page)
+        self.assertIn('data-hypit-label-en="Add output port"', canvas_page)
+        self.assertIn('aria-label="Hypit 输出端口"', canvas_page)
+        self.assertIn('data-hypit-aria-label-en="Hypit output ports"', canvas_page)
+        self.assertNotIn("添加用途输出", canvas_page)
+        self.assertNotIn("Hypit 用途输出", canvas_page)
+
+    def test_shared_canvas_prefetch_is_cached_and_legacy_save_is_inert(self):
         node = __import__("shutil").which("node")
         if not node:
             self.skipTest("node is required for the frontend behavior fixture")
-        fixture = r'''
-const fs = require('fs');
+        fixture = r'''const fs = require('fs');
 const source = fs.readFileSync('static/js/hypit-settings.js', 'utf8');
 const listeners = Object.create(null);
-const slotsListeners = Object.create(null);
-const elements = Object.create(null);
-function classList() {
-  const values = new Set();
-  return {
-    add: (...items) => items.forEach(item => values.add(item)),
-    remove: (...items) => items.forEach(item => values.delete(item)),
-    contains: item => values.has(item),
-    toggle: (item, force) => force === undefined ? (values.has(item) ? values.delete(item) : values.add(item)) : (force ? values.add(item) : values.delete(item)),
-  };
-}
-function element(id) {
-  if (!elements[id]) elements[id] = {
-    id, hidden: false, dataset: {}, classList: classList(),
-    addEventListener: (type, handler) => { (id === 'hypitSlots' ? slotsListeners : listeners)[type] = handler; },
-    setAttribute: function(key, value) { this[key] = value; },
-    removeAttribute: function(key) { delete this[key]; },
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    closest: () => null,
-    matches: () => false,
-  };
-  return elements[id];
-}
-const runningHubModel = {
-  provider_id:'runninghub', provider_name:'RunningHub', model_id:'shared-image', family_id:'shared-image-family',
-  node_type:'image_generation', runnable:true, validation_mode:'strict', readiness:'ready',
-  regions:['global','cn'], parameters:{count:{type:'integer',min:1,max:2}}, inputs:{prompt:{media_type:'text',min:1,max:1}}
+const requests = [];
+const layout = {classList:{contains:()=>false,add(){},remove(){}}};
+const elements = new Map();
+const document = {
+  getElementById(id) { return id === 'hypitSlots' ? null : (elements.get(id) || null); },
+  querySelector(selector) { return selector === '.layout' ? layout : null; },
+  querySelectorAll() { return []; },
+  addEventListener(type, handler) { (listeners[type] ||= []).push(handler); },
 };
-const defaults = {text:{provider:'',model:'',parameters:{}},image:{provider:'runninghub',model:'shared-image',region:'global',parameters:{}},video:{provider:'',model:'',parameters:{}},audio:{provider:'',model:'',parameters:{}},voice:{provider:'',model:'',parameters:{}}};
-const pending = [];
-const puts = [];
-let revision = 1;
+global.document = document;
+global.location = {href:'http://127.0.0.1/static/api-settings.html', origin:'http://127.0.0.1'};
 global.window = {
-  location: {search: '?section=hypit'},
-  addEventListener: (type, handler) => { (listeners[type] ||= []).push(handler); },
-  StudioI18n: {register(){}, apply(){}, t:key => key, lang:() => 'zh'},
-  refreshIcons: () => {},
+  location:{search:'?section=hypit'},
+  addEventListener(type, handler) { (listeners[type] ||= []).push(handler); },
+  StudioI18n:{register(){},apply(){},t:key=>key,lang:()=> 'zh'},
+  refreshIcons(){},
 };
-global.location = global.window.location;
-global.document = {
-  getElementById: id => element(id),
-  querySelector: selector => selector === '.layout' ? element('layout') : element(selector.slice(1)),
-  querySelectorAll: () => [],
-  addEventListener: (type, handler, capture) => { listeners[`document:${type}:${capture}`] = handler; },
-};
-global.fetch = async (url, options = {}) => {
-  if (options.method === 'PUT') {
-    const body = JSON.parse(options.body);
-    puts.push(body);
-    return await new Promise(resolve => pending.push({body, resolve}));
-  }
-  if (url.endsWith('/capabilities')) return {ok:true, json:async() => ({
-    providers:[{id:'runninghub',name:'RunningHub',regions:[{region:'global',enabled:true},{region:'cn',enabled:true}]}],
-    supported_capabilities:[{slot:'image',kind:'image',models:[runningHubModel]}], unsupported_capabilities:[]
-  })};
-  return {ok:true, json:async() => ({version:1, defaults, revision})};
+global.fetch = async (url, options={}) => {
+  requests.push({url,method:options.method||'GET'});
+  if (url === '/api/hypit/settings-canvas') return {ok:true,json:async()=>({id:'hypit-settings',canvas:{id:'hypit-settings'},url:'/static/smart-canvas.html?id=hypit-settings&mode=hypit-settings'})};
+  throw new Error('unexpected legacy/config request: ' + url);
 };
 eval(source);
-const fire = (type, target) => slotsListeners[type]({target});
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-(async () => {
-  await Promise.all((listeners.load || []).map(handler => handler()));
-  await wait(0);
-  const candidateLabels = window.hypitSlotCandidates('image').map(item => item.label);
-  if (!candidateLabels.some(label => label.includes('AI')) || !candidateLabels.some(label => label.includes('CN'))) throw new Error('both RunningHub sites were not offered: ' + JSON.stringify(candidateLabels));
-  if (!window.hypitSlotCandidates('image').some(item => item.region === 'cn')) throw new Error('cn 站点候选缺失');
-  const otherNav = {id:'canvasModelsNav', closest: selector => selector === '#hypitSettingsNav' ? null : otherNav};
-  let prevented = false;
-  let stopped = false;
-  listeners['document:click:true']({target: otherNav, preventDefault: () => { prevented = true; }, stopPropagation: () => { stopped = true; }});
-  if (element('layout').classList.contains('hypit-settings-mode') || !element('hypitSettingsBlock').hidden || prevented || stopped) throw new Error('other sidebar navigation did not close Hypit without swallowing the click');
-  const target = {
-    dataset: {hypitSlot:'image', hypitParameter:'count'},
-    type: 'number', value: '1',
-    matches: selector => selector === '[data-hypit-parameter]',
-  };
-  fire('input', target);
-  const firstSave = window.saveHypitSettings();
-  await wait(0);
-  if (puts.length !== 1 || puts[0].defaults.image.parameters.count !== 1 || puts[0].expected_revision !== 1) throw new Error('first save was not captured');
-  target.value = '2';
-  fire('input', target);
-  pending[0].resolve({ok:true, json:async() => ({version:1, defaults:JSON.parse(JSON.stringify(defaults)), revision:2})});
-  await firstSave;
-  for (let index = 0; index < 50 && puts.length < 2; index += 1) await wait(10);
-  if (puts.length !== 2) throw new Error('latest draft was not queued');
-  if (puts[1].defaults.image.parameters.count !== 2 || puts[1].expected_revision !== 2) throw new Error(JSON.stringify(puts));
-  pending[1].resolve({ok:true, json:async() => ({version:1, defaults:JSON.parse(JSON.stringify(defaults)), revision:3})});
-  await wait(20);
-  process.stdout.write(JSON.stringify({puts, status: element('hypitSettingsStatus').textContent}));
-})().catch(error => { console.error(error.stack || error); process.exit(1); });
+(async()=>{
+  const [first, second] = await Promise.all([window.prefetchHypitSettings(), window.prefetchHypitSettings()]);
+  const third = await window.prefetchHypitSettings();
+  const save = await window.saveHypitSettings();
+  if (!first || !second || !third) throw new Error('settings-canvas bootstrap prefetch failed');
+  if (save !== false) throw new Error('legacy save must be inert when the six-slot form is absent');
+  if (requests.length !== 1 || requests[0].url !== '/api/hypit/settings-canvas' || requests[0].method !== 'GET') throw new Error('shared canvas bootstrap must be one cached GET: ' + JSON.stringify(requests));
+  if (document.getElementById('hypitSlots') !== null) throw new Error('fixture must match the shipped page without legacy six-slot markup');
+  process.stdout.write(JSON.stringify({requests,legacySave:save,legacySlotsMounted:false}));
+})().catch(error=>{console.error(error.stack||error);process.exit(1);});
 '''
         completed = subprocess.run(
             [node, "-e", fixture],
@@ -142,9 +99,9 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
-        self.assertEqual(len(result["puts"]), 2)
-        self.assertEqual(result["puts"][1]["defaults"]["image"]["parameters"]["count"], 2)
-        self.assertEqual(result["puts"][1]["expected_revision"], 2)
+        self.assertEqual(result["requests"], [{"url":"/api/hypit/settings-canvas","method":"GET"}])
+        self.assertFalse(result["legacySlotsMounted"])
+        self.assertIs(result["legacySave"], False)
 
 
 if __name__ == "__main__":

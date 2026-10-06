@@ -91,6 +91,47 @@ _SLOT_SCENARIOS = {
     "voice": ["text_prompt", "voice_reference"],
 }
 
+_ARTICLE_SLOT_NODE_TYPES = {
+    "text": "text_generation",
+    "image": "image_generation",
+    "video": "video_generation",
+    "audio": "audio_generation",
+    "music": "music_generation",
+    # 语音和普通音频最终都由 audio_generation 宿主执行，语义槽位仍分别保留。
+    "voice": "audio_generation",
+}
+
+
+def article_slot_descriptors() -> List[Dict[str, Any]]:
+    """为文章设置图声明实际画布执行类型；只按共享模型目录的输出契约筛选。"""
+    labels = {
+        "text": {"zh": "文本", "en": "Text"},
+        "image": {"zh": "图片", "en": "Image"},
+        "video": {"zh": "视频", "en": "Video"},
+        "audio": {"zh": "音效", "en": "Sound effects"},
+        "music": {"zh": "音乐", "en": "Music"},
+        "voice": {"zh": "语音", "en": "Voice"},
+    }
+    descriptors = []
+    for slot, node_type in _ARTICLE_SLOT_NODE_TYPES.items():
+        descriptors.append({
+            "id": slot,
+            "module_id": "article",
+            "selection_policy": "fixed",
+            "node_type": node_type,
+            "capability_name": node_type.replace("_", "-"),
+            "label": dict(labels[slot]),
+            "expected_output": dict(_OUTPUT_MEDIA[node_type]),
+            # 文章沿用用户启用清单、可执行状态和实际输出类型；Hypit 的用途
+            # 黑名单不属于文章宿主的选择规则。
+            "allowed_operations": [],
+            "required_input_scenarios": list(_SLOT_SCENARIOS.get(slot, ["text_prompt"])),
+            "supported_input_roles": list(_SLOT_INPUT_ROLES.get(slot, ["prompt"])),
+            "runtime_model_override": "allow",
+            "runtime_parameter_overrides": "schema_allowlist",
+        })
+    return descriptors
+
 
 def _hypit_supported() -> Tuple[Dict[str, Any], ...]:
     """直接复用 Hypit 桥接声明的支持边界，不复制清单（§10.4）。"""
@@ -115,6 +156,7 @@ def hypit_slot_descriptors() -> List[Dict[str, Any]]:
             continue
         descriptors.append({
             "id": slot,
+            "module_id": "hypit",
             "selection_policy": "fixed",
             "node_type": node_type,
             "capability_name": (capability.get("capability") or {}).get("name", ""),
@@ -169,6 +211,14 @@ def module_descriptors() -> Dict[str, Dict[str, Any]]:
                 for item in _hypit_unsupported()
             ],
         },
+        "article": {
+            "schema_version": MODULE_SCHEMA_VERSION,
+            "module_id": "article",
+            "label": {"zh": "公众号文章", "en": "Article"},
+            "selection_policy": "fixed",
+            "executor_id": "article-settings-canvas-execution",
+            "slots": article_slot_descriptors(),
+        },
     }
 
 
@@ -221,7 +271,7 @@ def validate_option_against_slot(slot: Dict[str, Any], option: Dict[str, Any]) -
         reasons.append({"code": "PROFILE_UNCONFIRMED", "detail": {"readiness": option.get("readiness")}})
     if option.get("runnable") is False:
         reasons.append({"code": "ADAPTER_MISSING", "detail": {}})
-    if slot.get('id') in _SLOT_OPERATIONS:
+    if slot.get("module_id") == "hypit" and slot.get('id') in _SLOT_OPERATIONS:
         reasons.extend({'code': code, 'detail': {}} for code in hypit_profile_reasons(slot['id'], option)
                        if code not in {reason['code'] for reason in reasons})
     return reasons

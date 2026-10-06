@@ -9,6 +9,14 @@ from fastapi.testclient import TestClient
 from studio_projects import create_studio_projects_router
 
 
+TEST_TMP_ROOT = Path(__file__).resolve().parents[1] / "cache" / "studio-tests" / "tmp"
+
+
+def isolated_temp_directory():
+    TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT)
+
+
 class FakeCanvasAdapter:
     """只模拟现有画布真源，不创建第二份项目数据。"""
 
@@ -61,7 +69,7 @@ def make_client(root, adapter=None):
 
 class StudioProjectsTests(unittest.TestCase):
     def test_canvas_adapter_is_the_source_and_both_modules_have_crud(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with isolated_temp_directory() as folder:
             adapter = FakeCanvasAdapter()
             with make_client(folder, adapter) as client:
                 response = client.get("/api/studio/projects?module=canvas")
@@ -114,7 +122,9 @@ class StudioProjectsTests(unittest.TestCase):
                     self.assertIn(prep['document_url'],prep['text'])
                     detail=client.get(prep['document_url'])
                     self.assertEqual(detail.status_code,200)
-                    if module=='hypit':self.assertIn('npx skills add',detail.text)
+                    if module=='hypit':
+                        self.assertIn('https://github.com/LaohuAD/laohu-creative-skills.git', detail.text)
+                        self.assertIn('tools/install.py', detail.text)
 
     def test_create_ui_stays_on_management_page(self):
         import subprocess, shutil
@@ -141,7 +151,7 @@ answer=null;await createProject();assert.equal(saves,1);assert.equal(opened,0);}
         subprocess.run([node, '-e', program], check=True, capture_output=True, text=True)
 
     def test_hypit_opens_project_page_without_agent_connection(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with isolated_temp_directory() as folder:
             with make_client(folder) as client:
                 project = client.post('/api/studio/projects', json={'module':'hypit', 'name':'未接入项目'}).json()['project']
                 expected = '/static/hypit.html?id=' + project['id']
@@ -151,8 +161,39 @@ answer=null;await createProject();assert.equal(saves,1);assert.equal(opened,0);}
                 loaded = client.get('/api/studio/projects/'+project['id']+'?module=hypit').json()['project']
                 self.assertEqual(loaded['url'], expected)
 
+    def test_article_module_uses_shared_project_crud_and_only_creates_a_card(self):
+        with isolated_temp_directory() as folder:
+            with make_client(folder) as client:
+                response = client.post(
+                    "/api/studio/projects",
+                    json={"module": "article", "name": "一篇新文章"},
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                project = response.json()["project"]
+                self.assertEqual(project["module"], "article")
+                self.assertEqual(project["name"], "一篇新文章")
+                self.assertEqual(project["url"], f"/static/article.html?id={project['id']}")
+
+                record_path = Path(folder) / "data" / "studio_projects" / f"{project['id']}.json"
+                self.assertTrue(record_path.is_file())
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                self.assertEqual(record["module"], "article")
+                self.assertNotIn("canvas", record)
+                self.assertFalse((Path(folder) / "workflows" / "hypit" / project["id"]).exists())
+
+                listed = client.get("/api/studio/projects?module=article").json()["projects"]
+                self.assertEqual([item["id"] for item in listed], [project["id"]])
+                self.assertEqual(client.get(f"/api/studio/projects/{project['id']}?module=article").status_code, 200)
+
+                renamed = client.patch(
+                    f"/api/studio/projects/{project['id']}?module=article",
+                    json={"module": "article", "name": "改名后", "revision": project["revision"]},
+                )
+                self.assertEqual(renamed.status_code, 200, renamed.text)
+                self.assertEqual(renamed.json()["project"]["name"], "改名后")
+
     def test_hypit_delete_moves_project_to_backup_and_keeps_assets(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with isolated_temp_directory() as folder:
             asset = Path(folder) / "assets" / "input" / "asset.txt"
             asset.parent.mkdir(parents=True)
             asset.write_text("keep me", encoding="utf-8")
@@ -175,7 +216,7 @@ answer=null;await createProject();assert.equal(saves,1);assert.equal(opened,0);}
                 self.assertTrue((backups[0] / "project.json").exists())
 
     def test_path_validation_corrupt_record_and_revision_conflict(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with isolated_temp_directory() as folder:
             with make_client(folder) as client:
                 created = client.post("/api/studio/projects", json={"module": "hypit", "name": "并发工程"}).json()["project"]
                 project_id = created["id"]
@@ -199,7 +240,7 @@ answer=null;await createProject();assert.equal(saves,1);assert.equal(opened,0);}
                 self.assertNotEqual(original, record_path.read_bytes())
 
     def test_writes_reject_cross_site_origin(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with isolated_temp_directory() as folder:
             with make_client(folder) as client:
                 response = client.post(
                     "/api/studio/projects",

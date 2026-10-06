@@ -3,7 +3,7 @@
   "provider_id": "ai-money",
   "provider_name": "laohu",
   "status": "maintained",
-  "updated_at": "2026-09-23",
+  "updated_at": "2026-10-05",
   "sources": [
     {
       "url": "https://api.lao-hu.com/v1/models",
@@ -19,6 +19,11 @@
       "url": "https://api.lao-hu.com/docs/llms.txt",
       "kind": "official_documented",
       "checked_at": "2026-09-12"
+    },
+    {
+      "url": "https://api.lao-hu.com/docs/llms.txt",
+      "kind": "official_documented",
+      "checked_at": "2026-10-05"
     }
   ],
   "models": [
@@ -3678,6 +3683,334 @@
       },
       "platform": {
         "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "dola-seedream-5.0-flash-i2i",
+      "family_id": "ai-money-dola-seedream-5.0-flash-i2i",
+      "family_name": "dola-seedream-5.0-flash-i2i",
+      "display_name": "dola-seedream-5.0-flash-i2i",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "image_to_image",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-10-05"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 5,
+          "max_chars": 5000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 10,
+          "max_bytes": 31457280
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "1.5k",
+            "2k"
+          ]
+        },
+        "width": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "height": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "resolution": "metadata.resolution",
+        "width": "metadata.width",
+        "height": "metadata.height",
+        "output_format": "metadata.output_format",
+        "reference": "images"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "dola-seedream-5.0-flash-t2i",
+      "family_id": "ai-money-dola-seedream-5.0-flash-t2i",
+      "family_name": "dola-seedream-5.0-flash-t2i",
+      "display_name": "dola-seedream-5.0-flash-t2i",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-10-05"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 5,
+          "max_chars": 5000
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "1.5k",
+            "2k"
+          ]
+        },
+        "width": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "height": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "resolution": "metadata.resolution",
+        "width": "metadata.width",
+        "height": "metadata.height",
+        "output_format": "metadata.output_format"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "seedream-v5-flash-i2i",
+      "family_id": "ai-money-seedream-v5-flash-i2i",
+      "family_name": "seedream-v5-flash-i2i",
+      "display_name": "seedream-v5-flash-i2i",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "image_to_image",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-10-05"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 5,
+          "max_chars": 5000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 10,
+          "max_bytes": 31457280
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "1.5k",
+            "2k"
+          ]
+        },
+        "width": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "height": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "resolution": "metadata.resolution",
+        "width": "metadata.width",
+        "height": "metadata.height",
+        "output_format": "metadata.output_format",
+        "reference": "images"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "seedream-v5-flash-t2i",
+      "family_id": "ai-money-seedream-v5-flash-t2i",
+      "family_name": "seedream-v5-flash-t2i",
+      "display_name": "seedream-v5-flash-t2i",
+      "variant_id": "default",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "version": 2,
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-10-05"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 5,
+          "max_chars": 5000
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "1.5k",
+            "2k"
+          ]
+        },
+        "width": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "height": {
+          "level": "advanced",
+          "type": "integer",
+          "min": 240,
+          "max": 8192
+        },
+        "output_format": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "resolution": "metadata.resolution",
+        "width": "metadata.width",
+        "height": "metadata.height",
+        "output_format": "metadata.output_format"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
       }
     }
   ]

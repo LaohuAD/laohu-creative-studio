@@ -18,6 +18,13 @@ import uuid
 from collections.abc import Mapping
 from typing import Any, Callable
 
+from canvas_core.hypit_config import (
+    HYPIT_OUTPUT_KINDS,
+    HYPIT_OUTPUT_SLOTS,
+    HYPIT_SETTINGS_CANVAS_ID,
+    validate_hypit_settings_canvas,
+)
+
 
 class HeadlessCanvasError(ValueError):
     """命令不符合当前画布契约。"""
@@ -380,13 +387,16 @@ class HeadlessCanvas:
         return [copy.deepcopy(by_id[task_id]) for task_id in task_ids if task_id in by_id]
 
     def _create_node(self, canvas: dict[str, Any], args: Mapping[str, Any]) -> dict[str, Any]:
+        kind = str(args.get("kind") or "").strip()
+        if kind == "hypit_output":
+            return self._create_hypit_output(canvas, args)
+
         title = str(args.get("title") or "").strip()
         if not title:
             raise HeadlessCanvasError("请提供有实际意义的节点名称 title")
-        kind = str(args.get("kind") or "").strip()
         node_type = self.NODE_TYPES.get(kind)
         if not node_type:
-            raise HeadlessCanvasError("kind 必须为 material/text/image/video/audio/music/app/comfy")
+            raise HeadlessCanvasError("kind 必须为 material/text/image/video/audio/music/app/comfy/hypit_output")
 
         node_id = self._new_id(canvas, "material" if kind == "material" else "run")
         x = self._number(args.get("x", 0), "x")
@@ -475,6 +485,50 @@ class HeadlessCanvas:
             result["needs_configuration"] = True
         return result
 
+    def _create_hypit_output(self, canvas: dict[str, Any], args: Mapping[str, Any]) -> dict[str, Any]:
+        if not self._is_hypit_settings_canvas(canvas):
+            raise HeadlessCanvasError("Hypit 输出端口只能创建在 Hypit 配置图中")
+        slot = str(args.get("slot") or args.get("hypitSlot") or "").strip().lower()
+        if slot not in HYPIT_OUTPUT_SLOTS:
+            raise HeadlessCanvasError("Hypit 输出用途必须是 text/image/video/audio/music/voice")
+        existing = next((node for node in canvas.get("nodes", [])
+                         if isinstance(node, dict)
+                         and node.get("type") == "smart-hypit-output"
+                         and str(node.get("hypitSlot") or "").strip().lower() == slot), None)
+        if existing is not None:
+            return {
+                "node_id": str(existing["id"]),
+                "node": copy.deepcopy(existing),
+                "existing": True,
+                "focus": True,
+            }
+
+        titles = {
+            "text": "文本输出", "image": "图片输出", "video": "视频输出",
+            "audio": "音频输出", "music": "音乐输出", "voice": "语音输出",
+        }
+        index = HYPIT_OUTPUT_SLOTS.index(slot)
+        node = {
+            "id": self._new_id(canvas, f"hypit-output-{slot}"),
+            "type": "smart-hypit-output",
+            "hypitSlot": slot,
+            "outputKind": HYPIT_OUTPUT_KINDS[slot],
+            "x": self._number(args.get("x", 720), "x"),
+            "y": self._number(args.get("y", index * 205), "y"),
+            "w": 300,
+            "h": 150,
+            "title": str(args.get("title") or titles[slot])[:160],
+            "images": [],
+            "displayNumber": self._allocate_display_number(canvas),
+            "created_at": int(time.time() * 1000),
+        }
+        canvas.setdefault("nodes", []).append(node)
+        try:
+            validate_hypit_settings_canvas(canvas)
+        except (TypeError, ValueError) as exc:
+            raise HeadlessCanvasError(str(exc)) from exc
+        return {"node_id": node["id"], "node": copy.deepcopy(node), "existing": False}
+
     def _base_run_settings(self, kind: str) -> dict[str, Any]:
         settings: dict[str, Any] = {"engine": "api", "apiKind": kind, "capabilityParameters": {}}
         if kind in self.MODEL_FIELDS:
@@ -503,6 +557,17 @@ class HeadlessCanvas:
         return {"node_id": node["id"], "node": copy.deepcopy(node)}
 
     def _configure_node(self, canvas: dict[str, Any], node: dict[str, Any], args: Mapping[str, Any]) -> None:
+        lock_keys = [key for key in ("hypitInputLocked", "hypit_input_locked") if key in args]
+        if lock_keys:
+            if not self._is_hypit_settings_canvas(canvas):
+                raise HeadlessCanvasError("hypitInputLocked 仅适用于 Hypit 配置图")
+            if not self._is_material(node):
+                raise HeadlessCanvasError("只有 Hypit 输入素材可以设置 hypitInputLocked")
+            values = [args[key] for key in lock_keys]
+            if any(type(value) is not bool for value in values) or any(value != values[0] for value in values[1:]):
+                raise HeadlessCanvasError("hypitInputLocked 必须是布尔值")
+            node["hypitInputLocked"] = values[0]
+
         if "creation_details" in args:
             details = args.get("creation_details")
             if not isinstance(details, str):
@@ -514,7 +579,7 @@ class HeadlessCanvas:
         if any(key in args for key in ("provider_id", "model", "parameters")):
             if kind not in self.MODEL_FIELDS:
                 raise HeadlessCanvasError("此节点请通过 run_settings 配置应用或工作流")
-            self._configure_model(node, kind, args)
+            self._configure_model(node, kind, args, canvas_id=str(canvas.get("id") or ""))
 
         if "run_settings" in args:
             if kind == "app":
@@ -576,7 +641,7 @@ class HeadlessCanvas:
             self._normalize_run_settings(node)
         self._ensure_creation(node)
 
-    def _configure_model(self, node: dict[str, Any], kind: str, args: Mapping[str, Any]) -> None:
+    def _configure_model(self, node: dict[str, Any], kind: str, args: Mapping[str, Any], *, canvas_id="") -> None:
         provider_key, model_key, family_key, api_kind = self.MODEL_FIELDS[kind]
         source = node.setdefault("runSettings", {})
         provider = args.get("provider_id", source.get(provider_key))
@@ -594,7 +659,25 @@ class HeadlessCanvas:
         requested = existing
         if "parameters" in args:
             requested.update(copy.deepcopy(dict(args.get("parameters") or {})))
-        profile = self.validate_model(api_kind, provider, model, requested)
+        previous_selection = node.get("modelSelection") if isinstance(node.get("modelSelection"), dict) else {}
+        option_id = str(args.get("option_id") or previous_selection.get("option_id") or "").strip()
+        operation = str(args.get("operation") or previous_selection.get("operation") or "").strip()
+        try:
+            signature = inspect.signature(self.validate_model)
+            accepts_extra = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            )
+            kwargs = {}
+            for key, value in (
+                ("canvas_id", canvas_id), ("option_id", option_id), ("operation", operation),
+                ("region", str(args.get("region") or source.get("rhRegion") or source.get("region") or "")),
+            ):
+                if accepts_extra or key in signature.parameters:
+                    kwargs[key] = value
+        except (TypeError, ValueError):
+            kwargs = {}
+        profile = self.validate_model(api_kind, provider, model, requested, **kwargs)
         if not isinstance(profile, Mapping):
             raise HeadlessCanvasError("模型能力档案无效")
         if not profile.get("runnable"):
@@ -606,6 +689,18 @@ class HeadlessCanvas:
         source[provider_key] = provider
         source[model_key] = model
         source[family_key] = str(profile.get("family_id") or profile.get("familyId") or "")
+        if option_id:
+            node["modelSelection"] = {
+                "schema_version": 2,
+                "option_id": option_id,
+                "connection_id": provider,
+                "region_id": str(args.get("region") or source.get("rhRegion") or source.get("region") or ""),
+                "operation": str(profile.get("operation") or operation),
+                "parameters": copy.deepcopy(requested),
+                "revision": int(previous_selection.get("revision") or 0) + 1,
+            }
+        elif changed_model:
+            node.pop("modelSelection", None)
         source.setdefault("capabilityParameters", {})[model] = requested
         if kind == "image" and "count" in requested:
             value = requested["count"]
@@ -693,9 +788,49 @@ class HeadlessCanvas:
         if source["id"] == target["id"]:
             raise HeadlessCanvasError("Cannot connect a node to itself")
 
+        source_is_output = source.get("type") == "smart-hypit-output"
+        target_is_output = target.get("type") == "smart-hypit-output"
+        if source_is_output:
+            raise HeadlessCanvasError("Hypit 输出端口不能作为连线来源")
+
         relation = str(args.get("relation") or "").strip().lower()
         if relation == "story":
+            if target_is_output:
+                raise HeadlessCanvasError("Hypit 输出端口只接受生成流程连线")
             self._add_connection(canvas, source["id"], target["id"], "story")
+            return {"connections": copy.deepcopy(canvas["connections"])}
+
+        if target_is_output:
+            if not self._is_hypit_settings_canvas(canvas):
+                raise HeadlessCanvasError("Hypit 输出端口只能连接在 Hypit 配置图中")
+            if not self._can_connect(source, target, hypit_settings=True):
+                raise HeadlessCanvasError("Hypit 输出只能连接执行节点")
+            kind = self._connection_kind(source, target)
+            target_field_key = str(args.get("target_field_key") or args.get("targetFieldKey") or "").strip()
+            candidate = copy.deepcopy(canvas)
+            candidate["connections"] = [
+                connection for connection in candidate.get("connections") or []
+                if not (
+                    connection.get("to") == target["id"]
+                    and str(connection.get("kind") or "input").strip().lower() in {"", "input", "flow"}
+                )
+            ]
+            self._check_cycle(candidate, source["id"], target["id"], kind)
+            self._add_connection(
+                candidate,
+                source["id"],
+                target["id"],
+                kind,
+                source_result_id=str(args.get("source_result_id") or args.get("sourceResultId") or "").strip(),
+                source_media_key=str(args.get("source_media_key") or args.get("sourceMediaKey") or "").strip(),
+                target_field_key=target_field_key,
+            )
+            try:
+                validate_hypit_settings_canvas(candidate)
+            except (TypeError, ValueError) as exc:
+                raise HeadlessCanvasError(str(exc)) from exc
+            canvas["connections"] = candidate["connections"]
+            self._reconcile(canvas)
             return {"connections": copy.deepcopy(canvas["connections"])}
 
         if not self._can_connect(source, target):
@@ -704,7 +839,10 @@ class HeadlessCanvas:
         self._check_cycle(canvas, source["id"], target["id"], kind)
         target_field_key = str(args.get("target_field_key") or args.get("targetFieldKey") or "").strip()
         if target.get("type") == "smart-ai-app":
-            target_field_key = self._resolve_app_field(canvas, source, target, target_field_key, args)
+            if not self._is_hypit_settings_canvas(canvas):
+                target_field_key = self._resolve_app_field(canvas, source, target, target_field_key, args)
+            # Hypit 配置图不靠 Schema 猜测用途或自动绑定字段。明确给出的 key
+            # 原样保留；未指定时先保留来源连线，必填与格式在执行预检时核对。
         self._add_connection(
             canvas,
             source["id"],
@@ -887,7 +1025,11 @@ class HeadlessCanvas:
         group["w"] = max(150, round(right - left + 36))
         group["h"] = max(130, round(bottom - top + 36 + 44))
 
-    def _can_connect(self, source: dict[str, Any], target: dict[str, Any]) -> bool:
+    def _can_connect(self, source: dict[str, Any], target: dict[str, Any], *, hypit_settings: bool = False) -> bool:
+        if source.get("type") == "smart-hypit-output":
+            return False
+        if target.get("type") == "smart-hypit-output":
+            return hypit_settings and self._is_execution(source)
         if target.get("type") in {"smart-group", "smart-result-group"}:
             return False
         source_type = source.get("type")
@@ -913,6 +1055,10 @@ class HeadlessCanvas:
         if source_type in {"smart-prompt", "smart-loop", "smart-group"}:
             return self._is_execution(target) or target_type in {"smart-loop", "smart-material"}
         return False
+
+    @staticmethod
+    def _is_hypit_settings_canvas(canvas: Mapping[str, Any]) -> bool:
+        return str(canvas.get("id") or "") == HYPIT_SETTINGS_CANVAS_ID
 
     @staticmethod
     def _connection_kind(source: dict[str, Any], target: dict[str, Any]) -> str:

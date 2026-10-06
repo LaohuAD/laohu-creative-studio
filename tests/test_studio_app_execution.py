@@ -214,6 +214,25 @@ class AppExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.canvas['nodes'][1]['images'][0]['url'], '/api/results/out')
         self.assertEqual(task['result']['media'][0]['kind'], 'image')
 
+    async def test_task_metadata_callback_is_persisted_server_side(self):
+        service = await self._service()
+        service.task_metadata = lambda canvas, node, request: {
+            'hypit_source_node_id': node['id'],
+            'hypit_source_recipe_fingerprint': 'b' * 64,
+            'hypit_supported_output_slots': ['text', 'image', 'video', 'audio', 'music', 'voice'],
+        }
+        result = await service.submit(self.canvas, self.canvas['nodes'][1], 'metadata')
+        await asyncio.gather(*list(service.handles.values()))
+        task = self.store.get_canvas_task(result['task_ids'][0])
+        self.assertEqual(task['hypit_source_recipe_fingerprint'], 'b' * 64)
+        self.assertEqual(task['hypit_supported_output_slots'], ['text', 'image', 'video', 'audio', 'music', 'voice'])
+
+    async def test_hypit_ai_app_request_uses_strict_actual_result_classification(self):
+        service = await self._service()
+        self.canvas['id'] = 'hypit-settings'
+        request = await service._prepare_request(self.canvas, self.canvas['nodes'][1], 'strict-hypit')
+        self.assertTrue(request['strict_result'])
+
     async def test_runninghub_workflow_applies_node_values_to_workflow_before_submit(self):
         service = await self._service()
         node = self.canvas['nodes'][1]

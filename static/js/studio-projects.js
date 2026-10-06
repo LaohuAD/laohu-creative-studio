@@ -5,27 +5,32 @@
     const page = document.querySelector('.studio-project-page');
     if(!page) return;
 
-    const module = String(document.body?.dataset?.studioModule || 'canvas').toLowerCase() === 'hypit' ? 'hypit' : 'canvas';
+    const requestedModule = String(document.body?.dataset?.studioModule || 'canvas').toLowerCase();
+    const module = ['canvas','hypit','article'].includes(requestedModule) ? requestedModule : 'canvas';
     const params = new URLSearchParams(location.search);
     const focusedProjectId = params.get('id') || '';
-    const state = { projects: [], loading: true, query: '', blockedProject: null, trashCount: 0, loadError: '' };
+    const state = { projects: [], loading: true, query: '', blockedProject: null, trashCount: 0, loadError: '', templates: [], templatesLoading: true, templatesError: '', selectedTemplateId: '' };
 
     const moduleCopy = {
         canvas: {
-            zh: { title:'画布', description:'把每件画布作品单独打开，继续组织素材和节点。', listTitle:'画布项目', empty:'还没有画布项目', emptyHint:'创建项目后，点击项目卡片上的“打开项目”进入画布。', newName:'新画布项目', prepared:'画布环境', module:'画布' },
-            en: { title:'Canvas', description:'Open each canvas work in its own tab and keep organising materials and nodes.', listTitle:'Canvas projects', empty:'No canvas projects yet', emptyHint:'Create a project, then choose Open project on its card.', newName:'New canvas project', prepared:'Canvas environment', module:'Canvas' }
+            zh: { title:'画布', description:'整理素材、连接画布节点，逐步完成作品。', listTitle:'画布项目', empty:'还没有画布项目', emptyHint:'创建项目后，点击项目卡片上的“打开项目”进入画布。', newName:'新画布项目', prepared:'画布环境', module:'画布' },
+            en: { title:'Canvas', description:'Organise assets, connect canvas nodes and build each piece step by step.', listTitle:'Canvas projects', empty:'No canvas projects yet', emptyHint:'Create a project, then choose Open project on its card.', newName:'New canvas project', prepared:'Canvas environment', module:'Canvas' }
         },
         hypit: {
-            zh: { title:'Hypit', description:'管理 Hypit 工程目录，连接后再进入具体创作流程。', listTitle:'Hypit 项目', empty:'还没有 Hypit 项目', emptyHint:'创建项目后，在项目卡片上接入 Agent、选择模型或打开作品。', newName:'新 Hypit 项目', prepared:'Hypit 环境', module:'Hypit' },
-            en: { title:'Hypit', description:'Manage Hypit workspaces, then connect to the project when you are ready to create.', listTitle:'Hypit projects', empty:'No Hypit projects yet', emptyHint:'Create a project, then connect your Agent, choose models or open the work from its card.', newName:'New Hypit project', prepared:'Hypit environment', module:'Hypit' }
+            zh: { title:'Hypit', description:'管理视频复刻项目，连接外部 Agent，并查看制作内容与结果。', listTitle:'Hypit 项目', empty:'还没有 Hypit 项目', emptyHint:'创建项目后，点击卡片上的“Agent 接入”复制指令，或点击“打开项目”查看作品。', newName:'新 Hypit 项目', prepared:'Hypit 环境', module:'Hypit' },
+            en: { title:'Hypit', description:'Manage video recreation projects, connect an external Agent and review the work.', listTitle:'Hypit projects', empty:'No Hypit projects yet', emptyHint:'Create a project, then choose Connect Agent to copy the instructions or Open project to review your work.', newName:'New Hypit project', prepared:'Hypit environment', module:'Hypit' }
+        },
+        article: {
+            zh: { title:'公众号文章', description:'创建文章项目，接入外部 Agent，按需准备技能，再打开文章复制标题、封面和正文。', listTitle:'文章项目', empty:'还没有文章项目', emptyHint:'创建并命名文章项目后，接入 Agent；完成文章后点击“打开项目”预览和复制。', newName:'新文章项目', prepared:'准备创作技能', module:'文章', templateTitle:'排版示例', templateDescription:'了解正文的结构、色彩与排版；封面和标题在文章页单独管理。示例不等于已为当前文章生成排版。', templateLoading:'正在读取版式示例…', templateFailed:'版式示例读取失败', templateEmpty:'暂时没有可用的版式示例', templateRetry:'重试读取示例', templatePreview:'当前示例预览', templateExample:'示例', templateDirectory:'六种正文版式', templateUnavailable:'预览暂不可用' },
+            en: { title:'Articles', description:'Create an article project, connect an external Agent, prepare skills if needed, then open the article to copy its title, cover and body.', listTitle:'Article projects', empty:'No article projects yet', emptyHint:'Create and name a project, connect an Agent, then choose Open project to review and copy the article.', newName:'New article project', prepared:'Prepare creative skills', module:'Articles', templateTitle:'Layout examples', templateDescription:'Explore body structure, color and layout. Titles and covers are managed separately on the article page. Examples are not layouts generated for your article.', templateLoading:'Loading layout examples…', templateFailed:'Could not load layout examples', templateEmpty:'No layout examples are available yet', templateRetry:'Retry loading examples', templatePreview:'Selected example', templateExample:'Example', templateDirectory:'Six body layouts', templateUnavailable:'Preview unavailable' }
         }
     };
 
     const commonCopy = {
         zh: {
-            workspace:'创意工作台', projects:'项目', canvasTools:'画布工具', canvasToolsTitle:'导入工程与回收站', canvasToolsHint:'导入与导出使用同一套工程 ZIP 结构；打开画布后可在工作流工具中导入工程，删除的画布可从回收站恢复。', trashKicker:'画布回收站', trashTitle:'可恢复的画布', search:'搜索项目', prepare:'获取创作技能', newProject:'新建项目', loading:'正在读取项目', loadingHint:'正在读取作品…', loadFailed:'项目列表读取失败', retry:'重新读取', count:n => `${n} 个项目，按最近更新时间排列`, filtered:(n,total) => `显示 ${n} / ${total} 个项目`, open:'打开项目', rename:'改名', connect:'Agent 接入', remove:'删除', updated:'最近更新', id:'项目 ID', copyDone:'连接信息已复制到剪贴板。', connection:'项目连接信息', copyFailed:'无法自动复制，下面是连接信息：', prepareTitle:'准备创作环境', prepareFailed:'准备环境接口暂不可用', importTitle:'导入工程', importHint:'工程导入与导出使用同一套 ZIP 结构。请先打开一个画布，再从工作流工具导入完整工程 ZIP。', trash:'回收站', trashEmpty:'回收站为空', restore:'恢复', purge:'彻底删除', purgeConfirm:'彻底删除后无法恢复，确认继续吗？', restoreDone:'已恢复画布', purgeDone:'已彻底删除', operationFailed:'操作失败', popupTitle:'浏览器拦截了新标签', popupHint:'点击下面的按钮打开项目。', popupOpen:'打开项目', close:'关闭', exportJson:'导出 JSON', exportZip:'导出工程', exporting:'正在导出...', exported:'已导出', exportFailed:'导出失败', zipHint:'已导出工程 ZIP；在画布的工作流工具中导入即可恢复节点、连线和资源。', confirmRename:'重命名项目', renamePlaceholder:'项目名称', renameRequired:'请输入项目名称', confirmDelete:name => `删除「${name}」？项目保存的数据会按模块规则处理。`, selected:'当前项目' },
+            workspace:'创意工作台', projects:'项目', canvasTools:'画布工具', canvasToolsTitle:'导入工程与回收站', canvasToolsHint:'导入与导出使用同一套工程 ZIP 结构；打开画布后可在工作流工具中导入工程，删除的画布可从回收站恢复。', trashKicker:'画布回收站', trashTitle:'可恢复的画布', search:'搜索项目', prepare:'准备创作技能', newProject:'新建项目', loading:'正在读取项目', loadingHint:'正在读取作品…', loadFailed:'项目列表读取失败', retry:'重新读取', open:'打开项目', rename:'改名', connect:'Agent 接入', remove:'删除', updated:'最近更新', id:'项目 ID', copyDone:'连接信息已复制到剪贴板。', connection:'项目连接信息', copyFailed:'无法自动复制，下面是连接信息：', prepareTitle:'准备创作环境', prepareFailed:'准备环境接口暂不可用', importTitle:'导入工程', importHint:'工程导入与导出使用同一套 ZIP 结构。请先打开一个画布，再从工作流工具导入完整工程 ZIP。', trash:'回收站', trashEmpty:'回收站为空', restore:'恢复', purge:'彻底删除', purgeConfirm:'彻底删除后无法恢复，确认继续吗？', restoreDone:'已恢复画布', purgeDone:'已彻底删除', operationFailed:'操作失败', popupTitle:'浏览器拦截了新标签', popupHint:'点击下面的按钮打开项目。', popupOpen:'打开项目', close:'关闭', exportJson:'导出 JSON', exportZip:'导出工程', exporting:'正在导出...', exported:'已导出', exportFailed:'导出失败', zipHint:'已导出工程 ZIP；在画布的工作流工具中导入即可恢复节点、连线和资源。', confirmRename:'重命名项目', renamePlaceholder:'项目名称', renameRequired:'请输入项目名称', confirmDelete:name => `删除「${name}」？项目保存的数据会按模块规则处理。`, selected:'当前项目' },
         en: {
-            workspace:'Creative workspace', projects:'Projects', canvasTools:'Canvas tools', canvasToolsTitle:'Import project and trash', canvasToolsHint:'Import and export use the same project ZIP structure. Open a canvas to import a project from Workflow tools; deleted canvases can be restored from Trash.', trashKicker:'Canvas trash', trashTitle:'Recoverable canvases', search:'Search projects', prepare:'Get creative skills', newProject:'New project', loading:'Loading projects', loadingHint:'Loading your work…', loadFailed:'Could not load projects', retry:'Retry', count:n => `${n} ${n === 1 ? 'project' : 'projects'}, sorted by recent activity`, filtered:(n,total) => `Showing ${n} of ${total} projects`, open:'Open project', rename:'Rename', connect:'Connect Agent', remove:'Delete', updated:'Updated', id:'Project ID', copyDone:'Connection details copied to the clipboard.', connection:'Project connection', copyFailed:'Automatic copy was unavailable. Connection details:', prepareTitle:'Prepare creative environment', prepareFailed:'The preparation endpoint is not available yet', importTitle:'Import project', importHint:'Import and export use the same project ZIP structure. Open a canvas, then import the complete project ZIP from Workflow tools.', trash:'Trash', trashEmpty:'Trash is empty', restore:'Restore', purge:'Delete permanently', purgeConfirm:'This cannot be undone. Continue?', restoreDone:'Canvas restored', purgeDone:'Deleted permanently', operationFailed:'Operation failed', popupTitle:'The browser blocked the new tab', popupHint:'Use the button below to open the project.', popupOpen:'Open project', close:'Close', exportJson:'Export JSON', exportZip:'Export project', exporting:'Exporting...', exported:'Exported', exportFailed:'Export failed', zipHint:'Project ZIP exported. Import it from canvas Workflow tools to restore nodes, connections, and assets.', confirmRename:'Rename project', renamePlaceholder:'Project name', renameRequired:'Enter a project name', confirmDelete:name => `Delete “${name}”? Saved data will follow the module rules.`, selected:'Current project' }
+            workspace:'Creative workspace', projects:'Projects', canvasTools:'Canvas tools', canvasToolsTitle:'Import project and trash', canvasToolsHint:'Import and export use the same project ZIP structure. Open a canvas to import a project from Workflow tools; deleted canvases can be restored from Trash.', trashKicker:'Canvas trash', trashTitle:'Recoverable canvases', search:'Search projects', prepare:'Prepare creative skills', newProject:'New project', loading:'Loading projects', loadingHint:'Loading your work…', loadFailed:'Could not load projects', retry:'Retry', open:'Open project', rename:'Rename', connect:'Connect Agent', remove:'Delete', updated:'Updated', id:'Project ID', copyDone:'Connection details copied to the clipboard.', connection:'Project connection', copyFailed:'Automatic copy was unavailable. Connection details:', prepareTitle:'Prepare creative environment', prepareFailed:'The preparation endpoint is not available yet', importTitle:'Import project', importHint:'Import and export use the same project ZIP structure. Open a canvas, then import the complete project ZIP from Workflow tools.', trash:'Trash', trashEmpty:'Trash is empty', restore:'Restore', purge:'Delete permanently', purgeConfirm:'This cannot be undone. Continue?', restoreDone:'Canvas restored', purgeDone:'Deleted permanently', operationFailed:'Operation failed', popupTitle:'The browser blocked the new tab', popupHint:'Use the button below to open the project.', popupOpen:'Open project', close:'Close', exportJson:'Export JSON', exportZip:'Export project', exporting:'Exporting...', exported:'Exported', exportFailed:'Export failed', zipHint:'Project ZIP exported. Import it from canvas Workflow tools to restore nodes, connections, and assets.', confirmRename:'Rename project', renamePlaceholder:'Project name', renameRequired:'Enter a project name', confirmDelete:name => `Delete “${name}”? Saved data will follow the module rules.`, selected:'Current project' }
     };
 
     function isEnglish(){ return String(window.StudioI18n?.lang?.() || document.documentElement.lang || 'zh').toLowerCase().startsWith('en'); }
@@ -109,10 +114,11 @@
         page.querySelectorAll('[data-copy="trashTitle"]').forEach(node => { node.textContent = common.trashTitle; });
         page.querySelectorAll('[data-module-label="canvas"]').forEach(node => { node.textContent = L('画布','Canvas'); });
         page.querySelectorAll('[data-module-label="hypit"]').forEach(node => { node.textContent = 'Hypit'; });
+        page.querySelectorAll('[data-module-label="article"]').forEach(node => { node.textContent = L('公众号文章','Articles'); });
         const tabs = page.querySelector('[data-role="module-tabs"]');
         if(tabs) tabs.setAttribute('aria-label', L('创作模块','Creative modules'));
         setText('studioModuleTitle', text.title);
-        setText('studioModuleDescription', text.description);
+        setText('studioProjectDescription', text.description);
         setText('studioProjectListTitle', text.listTitle);
         setText('studioNewProjectButton', common.newProject);
         const newButton = document.getElementById('studioNewProjectButton');
@@ -138,6 +144,7 @@
         });
         if(state.loading) setState('loading', common.loading, common.loadingHint);
         renderGuide();
+        renderArticleTemplates();
         refreshIcons();
         renderProjects();
     }
@@ -148,24 +155,18 @@
         return state.projects.filter(project => `${project.name || ''} ${project.id || ''}`.toLocaleLowerCase().includes(query));
     }
 
-    function updateCount(total, visible){
-        const node = document.getElementById('studioProjectCount');
-        if(!node) return;
-        node.textContent = state.query.trim() ? copy().filtered(visible, total) : copy().count(total);
-    }
-
     function cardMarkup(project){
         const isHypit = project.module === 'hypit';
+        const isArticle = module === 'article' || project.module === 'article';
         const selected = focusedProjectId && focusedProjectId === project.id ? ' selected' : '';
-        const icon = isHypit ? 'flask-conical' : 'layers-3';
-        const moduleName = isHypit ? 'Hypit' : L('画布','Canvas');
-        const utility = isHypit ? '' : `<div class="studio-card-utilities">
+        const icon = isHypit ? 'flask-conical' : isArticle ? 'notebook-pen' : 'layers-3';
+        const utility = isHypit || isArticle ? '' : `<div class="studio-card-utilities">
                 <button class="studio-card-utility" type="button" data-card-action="export-json" data-project-id="${escapeHtml(project.id)}">${escapeHtml(copy().exportJson)}</button>
                 <button class="studio-card-utility" type="button" data-card-action="export-zip" data-project-id="${escapeHtml(project.id)}">${escapeHtml(copy().exportZip)}</button>
             </div>`;
         return `<article class="studio-project-card${selected}" data-project-id="${escapeHtml(project.id)}">
             <div class="studio-project-card-head">
-                <div class="studio-project-card-icon${isHypit ? ' hypit' : ''}"><i data-lucide="${icon}" aria-hidden="true"></i></div>
+                <div class="studio-project-card-icon${isHypit ? ' hypit' : isArticle ? ' article' : ''}"><i data-lucide="${icon}" aria-hidden="true"></i></div>
                 <div class="studio-project-card-head-copy">
                     <h3 class="studio-project-card-title">${escapeHtml(project.name || '')}</h3>
                 </div>
@@ -184,10 +185,9 @@
     function renderProjects(){
         const grid = document.getElementById('studioProjectGrid');
         if(!grid) return;
-        if(state.loading){ updateCount(0, 0); return; }
-        if(state.loadError){ setState('error', copy().loadFailed, state.loadError); setText('studioProjectCount', '—'); return; }
+        if(state.loading) return;
+        if(state.loadError){ setState('error', copy().loadFailed, state.loadError); return; }
         const visible = filteredProjects();
-        updateCount(state.projects.length, visible.length);
         if(!state.projects.length){
             grid.innerHTML = '';
             setState('empty', moduleText().empty, moduleText().emptyHint);
@@ -201,6 +201,97 @@
         hideState();
         grid.innerHTML = visible.map(cardMarkup).join('');
         refreshIcons();
+    }
+
+    function safePreviewUrl(value){
+        try {
+            const url = new URL(String(value || ''), location.href);
+            if(url.origin !== location.origin || !['http:','https:'].includes(url.protocol)) return '';
+            return url.href;
+        } catch(e){ return ''; }
+    }
+
+    function templateOptionMarkup(template){
+        const english = isEnglish();
+        const name = english ? (template.name_en || template.name || template.id) : (template.name || template.name_en || template.id);
+        const description = english ? (template.description_en || template.description || '') : (template.description || template.description_en || '');
+        const color = /^#[0-9a-f]{3,8}$/i.test(String(template.color || '')) ? String(template.color) : 'var(--sp-accent)';
+        const selected = template.id === state.selectedTemplateId;
+        const tabId = `articleTemplateTab-${encodeURIComponent(String(template.id || ''))}`;
+        return `<button class="article-template-option${selected ? ' selected' : ''}" id="${escapeHtml(tabId)}" type="button" role="tab" data-template-id="${escapeHtml(template.id)}" aria-selected="${selected ? 'true' : 'false'}" aria-controls="articleTemplatePanel" aria-label="${escapeHtml(`${name}. ${description}`)}" tabindex="${selected ? '0' : '-1'}" style="--article-template-color:${color}">
+            <span class="article-template-option-swatch" aria-hidden="true"></span>
+            <span class="article-template-option-copy"><span class="article-template-example">${escapeHtml(moduleText().templateExample)}</span><strong>${escapeHtml(name)}</strong><span class="article-template-option-hint">${escapeHtml(description)}</span></span>
+            <span class="article-template-option-check" aria-hidden="true">✓</span>
+        </button>`;
+    }
+
+    function selectedTemplateMarkup(template){
+        if(!template) return '';
+        const english = isEnglish();
+        const name = english ? (template.name_en || template.name || template.id) : (template.name || template.name_en || template.id);
+        const description = english ? (template.description_en || template.description || '') : (template.description || template.description_en || '');
+        const color = /^#[0-9a-f]{3,8}$/i.test(String(template.color || '')) ? String(template.color) : 'var(--sp-accent)';
+        const preview = safePreviewUrl(template.preview_url);
+        const tabId = `articleTemplateTab-${encodeURIComponent(String(template.id || ''))}`;
+        const previewMarkup = preview
+            ? `<iframe id="articleTemplatePreview" title="${escapeHtml(name)} · ${escapeHtml(moduleText().templatePreview)}" sandbox="" referrerpolicy="no-referrer" loading="eager" src="${escapeHtml(preview)}"></iframe>`
+            : `<div id="articleTemplatePreviewUnavailable" class="article-template-unavailable">${escapeHtml(moduleText().templateUnavailable)}</div>`;
+        return `<section id="articleTemplatePanel" class="article-template-preview-pane" role="tabpanel" aria-labelledby="${escapeHtml(tabId)}" data-template-id="${escapeHtml(template.id)}" style="--article-template-color:${color}">
+            <header class="article-template-preview-heading"><span class="article-template-preview-mark" aria-hidden="true"></span><div><span class="article-template-example">${escapeHtml(moduleText().templateExample)} · ${escapeHtml(moduleText().templatePreview)}</span><h3>${escapeHtml(name)}</h3><p>${escapeHtml(description)}</p></div></header>
+            <div class="article-template-preview-frame">${previewMarkup}</div>
+        </section>`;
+    }
+
+    function selectArticleTemplate(id, {focus=false}={}){
+        if(!state.templates.some(template => template.id === id)) return;
+        state.selectedTemplateId = id;
+        renderArticleTemplates();
+        if(focus){
+            const button = [...(document.getElementById('articleTemplateGrid')?.querySelectorAll('.article-template-option') || [])].find(item => item.dataset.templateId === id);
+            button?.focus({preventScroll:true});
+        }
+    }
+
+    function renderArticleTemplates(){
+        if(module !== 'article') return;
+        const title = document.getElementById('articleTemplateTitle');
+        const description = document.getElementById('articleTemplateDescription');
+        const grid = document.getElementById('articleTemplateGrid');
+        const stateNode = document.getElementById('articleTemplateState');
+        if(title) title.textContent = moduleText().templateTitle;
+        if(description) description.textContent = moduleText().templateDescription;
+        if(!grid || !stateNode) return;
+        if(state.templatesLoading){ stateNode.hidden = false; stateNode.textContent = moduleText().templateLoading; grid.innerHTML = ''; return; }
+        if(state.templatesError){
+            stateNode.hidden = false; stateNode.textContent = state.templatesError;
+            grid.innerHTML = `<button class="studio-secondary-button" type="button" id="articleTemplateRetry">${escapeHtml(moduleText().templateRetry)}</button>`;
+            document.getElementById('articleTemplateRetry')?.addEventListener('click', loadArticleTemplates);
+            return;
+        }
+        if(!state.templates.length){ stateNode.hidden = false; stateNode.textContent = moduleText().templateEmpty; grid.innerHTML = ''; return; }
+        if(!state.templates.some(template => template.id === state.selectedTemplateId)) state.selectedTemplateId = state.templates[0].id;
+        stateNode.hidden = true;
+        const selected = state.templates.find(template => template.id === state.selectedTemplateId);
+        grid.innerHTML = `<nav id="articleTemplateDirectory" class="article-template-directory" role="tablist" aria-orientation="vertical" aria-label="${escapeHtml(moduleText().templateDirectory)}" data-selected-template-id="${escapeHtml(state.selectedTemplateId)}">
+            <div class="article-template-directory-heading"><span>${escapeHtml(moduleText().templateDirectory)}</span><small>${state.templates.length}</small></div>
+            <div class="article-template-options">${state.templates.map(templateOptionMarkup).join('')}</div>
+        </nav>${selectedTemplateMarkup(selected)}`;
+    }
+
+    async function loadArticleTemplates(){
+        if(module !== 'article') return;
+        state.templatesLoading = true; state.templatesError = ''; renderArticleTemplates();
+        try {
+            const data = await api('/api/studio/articles/templates');
+            state.templates = Array.isArray(data?.templates) ? data.templates : [];
+            if(!state.templates.some(template => template.id === state.selectedTemplateId)) state.selectedTemplateId = state.templates[0]?.id || '';
+            state.templatesLoading = false;
+            renderArticleTemplates();
+        } catch(error){
+            state.templatesLoading = false;
+            state.templatesError = error?.message || moduleText().templateFailed;
+            renderArticleTemplates();
+        }
     }
 
     async function loadProjects(){
@@ -221,7 +312,6 @@
             const grid = document.getElementById('studioProjectGrid');
             if(grid) grid.innerHTML = `<button class="studio-secondary-button" type="button" id="studioRetryButton">${escapeHtml(copy().retry)}</button>`;
             document.getElementById('studioRetryButton')?.addEventListener('click', loadProjects);
-            setText('studioProjectCount', '—');
         }
     }
 
@@ -240,8 +330,9 @@
     }
 
     function navigatePopup(popup, project){
-        if(!project?.url) return;
-        const target = new URL(project.url, location.origin).href;
+        const path = project?.url || (module === 'article' ? `/static/article.html?id=${encodeURIComponent(project?.id || '')}` : '');
+        if(!path) return;
+        const target = new URL(path, location.origin).href;
         if(popup){
             try { popup.document.title = moduleText().title; } catch(e) {}
             popup.location.href = target;
@@ -305,15 +396,20 @@
     function renderGuide(){
         let guide = document.getElementById('studioProjectGuide');
         if(!guide){guide=document.createElement('section');guide.id='studioProjectGuide';guide.className='studio-project-guide';document.querySelector('.studio-project-toolbar').after(guide);}
-        const steps = module === 'hypit' ? [
+        const steps = module === 'article' ? [
+            [L('创建项目','Create a project'),L('点击“新建项目”并命名；项目卡片会留在当前列表。','Choose New project and name it. The project card stays in this list.')],
+            [L('接入 Agent','Connect an Agent'),L('从项目卡片复制接入说明给外部 Agent；连接本身不会创作文章。','Copy the connection instructions from the project card to an external Agent. Connecting does not create the article.')],
+            [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('点击“准备创作技能”，让 Agent 检查已安装技能和可选更新；是否更新由你确认，不会自动覆盖。','Choose Prepare creative skills to have your Agent check installed skills and available updates. You decide whether to update; nothing is overwritten automatically.')],
+            [L('打开并复制文章','Open and copy the article'),L('点击“打开项目”，按需切换已有标题、封面和正文版本，再复制或导出。','Choose Open project, select available title, cover and body variants, then copy or export them.')]
+        ] : module === 'hypit' ? [
             [L('创建项目','Create project'),L('点击“新建项目”并命名。创建后留在这里，不会自动打开新标签。','Choose New project and name it. You stay on this page after creation.')],
-            [L('获取创作技能 · 首次使用','Get skills · first use'),L('点击“获取创作技能”，把说明复制给你的 Codex 等 Agent。已有 Hypit 技能可跳过；这是给 Agent 的说明，不是在这里聊天。','Choose Get creative skills and paste the instructions into your Agent, such as Codex. Skip this if Hypit skills are already installed.')],
+            [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('点击“准备创作技能”，让 Agent 检查已安装的 Hypit 技能和可选更新；是否更新由你确认，不会自动覆盖。','Choose Prepare creative skills to have your Agent check installed Hypit skills and available updates. You decide whether to update; nothing is overwritten automatically.')],
             [L('接入项目并创作','Connect and create'),L('点击项目卡片的“Agent 接入”，复制指令到 Agent 对话，再告诉它你想做什么。','Choose Connect Agent on the card, copy the instructions to your Agent, and describe your work.')],
             [L('打开作品','Open your work'),L('点击“打开项目”查看制作内容和结果。Agent 写入内容后页面会更新；关闭标签不影响后台任务。','Choose Open project to see the work and results. Content updates as your Agent writes; closing the tab does not stop background tasks.')]
         ] : [
             [L('创建项目','Create project'),L('点击“新建项目”并命名，项目卡片会出现在下方。','Choose New project and name it. A project card appears below.')],
             [L('打开画布','Open canvas'),L('点击卡片上的“打开项目”，在新标签中添加节点、连接素材并生成。可以完全手动操作。','Choose Open project to add nodes, connect media and generate in a new tab. You can work entirely manually.')],
-            [L('让 Agent 协助 · 可选','Use an Agent · optional'),L('点击卡片上的“Agent 接入”，复制指令到 Codex 等 Agent 对话，再描述你的需求。画布不需要额外准备创作环境。','Choose Connect Agent, paste the instructions into your Agent and describe your request. Canvas needs no extra creative environment.')]
+            [L('技能准备与 Agent 协助 · 可选','Prepare skills and use an Agent · optional'),L('可按需点击“准备创作技能”检查现有技能和可选更新；是否更新由你确认。也可点击卡片上的“Agent 接入”复制项目指令。画布仍可完全手动操作。','Choose Prepare creative skills to check installed skills and available updates; you decide whether to update. Or choose Connect Agent on a project card to copy project instructions. Canvas remains fully usable by hand.')]
         ];
         guide.innerHTML=steps.map(([title,body],i)=>`<div><b>${i+1}</b><section><strong>${escapeHtml(title)}</strong><p>${escapeHtml(body)}</p></section></div>`).join('');
     }
@@ -345,7 +441,9 @@
         try {
             const response = await api(`/api/studio/modules/${encodeURIComponent(module)}/preparation?lang=${isEnglish()?'en':'zh'}`);
             const text = typeof response === 'string' ? response : String(response?.text || response?.instructions || JSON.stringify(response, null, 2));
-            await showInstructions(L('获取 Hypit 创作技能','Get Hypit creative skills'), L('这是给你的 Agent 的技能准备说明。点击复制并粘贴到 Codex 等 Agent 中，让它检查并获取官方技能；已有可用技能就跳过。完成后回到项目卡片，点击“Agent 接入”。','These instructions help your Agent obtain the official Hypit skills. Copy them into your Agent; reuse existing skills if available. Then return to the project card and choose Connect Agent.'), text);
+            const title = L('准备创作技能','Prepare creative skills');
+            const intro = L('把说明交给外部 Agent，检查已安装的技能和可选更新。是否更新由你确认，不会自动覆盖；你也可以跳过。技能准备不会自动开始创作。','Give these instructions to your external Agent to check installed skills and available updates. You decide whether to update; nothing is overwritten automatically, and you can skip. Preparing skills does not start creative work.');
+            await showInstructions(title, intro, text);
         } catch(error){ await dialogAlert(error?.message || copy().prepareFailed, {type:'warning', title:copy().prepareTitle}); }
     }
 
@@ -445,6 +543,11 @@
     function projectById(id){ return state.projects.find(project => String(project.id) === String(id)); }
 
     page.addEventListener('click', event => {
+        const templateOption = event.target.closest('.article-template-option');
+        if(templateOption && page.contains(templateOption)){
+            selectArticleTemplate(templateOption.dataset.templateId, {focus:true});
+            return;
+        }
         const action = event.target.closest('[data-card-action]');
         if(action){
             const project = projectById(action.dataset.projectId);
@@ -464,6 +567,21 @@
             if(trashAction.dataset.trashAction === 'restore') restoreCanvas(trashAction.dataset.trashId);
             if(trashAction.dataset.trashAction === 'purge') purgeCanvas(trashAction.dataset.trashId);
         }
+    });
+
+    document.getElementById('articleTemplateGrid')?.addEventListener('keydown', event => {
+        const active = event.target.closest('.article-template-option');
+        if(!active) return;
+        const options = [...(document.getElementById('articleTemplateGrid')?.querySelectorAll('.article-template-option') || [])];
+        const index = options.indexOf(active);
+        let next = -1;
+        if(event.key === 'ArrowDown' || event.key === 'ArrowRight') next = (index + 1) % options.length;
+        else if(event.key === 'ArrowUp' || event.key === 'ArrowLeft') next = (index - 1 + options.length) % options.length;
+        else if(event.key === 'Home') next = 0;
+        else if(event.key === 'End') next = options.length - 1;
+        if(next < 0 || !options.length) return;
+        event.preventDefault();
+        selectArticleTemplate(options[next].dataset.templateId, {focus:true});
     });
 
     document.getElementById('studioProjectSearch')?.addEventListener('input', event => { state.query = event.target.value || ''; renderProjects(); });
@@ -488,9 +606,8 @@
     document.addEventListener('keydown', event => { if(event.key === 'Escape') closeTrash(); });
     window.addEventListener('studio-lang-change', updateLanguage);
     window.addEventListener('message', event => {
-        if(event.origin && event.origin !== location.origin) return;
+        if(event.origin !== location.origin || event.source !== window.parent) return;
         if(event.data?.type === 'studio-lang' && event.data.lang && window.StudioI18n) window.StudioI18n.set(event.data.lang);
-        if(event.data?.type === 'studio-theme' && window.StudioTheme) window.StudioTheme.set(event.data.theme);
         updateLanguage();
     });
 
@@ -513,5 +630,6 @@
     updateLanguage();
     refreshIcons();
     loadProjects();
+    loadArticleTemplates();
     runtimeSetup();
 })();

@@ -177,6 +177,156 @@ class ProjectStorageTests(unittest.TestCase):
         self.assertEqual(first["path"], "input/temporary/image/封面.png")
         self.assertEqual(len(list((self.root / "assets" / "input").rglob("*.png"))), 1)
 
+    def test_external_material_result_is_idempotent_and_shares_managed_file(self):
+        material = self.storage.store_material_bytes(b"external-image", "画面.png", scope="temporary")
+        receipt = {
+            "provider": "dreamina",
+            "tool": "dreamina-cli",
+            "model": "image-v3",
+            "task_id": "task-001",
+            "output_index": 1,
+        }
+
+        first = self.storage.register_external_material_result(material["id"], **receipt)
+        repeated = self.storage.register_external_material_result(material["id"], **receipt)
+        another_task = self.storage.register_external_material_result(
+            material["id"], **{**receipt, "task_id": "task-002"}
+        )
+
+        self.assertEqual(first["id"], repeated["id"])
+        self.assertNotEqual(first["id"], another_task["id"])
+        self.assertEqual(len(self.storage.list_results()), 2)
+        self.assertEqual(first["origin"], {
+            "kind": "external_cli",
+            "source_material_id": material["id"],
+            **receipt,
+            "provenance_verified": False,
+        })
+        self.assertNotIn("run_id", first)
+        self.assertNotIn("canvas_task_id", first)
+        self.assertEqual(self.storage.result_path(first["id"]), self.storage.material_path(material["id"]))
+        self.assertEqual(first["path"], material["path"])
+        self.assertEqual(len(list((self.root / "assets" / "input").rglob("*.png"))), 1)
+        self.assertEqual(list((self.root / "assets" / "output").rglob("*.png")), [])
+
+    def test_external_material_result_rejects_missing_unmanaged_and_corrupt_materials(self):
+        with self.assertRaises(StorageError):
+            self.storage.register_external_material_result(
+                "mat_missing", provider="dreamina", tool="cli", model="m1", task_id="t1", output_index=1
+            )
+
+        material = self.storage.store_material_bytes(b"managed", "managed.png", scope="asset")
+        index = json.loads(self.storage.material_index_path.read_text(encoding="utf-8"))
+        item = next(entry for entry in index["items"] if entry["id"] == material["id"])
+
+        item["path"] = "output/image/managed.png"
+        self.storage.material_index_path.write_text(json.dumps(index), encoding="utf-8")
+        with self.assertRaises(StorageError):
+            self.storage.register_external_material_result(
+                material["id"], provider="dreamina", tool="cli", model="m1", task_id="t1", output_index=1
+            )
+
+        item["path"] = "input/asset/image/managed.png"
+        item["sha256"] = "0" * 64
+        self.storage.material_index_path.write_text(json.dumps(index), encoding="utf-8")
+        with self.assertRaises(StorageError):
+            self.storage.register_external_material_result(
+                material["id"], provider="dreamina", tool="cli", model="m1", task_id="t1", output_index=1
+            )
+
+        item["sha256"] = material["sha256"]
+        item["path"] = "input/asset/image/missing.png"
+        self.storage.material_index_path.write_text(json.dumps(index), encoding="utf-8")
+        with self.assertRaises(StorageError):
+            self.storage.register_external_material_result(
+                material["id"], provider="dreamina", tool="cli", model="m1", task_id="t1", output_index=1
+            )
+
+    def test_external_material_result_rejects_url_path_credentials_and_invalid_index(self):
+        material = self.storage.store_material_bytes(b"validated", "validated.png", scope="asset")
+        valid = {"provider": "dreamina", "tool": "cli", "model": "m1", "task_id": "t1", "output_index": 1}
+        invalid_receipts = [
+            {**valid, "provider": "https://provider.example"},
+            {**valid, "tool": "data:image/png;base64,AA"},
+            {**valid, "model": "image api_key=private"},
+            {**valid, "task_id": "../secret"},
+            {**valid, "task_id": "task\nforged"},
+            {**valid, "output_index": True},
+            {**valid, "output_index": 0},
+            {**valid, "output_index": 101},
+        ]
+
+        for receipt in invalid_receipts:
+            with self.subTest(receipt=receipt), self.assertRaises(StorageError):
+                self.storage.register_external_material_result(material["id"], **receipt)
+        self.assertEqual(self.storage.list_results(), [])
+
+    def test_external_result_alias_tracks_material_moves_and_renames(self):
+        material = self.storage.store_material_bytes(b"movable-image", "初稿.png", scope="temporary")
+        result = self.storage.register_external_material_result(
+            material["id"], provider="dreamina", tool="cli", model="m1", task_id="task-move", output_index=1
+        )
+
+        promoted = self.storage.promote_material(material["id"])
+        promoted_result = self.storage.get_result(result["id"])
+        self.assertEqual(promoted_result["path"], promoted["path"])
+        self.assertEqual(self.storage.result_path(result["id"]), self.storage.material_path(material["id"]))
+
+        self.storage.add_material_scope(material["id"], "temporary")
+        demoted = self.storage.remove_material_scope(material["id"], "asset")
+        temporary = self.storage.get_material(material["id"])
+        self.assertEqual(demoted["deleted_file"], False)
+        self.assertEqual(temporary["path"], "input/temporary/image/初稿.png")
+        self.assertEqual(self.storage.get_result(result["id"])["path"], temporary["path"])
+
+        readded = self.storage.add_material_scope(material["id"], "asset")
+        self.assertEqual(readded["path"], "input/asset/image/初稿.png")
+        self.assertEqual(self.storage.get_result(result["id"])["path"], readded["path"])
+
+        renamed = self.storage.rename_material(material["id"], "终稿")
+        self.assertEqual(renamed["path"], "input/asset/image/终稿.png")
+        self.assertEqual(self.storage.get_result(result["id"])["path"], renamed["path"])
+        self.assertEqual(self.storage.result_path(result["id"]), self.storage.material_path(material["id"]))
+        self.assertEqual(len(list((self.root / "assets" / "input").rglob("*.png"))), 1)
+
+    def test_external_alias_delete_order_preserves_referenced_material_file(self):
+        material = self.storage.store_material_bytes(b"shared-image", "shared.png", scope="asset")
+        result = self.storage.register_external_material_result(
+            material["id"], provider="dreamina", tool="cli", model="m1", task_id="task-delete", output_index=1
+        )
+        shared_path = self.storage.material_path(material["id"])
+
+        self.assertTrue(self.storage.delete_result(result["id"]))
+        self.assertTrue(shared_path.is_file())
+        self.assertEqual(self.storage.material_path(material["id"]), shared_path)
+        alias2 = self.storage.register_external_material_result(
+            material["id"], provider="dreamina", tool="cli", model="m1", task_id="task-rename", output_index=1
+        )
+        renamed_alias = self.storage.rename_result(alias2["id"], "用户显示名")
+        self.assertEqual(renamed_alias["display_name"], "用户显示名.png")
+        self.assertEqual(renamed_alias["path"], material["path"])
+        self.assertEqual(self.storage.material_path(material["id"]), shared_path)
+        self.assertFalse((self.root / "assets" / "output" / "image" / "用户显示名.png").exists())
+        self.assertTrue(self.storage.delete_result(alias2["id"]))
+        self.assertEqual(self.storage.remove_material_scope(material["id"], "asset")["deleted_file"], True)
+        self.assertFalse(shared_path.exists())
+
+        material2 = self.storage.store_material_bytes(b"shared-image-2", "shared2.png", scope="asset")
+        result2 = self.storage.register_external_material_result(
+            material2["id"], provider="dreamina", tool="cli", model="m1", task_id="task-delete-2", output_index=1
+        )
+        shared_path2 = self.storage.material_path(material2["id"])
+
+        self.assertFalse(self.storage.remove_material_scope(material2["id"], "asset")["deleted_file"])
+        retained = self.storage.get_material(material2["id"])
+        self.assertEqual(retained["scopes"], [])
+        self.assertEqual(self.storage.result_path(result2["id"]), shared_path2)
+        self.assertTrue(shared_path2.is_file())
+
+        self.assertTrue(self.storage.delete_result(result2["id"]))
+        self.assertIsNone(self.storage.get_material(material2["id"]))
+        self.assertFalse(shared_path2.exists())
+
     def test_rename_result_preserves_stable_id_and_url(self):
         source = self.root / "generated.png"
         source.write_bytes(b"generated-image")

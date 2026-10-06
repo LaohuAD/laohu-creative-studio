@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import subprocess
 import sys
@@ -27,6 +28,7 @@ from model_capabilities import (
 )
 from fastapi.testclient import TestClient
 from project_storage import ProjectStorage
+from studio_module_models import select_options_for_slot
 
 
 def run_node(source):
@@ -43,6 +45,12 @@ def run_node(source):
 
 
 class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTestCase):
+    def test_history_write_target_is_isolated_from_project_data(self):
+        self.assertNotEqual(
+            Path(main.HISTORY_FILE).resolve(),
+            (ROOT / "data" / "history.json").resolve(),
+        )
+
     def test_jimeng_queue_payload_hides_invalid_zero_progress(self):
         pending = main.JimengPendingError(
             "submit-zero",
@@ -798,13 +806,43 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
             model="5.0Pro",
         )
 
-        with patch.object(main, "get_api_provider", return_value=provider), \
-             patch.object(main, "generate_jimeng_provider_image", new=AsyncMock(return_value=(
-                 {"type": "url", "value": "/api/results/jimeng-image.png"},
-                 {"images": ["/api/results/jimeng-image.png"]},
-             ))) as generate_mock, \
-             patch.object(main, "save_ai_image_to_output", new=AsyncMock(return_value="/api/results/jimeng-image.png")):
-            result = await main.build_online_image_result(payload)
+        real_history_file = ROOT / "data" / "history.json"
+        real_history_existed_before = real_history_file.exists()
+        real_history_hash_before = (
+            hashlib.sha256(real_history_file.read_bytes()).hexdigest()
+            if real_history_existed_before else None
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="model-capability-image-storage-",
+            dir=ROOT / "cache" / "studio-tests",
+        ) as isolated_root:
+            storage = ProjectStorage(isolated_root)
+            storage.ensure_layout()
+            with patch.object(main, "PROJECT_STORAGE", storage), \
+                 patch.object(main, "ASSETS_DIR", str(storage.assets_dir)), \
+                 patch.object(main, "MATERIALS_DIR", str(storage.materials_dir)), \
+                 patch.object(main, "OUTPUT_INPUT_DIR", str(storage.materials_dir / "imports")), \
+                 patch.object(main, "OUTPUT_OUTPUT_DIR", str(storage.results_dir)), \
+                 patch.object(main, "RESULTS_DIR", str(storage.results_dir)), \
+                 patch.object(main, "OUTPUT_DIR", str(Path(isolated_root) / "output")), \
+                 patch.object(main, "get_api_provider", return_value=provider), \
+                 patch.object(main, "generate_jimeng_provider_image", new=AsyncMock(return_value=(
+                     {"type": "url", "value": "/api/results/jimeng-image.png"},
+                     {"images": ["/api/results/jimeng-image.png"]},
+                 ))) as generate_mock, \
+                 patch.object(main, "save_ai_image_to_output", new=AsyncMock(return_value="/api/results/jimeng-image.png")):
+                result = await main.build_online_image_result(payload)
+
+        saved_history = json.loads(self.history_file.read_text(encoding="utf-8"))
+        self.assertEqual(len(saved_history), 1)
+        self.assertEqual(saved_history[0]["prompt"], payload.prompt)
+        self.assertEqual(saved_history[0]["images"], ["/api/results/jimeng-image.png"])
+        self.assertEqual(real_history_file.exists(), real_history_existed_before)
+        real_history_hash_after = (
+            hashlib.sha256(real_history_file.read_bytes()).hexdigest()
+            if real_history_file.exists() else None
+        )
+        self.assertEqual(real_history_hash_after, real_history_hash_before)
 
         self.assertEqual(result["images"], ["/api/results/jimeng-image.png"])
         self.assertEqual(generate_mock.await_args.args[2], "5.0Pro")
@@ -1436,6 +1474,28 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
         self.assertEqual(model["operation"], "text_to_video")
         self.assertEqual(model["platform"]["endpoint"], "rhart-video-s-official/text-to-video")
         self.assertTrue(model["runnable"])
+
+    def test_malformed_runninghub_region_snapshot_preserves_official_profiles(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            snapshots = root / "data" / "model_capabilities" / "snapshots"
+            snapshots.mkdir(parents=True)
+            (snapshots / "runninghub-official-public.json").write_text(json.dumps({
+                "models": [{
+                    "name_en": "gpt-image-2.5/flare/text-to-image/economy",
+                    "endpoint": "gpt-image-2.5/flare/text-to-image/economy",
+                    "output_type": "image",
+                    "params": [{"fieldKey": "prompt", "type": "STRING", "required": True}],
+                }],
+            }), encoding="utf-8")
+            (snapshots / "runninghub-cn.json").write_text(json.dumps({"items": {"bad": "shape"}}), encoding="utf-8")
+
+            profiles = ModelCapabilityRegistry(root).runninghub_snapshot_profiles("cn")
+
+        model_id = "gpt-image-2.5/flare/text-to-image/economy"
+        self.assertIn(model_id, profiles)
+        self.assertEqual(profiles[model_id]["node_type"], "image_generation")
+        self.assertTrue(profiles[model_id]["runnable"])
 
     def test_runninghub_legacy_seedance_ids_reuse_current_official_schema(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2234,6 +2294,52 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
         self.assertEqual(by_id["jimeng"]["capability_provider_id"], "jimeng-cli")
         self.assertEqual(by_id["codex"]["capability_provider_id"], "codex-cli")
         self.assertFalse(any(item["node_type"] == "image_generation" for item in by_id["codex"]["models"]))
+
+    def test_laohu_gpt_image_variants_share_canvas_and_hypit_candidates(self):
+        confirmed_gpt_ids = [
+            "laohu-image-g-v2.5-flare",
+            "laohu-image-g-v2.5-lowprice",
+            "laohu-image-g-v2.5-sunburst",
+            "laohu-image-g2-i2i",
+            "laohu-image-g2-t2i",
+            "laohu-image-g-v2-lowprice",
+        ]
+        grok_id = "laohu-image-gk-v2-edit"
+        providers = [{
+            "id": "ai-money",
+            "name": "laohu",
+            "protocol": "openai",
+            "enabled": True,
+            "image_models": [*confirmed_gpt_ids, grok_id],
+            "chat_models": [],
+            "video_models": [],
+            "audio_models": [],
+        }]
+
+        catalog = main.build_model_capability_catalog(providers)
+        runtime_provider = next(item for item in catalog["providers"] if item["id"] == "ai-money")
+        runtime_models = {item["model_id"]: item for item in runtime_provider["models"]}
+        for model_id in [*confirmed_gpt_ids, grok_id]:
+            self.assertTrue(runtime_models[model_id]["runnable"], model_id)
+            self.assertTrue(runtime_models[model_id]["selectable"], model_id)
+
+        options = {item["catalog_model_id"]: item for item in catalog["options"]}
+        for model_id in confirmed_gpt_ids:
+            self.assertEqual(options[model_id]["canonical_family_id"], "series-image-gpt-image")
+            self.assertEqual(options[model_id]["canonical_family_label"], {"zh": "GPT Image", "en": "GPT Image"})
+        self.assertEqual(options[grok_id]["canonical_family_id"], "series-image-grok-image")
+        self.assertEqual(options["laohu-image-g2-i2i"]["inputs"]["reference"]["min"], 1)
+        self.assertEqual(options["laohu-image-g2-t2i"]["operation"], "text_to_image")
+
+        canvas_options = select_options_for_slot(catalog["options"], "canvas", "image_generation")["options"]
+        hypit_options = select_options_for_slot(catalog["options"], "hypit", "image")["options"]
+        expected = set([*confirmed_gpt_ids, grok_id])
+        self.assertEqual({item["catalog_model_id"] for item in canvas_options}, expected)
+        self.assertEqual({item["catalog_model_id"] for item in hypit_options}, expected)
+        self.assertEqual(
+            {item["canonical_family_id"] for item in hypit_options if item["catalog_model_id"] in confirmed_gpt_ids},
+            {"series-image-gpt-image"},
+        )
 
     def test_removed_model_leaves_runtime_catalog_without_deleting_profile(self):
         providers = [{

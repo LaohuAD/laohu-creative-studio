@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException, Request, UploadFile
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import main
@@ -106,6 +107,155 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('must-not-leak', json.dumps(recipes))
         self.assertEqual(len(self.storage.list_results()), 1)
         self.assertEqual(self.storage.get_result(result['id'])['path'], result['path'])
+
+    async def test_external_cli_registration_http_aliases_managed_material_without_claiming_studio_run(self):
+        source = self.root / "external-cli-image.png"
+        source.write_bytes(b"external-cli-fixture-image")
+        material = self.storage.store_material_file(source, "temporary")
+        payload = {
+            "material_id": material["id"],
+            "provider": "fixture-provider",
+            "tool": "fixture-cli",
+            "model": "fixture-image-v1",
+            "task_id": "fixture-task-001",
+            "output_index": 1,
+        }
+        client = TestClient(main.app, base_url="http://127.0.0.1:3000")
+        headers = {"Origin": "http://127.0.0.1:3000"}
+
+        response = client.post(
+            "/api/results/register-external-cli-material",
+            json=payload,
+            headers=headers,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()["item"]
+        self.assertEqual(result["url"], f"/api/results/{result['id']}")
+        self.assertEqual(result["path"], material["path"])
+        self.assertEqual(result["origin"], {
+            "kind": "external_cli",
+            "source_material_id": material["id"],
+            "provider": "fixture-provider",
+            "tool": "fixture-cli",
+            "model": "fixture-image-v1",
+            "task_id": "fixture-task-001",
+            "output_index": 1,
+            "provenance_verified": False,
+        })
+        self.assertFalse(response.json()["studio_task_proof"])
+        self.assertNotIn("run_id", result)
+
+        repeated = client.post(
+            "/api/results/register-external-cli-material",
+            json=payload,
+            headers=headers,
+        )
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertEqual(repeated.json()["item"]["id"], result["id"])
+        self.assertEqual(len(self.storage.list_results()), 1)
+        self.assertEqual(len(list(self.storage.materials_dir.rglob("*.png"))), 1)
+
+        body_with_path = {**payload, "path": str(source)}
+        rejected_path = client.post(
+            "/api/results/register-external-cli-material",
+            json=body_with_path,
+            headers=headers,
+        )
+        self.assertEqual(rejected_path.status_code, 422)
+        body_with_run_claim = {**payload, "status": "succeeded", "run_id": "forged"}
+        rejected_claim = client.post(
+            "/api/results/register-external-cli-material",
+            json=body_with_run_claim,
+            headers=headers,
+        )
+        self.assertEqual(rejected_claim.status_code, 422)
+        rejected_origin = client.post(
+            "/api/results/register-external-cli-material",
+            json=payload,
+            headers={"Origin": "https://example.invalid"},
+        )
+        self.assertEqual(rejected_origin.status_code, 403)
+
+        downloaded = client.get(result["url"])
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(downloaded.content, b"external-cli-fixture-image")
+
+    async def test_result_delete_preflights_article_references_for_the_entire_batch(self):
+        referenced_file = self.root / "article-html.png"
+        unrelated_file = self.root / "unrelated.png"
+        referenced_file.write_bytes(b"article-referenced-result")
+        unrelated_file.write_bytes(b"unrelated-result")
+        referenced = self.storage.store_result_file(referenced_file, "article-html.png", move=True)
+        unrelated = self.storage.store_result_file(unrelated_file, "unrelated.png", move=True)
+        article = {
+            "project_id": "article-fixture",
+            "title": "引用保护测试文章",
+            "cover_variants": [],
+            "media_refs": [],
+            "variants": {"moyu-green": {"result_id": referenced["id"]}},
+        }
+        projects = SimpleNamespace(list=lambda module=None: [{"id": "article-fixture"}] if module == "article" else [])
+        articles = SimpleNamespace(get=lambda project_id: article if project_id == "article-fixture" else None)
+        client = TestClient(main.app, base_url="http://127.0.0.1:3000")
+
+        with patch.object(main, "STUDIO_PROJECTS", projects), patch.object(main, "STUDIO_ARTICLES", articles):
+            response = client.post(
+                "/api/results/delete",
+                json={"ids": [unrelated["id"], referenced["id"]]},
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("引用保护测试文章", response.json()["detail"])
+        self.assertIsNotNone(self.storage.get_result(referenced["id"]))
+        self.assertIsNotNone(self.storage.get_result(unrelated["id"]))
+        self.assertTrue(self.storage.result_path(referenced["id"]).is_file())
+        self.assertTrue(self.storage.result_path(unrelated["id"]).is_file())
+
+    async def test_article_asset_references_block_asset_batch_and_temporary_scope_removal(self):
+        referenced_asset = self.storage.store_material_bytes(b"article-cover-asset", "cover.png", scope="asset")
+        unrelated_asset = self.storage.store_material_bytes(b"unrelated-asset", "other.png", scope="asset")
+        temporary_asset = self.storage.store_material_bytes(b"temporary-asset", "temporary.png", scope="temporary")
+        article = {
+            "project_id": "article-fixture",
+            "title": "素材引用保护文章",
+            "cover_variants": [{"asset_id": referenced_asset["id"]}],
+            "media_refs": [{"asset_id": temporary_asset["id"]}],
+            "variants": {},
+        }
+        projects = SimpleNamespace(list=lambda module=None: [{"id": "article-fixture"}] if module == "article" else [])
+        articles = SimpleNamespace(get=lambda project_id: article if project_id == "article-fixture" else None)
+        library = main.default_asset_library()
+        category = library["libraries"][0]["categories"][0]
+        category["items"] = [
+            {"id": "entry-referenced", "material_id": referenced_asset["id"], "name": "cover.png"},
+            {"id": "entry-unrelated", "material_id": unrelated_asset["id"], "name": "other.png"},
+        ]
+        main.save_asset_library(library)
+        client = TestClient(main.app, base_url="http://127.0.0.1:3000")
+
+        with patch.object(main, "STUDIO_PROJECTS", projects), patch.object(main, "STUDIO_ARTICLES", articles):
+            batch = client.post(
+                "/api/asset-library/items/delete",
+                json={"library_id": "default", "ids": ["entry-unrelated", "entry-referenced"]},
+            )
+            temporary = client.post(
+                "/api/local-assets/delete",
+                json={"names": [temporary_asset["id"]]},
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
+
+        self.assertEqual(batch.status_code, 409, batch.text)
+        self.assertIn("素材引用保护文章", batch.json()["detail"])
+        self.assertIsNotNone(self.storage.get_material(referenced_asset["id"]))
+        self.assertIsNotNone(self.storage.get_material(unrelated_asset["id"]))
+        saved_library = main.load_asset_library()
+        saved_ids = {item["id"] for item in saved_library["libraries"][0]["categories"][0]["items"]}
+        self.assertEqual(saved_ids, {"entry-referenced", "entry-unrelated"})
+        self.assertEqual(temporary.status_code, 409, temporary.text)
+        self.assertIn("素材引用保护文章", temporary.json()["detail"])
+        self.assertIsNotNone(self.storage.get_material(temporary_asset["id"]))
+        self.assertTrue(self.storage.material_path(temporary_asset["id"]).is_file())
 
     async def test_canvas_upload_reuses_same_material_and_returns_stable_id(self):
         first = UploadFile(filename="封面.png", file=io.BytesIO(b"same-content"))

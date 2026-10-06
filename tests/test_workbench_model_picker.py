@@ -157,7 +157,14 @@ console.log(JSON.stringify({
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         self.assertIn("const variantFamily = family", source)
         self.assertIn("compatible_variants:compatibleVariants", source)
-        self.assertIn("settings.rhRegion = normalizeRunningHubRegion(button.dataset.capabilityPickerRegion", source)
+        picker_handler = source[source.index("dynamicParams.querySelectorAll('[data-capability-picker-option]')"):source.index("// 运行模式（最后一段）悬停预览", source.index("dynamicParams.querySelectorAll('[data-capability-picker-option]')"))]
+        self.assertIn("const chosenProfile=capabilityProfileForPickerChoice(", picker_handler)
+        self.assertIn("chosenProfile.region||chosenRegion", picker_handler)
+        self.assertIn("settings.rhRegion = normalizeRunningHubRegion(chosenProfile.region||chosenRegion", picker_handler)
+        self.assertIn("commitCapabilityPickerSelectionIdentity(node,chosenProfile", picker_handler)
+        self.assertIn("persistActiveSmartSettings();", picker_handler)
+        selection_identity = source[source.index("function commitCapabilityPickerSelectionIdentity"):source.index("function capabilityModelLabel", source.index("function commitCapabilityPickerSelectionIdentity"))]
+        self.assertIn("region_id:region", selection_identity)
         self.assertIn("initializedRunningHubRegions", source)
         self.assertIn("if(!provider) return [];", source[source.index("function runningHubEntries"):source.index("function runningHubEntryId")])
         workflow_loader = source[source.index("async function ensureRunningHubWorkflow"):source.index("async function currentRunningHubWorkflowConfig")]

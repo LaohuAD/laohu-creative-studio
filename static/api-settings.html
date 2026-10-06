@@ -7,23 +7,37 @@
     <script>
         (function(){
             try {
-                document.documentElement.dataset.studioFitScale = 'off';
-                var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light';
-                if(theme === 'dark') {
-                    document.documentElement.classList.add('studio-theme-dark');
-                    document.documentElement.classList.add('theme-dark');
+                var preferenceKey='studio_theme_preference_v1';
+                var knownThemeIds=['studio-violet','sunlit','vermilion','forest','classic'];
+                var saved=localStorage.getItem(preferenceKey), preference=null;
+                try { preference=saved?JSON.parse(saved):null; } catch(e) {}
+                var valid=preference && preference.version===1 && ['light','dark','system'].includes(preference.appearance);
+                if(!valid) {
+                    var old=localStorage.getItem('studio_theme'), legacy=localStorage.getItem('canvas_theme');
+                    var appearance=old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light';
+                    preference={version:1,themeId:'studio-violet',appearance:appearance};
+                    if(saved===null) { try { localStorage.setItem(preferenceKey,JSON.stringify(preference)); } catch(e) {} }
                 }
+                var themeId=knownThemeIds.includes(preference.themeId)?preference.themeId:'studio-violet';
+                var mode=['light','dark','system'].includes(preference.appearance)?preference.appearance:'light';
+                var theme=mode==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):mode;
+                var root=document.documentElement;
+                root.dataset.studioTheme=themeId; root.dataset.studioAppearance=theme; root.dataset.studioAppearanceMode=mode;
+                root.style.colorScheme=theme;
+                root.classList.toggle('studio-theme-dark',theme==='dark'); root.classList.toggle('theme-dark',theme==='dark');
+                root.dataset.studioFitScale='off'; var language=localStorage.getItem('studio_lang')||'zh'; document.documentElement.lang=language==='en'?'en':'zh-CN';
             } catch(e) {}
         })();
     </script>
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.08.17.1786430759"></script>
     <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
-    <script src="/static/js/theme.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/theme.js?v=2026.10.04.theme-1"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
     <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.17.1787100747">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
     <link rel="stylesheet" href="/static/css/hypit-settings.css?v=2026.09.23.1">
     <link rel="stylesheet" href="/static/css/model-config-control.css?v=2026.09.23.1">
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css?v=2026.10.04.theme-1">
 </head>
 <body>
     <div class="page">
@@ -53,6 +67,15 @@
                             <span class="provider-info">
                                 <span class="provider-name" data-i18n="hypit.navLabel">Hypit</span>
                                 <span class="provider-meta" data-i18n="hypit.navMeta">生成模型</span>
+                            </span>
+                        </button>
+                    </div>
+                    <div id="articleSettingsSubnav" class="hypit-subnav article-settings-subnav">
+                        <button id="articleSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openArticleSettings()" aria-current="false">
+                            <span class="provider-mark"><i data-lucide="notebook-pen" class="w-3.5 h-3.5"></i></span>
+                            <span class="provider-info">
+                                <span class="provider-name" data-i18n="articleSettings.navLabel">公众号文章</span>
+                                <span class="provider-meta" data-i18n="articleSettings.navMeta">文章生成配置</span>
                             </span>
                         </button>
                     </div>
@@ -90,8 +113,33 @@
                     </div>
                 </aside>
 
-                <main id="settingsContent" class="content">
-                    <div class="content-head">
+                <main id="settingsContent" class="content" data-api-startup="loading" aria-busy="true">
+                    <section id="apiSettingsBootState" class="api-settings-boot-state" data-state="loading" role="status" aria-live="polite">
+                        <span class="api-settings-boot-mark" aria-hidden="true"></span>
+                        <div class="api-settings-boot-copy">
+                            <div class="api-settings-boot-title">
+                                <span class="api-settings-boot-zh">正在读取 API 设置</span>
+                                <span class="api-settings-boot-en">Loading API settings</span>
+                            </div>
+                            <p class="api-settings-boot-loading">
+                                <span class="api-settings-boot-zh">正在读取已保存的平台与模型配置。</span>
+                                <span class="api-settings-boot-en">Reading saved platform and model settings.</span>
+                            </p>
+                            <p class="api-settings-boot-error" role="alert" hidden>
+                                <span class="api-settings-boot-zh">暂时无法读取设置，请检查本机服务后重试。</span>
+                                <span class="api-settings-boot-en">Settings could not be loaded. Check the local service and try again.</span>
+                            </p>
+                            <p class="api-settings-boot-empty" hidden>
+                                <span class="api-settings-boot-zh">设置已读取，目前没有平台连接。左侧的 CLI、AI 应用和 Hypit 入口仍可使用。</span>
+                                <span class="api-settings-boot-en">Settings loaded with no platform connections. The CLI, AI Apps, and Hypit entries on the left remain available.</span>
+                            </p>
+                        </div>
+                        <a id="apiSettingsBootRetry" class="api-settings-boot-retry" href="/static/api-settings.html" hidden>
+                            <span class="api-settings-boot-zh">重新读取</span>
+                            <span class="api-settings-boot-en">Retry</span>
+                        </a>
+                    </section>
+                    <div class="content-head" hidden>
                         <div>
                             <div id="editorTitle" class="editor-title" data-i18n="api.provider">平台</div>
                             <div id="editorSub" class="editor-sub" data-i18n="api.editorSub">配置平台地址、Key 与连接参数</div>
@@ -101,7 +149,7 @@
                         </div>
                     </div>
 
-                    <div id="providerSettingsView">
+                    <div id="providerSettingsView" hidden>
                     <section id="providerOnboardingCard" class="provider-onboarding-card" hidden></section>
 
                     <section id="customProviderGuide" class="custom-provider-guide" hidden>
@@ -365,17 +413,41 @@
                     </section>
 
                     <section id="hypitSettingsBlock" class="hypit-settings-block" hidden>
-                        <div class="hypit-settings-intro">
-                            <div>
-                                <div class="block-title" data-i18n="hypit.title">Hypit 原生模型</div>
-                                <div class="block-desc" data-i18n="hypit.description">选择各类生成任务使用的模型；参数由每次复刻任务按模型要求配置。</div>
+                        <div class="hypit-settings-toolbar">
+                            <div class="hypit-settings-heading">
+                                <div class="block-title" data-i18n="hypit.canvasTitle">Hypit 流程设置</div>
+                                <div class="block-desc" data-i18n="hypit.canvasDescription">在画布中配置生成流程，将执行节点连接到对应输出端口。</div>
+                            </div>
+                            <div class="hypit-settings-toolbar-actions">
+                                <button id="hypitSettingsReset" class="action-btn" type="button" data-i18n-title="hypit.canvasResetTitle" title="重置配置">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span data-i18n="hypit.canvasReset">重置配置</span>
+                                </button>
+                                <button id="hypitSettingsNewTab" class="action-btn" type="button" data-i18n-title="hypit.canvasNewTabTitle" title="打开画布编辑">
+                                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i><span data-i18n="hypit.canvasNewTab">打开画布编辑</span>
+                                </button>
                             </div>
                         </div>
                         <div id="hypitSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
-                        <div id="hypitSlots" class="hypit-slot-grid"></div>
-                        <div class="hypit-settings-actions">
-                            <button class="action-btn" type="button" onclick="reloadHypitSettings()"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i><span data-i18n="hypit.reload">重新读取</span></button>
+                        <iframe id="hypitSettingsCanvasFrame" class="hypit-settings-canvas" title="Hypit 流程设置画布" data-i18n-title="hypit.canvasFrameTitle" loading="eager" hidden></iframe>
+                    </section>
+
+                    <section id="articleSettingsBlock" class="hypit-settings-block article-settings-block" hidden>
+                        <div class="hypit-settings-toolbar">
+                            <div class="hypit-settings-heading">
+                                <div class="block-title" data-i18n="articleSettings.canvasTitle">文章生成配置</div>
+                                <div class="block-desc" data-i18n="articleSettings.canvasDescription">在同一画布中配置文章生成节点与输出。</div>
+                            </div>
+                            <div class="hypit-settings-toolbar-actions">
+                                <button id="articleSettingsReset" class="action-btn" type="button" data-i18n-title="articleSettings.canvasResetTitle" title="重置配置">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span data-i18n="articleSettings.canvasReset">重置配置</span>
+                                </button>
+                                <button id="articleSettingsNewTab" class="action-btn" type="button" data-i18n-title="articleSettings.canvasNewTabTitle" title="打开画布编辑">
+                                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i><span data-i18n="articleSettings.canvasNewTab">打开画布编辑</span>
+                                </button>
+                            </div>
                         </div>
+                        <div id="articleSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
+                        <iframe id="articleSettingsCanvasFrame" class="hypit-settings-canvas" title="文章生成配置画布" data-i18n-title="articleSettings.canvasFrameTitle" loading="eager" hidden></iframe>
                     </section>
 
                     <section id="comfyuiSettingsBlock" class="comfyui-settings-block" hidden>
@@ -430,12 +502,9 @@
                         </section>
                     </section>
 
-                    </div>
-
-                    <section id="canvasModelSettingsBlock" class="canvas-model-settings-block" hidden>
+                    <section id="providerModelDirectory" class="provider-model-directory">
                     <div class="canvas-models-context">
                         <div>
-                            <div class="block-title" data-i18n="api.canvasModelsTitle">画布模块模型</div>
                             <div class="block-desc" data-i18n="api.canvasModelsDesc">这里的启用清单决定画布候选；具体节点仍在节点设置中单选。AI 应用与本地 ComfyUI 不进入普通生成分类。</div>
                         </div>
                         <div id="runningHubModelRegionTabs" class="runninghub-model-region-tabs" role="tablist" aria-label="RunningHub 模型站点" hidden>
@@ -542,6 +611,30 @@
                             <div id="msLoraList" class="lora-list"></div>
                         </section>
                 </div>
+                    </section>
+                    </div>
+
+                    <section id="canvasModelSettingsBlock" class="canvas-model-settings-block" hidden>
+                        <div class="canvas-settings-toolbar">
+                            <div class="canvas-settings-heading">
+                                <div class="block-desc canvas-settings-description">
+                                    <span class="canvas-settings-description-zh">在共享画布中选择并配置模型。启用状态决定普通画布候选，节点仍可单独试跑。</span>
+                                    <span class="canvas-settings-description-en">Choose and configure models on the shared canvas. Enablement controls regular canvas candidates; nodes can still be tested individually.</span>
+                                </div>
+                            </div>
+                            <div class="canvas-settings-toolbar-actions">
+                                <button id="canvasSettingsReset" class="action-btn" type="button" title="重置画布模型设置并恢复显示偏好；不会改变模型启用清单" data-i18n-title="canvasSettings.resetTitle" aria-labelledby="canvasSettingsResetLabel">
+                                    <span id="canvasSettingsResetLabel" class="sr-only" data-i18n="canvasSettings.resetAccessible">重置画布模型设置和显示偏好</span>
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span data-i18n="articleSettings.canvasReset">重置配置</span>
+                                </button>
+                                <button id="canvasSettingsNewTab" class="action-btn" type="button" title="在独立标签中打开同一份画布模型设置" data-i18n-title="canvasSettings.newTabTitle" aria-labelledby="canvasSettingsNewTabLabel">
+                                    <span id="canvasSettingsNewTabLabel" class="sr-only" data-i18n="canvasSettings.newTabAccessible">在独立标签中打开同一份画布模型设置</span>
+                                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i><span data-i18n="articleSettings.canvasNewTab">打开画布编辑</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="canvasSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
+                        <iframe id="canvasSettingsCanvasFrame" class="hypit-settings-canvas" title="画布模型设置" data-i18n-title="canvasSettings.frameTitle" loading="eager" hidden></iframe>
                     </section>
             </main>
         </div>

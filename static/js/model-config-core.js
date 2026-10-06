@@ -289,6 +289,9 @@
             var tag = text(payload && payload.tag);
             var index = next.tags.indexOf(tag);
             if (index === -1) next.tags.push(tag); else next.tags.splice(index, 1);
+        } else if (event === 'clearFilters') {
+            next.search = '';
+            next.tags = [];
         } else if (event === 'toggleShowUnavailable') {
             next.showUnavailable = !next.showUnavailable;
         } else if (event === 'clickVariant') {
@@ -393,6 +396,32 @@
         return text(target && (target.request_model_id || target.endpoint_id || target.catalog_model_id));
     }
 
+    function parameterRequired(spec) {
+        return !!(spec && (spec.required === true || (spec.ui && spec.ui.required === true) || text(spec.level).toLowerCase() === 'required'));
+    }
+
+    function parameterDefaultIsValid(spec) {
+        if (!spec || !Object.prototype.hasOwnProperty.call(spec, 'default') || spec.default === undefined || spec.default === null || spec.default === '') return false;
+        var value = spec.default;
+        var type = text(spec.type).toLowerCase();
+        // enum 的默认值只有在选项清单存在且命中时才可验证；缺少候选
+        // 清单代表契约资料不完整，不能把任意非空默认值当成可运行值。
+        if (type === 'enum' && (!Array.isArray(spec.options) || !spec.options.length)) return false;
+        if (Array.isArray(spec.options) && (!spec.options.length || !spec.options.some(function (item) { return item === value || String(item) === String(value); }))) return false;
+        if (type === 'boolean') return value === true || value === false || value === 'true' || value === 'false' || value === 1 || value === 0;
+        if (type === 'integer') return Number.isInteger(Number(value)) && Number.isFinite(Number(value))
+            && (spec.min == null || Number(value) >= Number(spec.min))
+            && (spec.max == null || Number(value) <= Number(spec.max));
+        if (type === 'number') return Number.isFinite(Number(value))
+            && (spec.min == null || Number(value) >= Number(spec.min))
+            && (spec.max == null || Number(value) <= Number(spec.max));
+        return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+    }
+
+    function parameterMustStayVisible(spec) {
+        return parameterRequired(spec) && !parameterDefaultIsValid(spec);
+    }
+
     var api = {
         REASON_TEXT: REASON_TEXT,
         reasonText: reasonText,
@@ -414,7 +443,10 @@
         summaryParts: summaryParts,
         formatParameterValue: formatParameterValue,
         identifierLines: identifierLines,
-        copyValueFor: copyValueFor
+        copyValueFor: copyValueFor,
+        parameterRequired: parameterRequired,
+        parameterDefaultIsValid: parameterDefaultIsValid,
+        parameterMustStayVisible: parameterMustStayVisible
     };
 
     if (typeof module !== 'undefined' && module.exports) module.exports = api;

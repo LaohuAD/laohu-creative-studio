@@ -61,8 +61,9 @@ class SubmitOrderingTests(unittest.TestCase):
     SOURCE = (ROOT / "studio_hypit_models.py").read_text(encoding="utf-8")
 
     def _submit_body(self) -> str:
-        start = self.SOURCE.index("async def submit_request(")
-        return self.SOURCE[start:start + 2600]
+        start = self.SOURCE.index("    async def submit_request(")
+        end = self.SOURCE.index("\n    @router.", start)
+        return self.SOURCE[start:end]
 
     def test_fingerprint_is_computed_before_resolving_the_binding(self):
         body = self._submit_body()
@@ -74,9 +75,14 @@ class SubmitOrderingTests(unittest.TestCase):
     def test_existing_task_is_returned_before_projection(self):
         body = self._submit_body()
         first_lookup = body.index("existing = read_task(project_id, request_id)")
-        projection = body.index("_project_constraints(payload, binding, catalog)")
-        self.assertLess(first_lookup, projection,
-                        "已有任务必须在请求投影之前返回，不能让默认变化重新解释旧请求")
+        projections = (
+            ("工作流", body.index("projected = _project_workflow_constraints(")),
+            ("API 模型", body.index("projected = _project_constraints(")),
+        )
+        for source, projection in projections:
+            with self.subTest(source=source):
+                self.assertLess(first_lookup, projection,
+                                f"已有任务必须在{source}请求投影之前返回，不能让默认变化重新解释旧请求")
 
     def test_conflicting_input_returns_409(self):
         body = self._submit_body()
@@ -85,9 +91,25 @@ class SubmitOrderingTests(unittest.TestCase):
 
     def test_repeat_lookup_after_binding_read_guards_the_race(self):
         body = self._submit_body()
-        # 读取绑定与写任务之间还有一次查重，防止两个并发请求都创建任务
-        self.assertGreaterEqual(body.count("existing = read_task(project_id, request_id)"), 2,
+        # 读取绑定与投影后、写任务前再次查重，防止并发请求都创建任务。
+        lookup = "existing = read_task(project_id, request_id)"
+        lookup_at = [index for index in range(len(body)) if body.startswith(lookup, index)]
+        self.assertGreaterEqual(len(lookup_at), 2,
                                 "绑定读取后必须再查一次，避免并发下重复创建任务")
+        binding_at = body.index("binding = read_binding(project_id)")
+        projection_at = max(
+            body.index("projected = _project_workflow_constraints("),
+            body.index("projected = _project_constraints("),
+        )
+        write_at = body.index("write_task(record, project_id, request_id)")
+        self.assertLess(lookup_at[0], binding_at,
+                        "首次查重必须在读取可变模块绑定前完成")
+        self.assertLess(binding_at, lookup_at[1],
+                        "投影前读取绑定后必须二次查重")
+        self.assertLess(projection_at, lookup_at[1],
+                        "API/工作流投影完成后、写入前必须二次查重")
+        self.assertLess(lookup_at[1], write_at,
+                        "二次查重必须先于任务持久化")
 
 
 class FixedSlotBoundaryTests(unittest.TestCase):

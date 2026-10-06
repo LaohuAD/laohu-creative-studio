@@ -21,6 +21,7 @@ data/*
 assets/
 output/
 uploads/
+.cache/
 /workflows/
 cache/
 backups/

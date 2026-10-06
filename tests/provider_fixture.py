@@ -1,5 +1,6 @@
 """能力回归使用公开档案构造启用清单，不读取维护者的模型配置或密钥。"""
 import json
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,3 +45,17 @@ class ConfiguredProvidersMixin:
         replacement = patch.object(main, 'load_api_providers', side_effect=configured_providers)
         replacement.start()
         self.addCleanup(replacement.stop)
+
+        # 成功的模拟生图会走到 save_to_history；所有使用该 fixture 的测试
+        # 都把这条间接写入链指向外接盘测试缓存，避免污染用户历史。
+        history_cache = ROOT / 'cache' / 'studio-tests'
+        history_cache.mkdir(parents=True, exist_ok=True)
+        self._history_tempdir = tempfile.TemporaryDirectory(
+            prefix='provider-test-history-', dir=history_cache,
+        )
+        self.history_file = Path(self._history_tempdir.name) / 'data' / 'history.json'
+        self.history_file.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(self._history_tempdir.cleanup)
+        history_patch = patch.object(main, 'HISTORY_FILE', str(self.history_file))
+        history_patch.start()
+        self.addCleanup(history_patch.stop)

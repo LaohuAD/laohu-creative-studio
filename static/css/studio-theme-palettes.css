@@ -1,0 +1,108 @@
+/* 老胡画梦枋主题色板单一真源。应用端与 Hypit 原生端共用身份、明暗和语义角色。 */
+:root { --studio-font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Microsoft YaHei","Segoe UI",sans-serif; }
+/* 主题身份与明暗模式分离：页面组件只读取这组语义角色。 */
+:root, html[data-studio-theme="studio-violet"], html[data-studio-theme="studio-violet"] body, :root[data-laohu-theme-id="studio-violet"], html:not([data-studio-appearance="dark"]) .studio-theme-card[data-theme-id="studio-violet"] {
+    --studio-brand-primary:#7047eb;
+    --studio-create:#ffd34e;
+    --studio-create-strong:#edbd36;
+    --studio-create-text:#2c233a;
+    --studio-bg:#fbf8ff;
+    --studio-surface:#fffdf8;
+    --studio-card:#ffffff;
+    --studio-soft:#eee7ff;
+    --studio-soft-strong:#e2d7fa;
+    --studio-line:#d9d0e8;
+    --studio-line-strong:#b9accd;
+    --studio-text:#342e40;
+    --studio-strong-text:#fffdf8;
+    --studio-muted:#625b6d;
+    --studio-faint:#625b6d;
+    --studio-accent:#7047eb;
+    --studio-accent-strong:#5834c2;
+    --studio-accent-soft:rgba(112,71,235,.14);
+    --studio-accent-line:rgba(112,71,235,.42);
+    --studio-accent-text:#5834c2;
+    --studio-focus:#7047eb;
+    --studio-info:#4f3b80;
+    --studio-danger:#a53127;
+    --studio-shadow-color:rgba(53,37,77,.10);
+    --studio-scrollbar:rgba(112,71,235,.30);
+    --studio-scrollbar-hover:rgba(112,71,235,.55);
+}
+html[data-studio-theme="studio-violet"][data-studio-appearance="dark"], html[data-studio-theme="studio-violet"][data-studio-appearance="dark"] body, :root[data-laohu-theme-id="studio-violet"][data-laohu-theme="dark"], html[data-studio-appearance="dark"] .studio-theme-card[data-theme-id="studio-violet"] {
+    --studio-bg:#211b2b; --studio-surface:#2b2438; --studio-card:#352d45;
+    --studio-soft:#3a304d; --studio-soft-strong:#493b61; --studio-line:#594b6c; --studio-line-strong:#837494;
+    --studio-text:#fbf8ff; --studio-muted:#d7cfe1; --studio-faint:#d0c5dd;
+    --studio-accent:#7047eb; --studio-accent-strong:#5a37bd; --studio-accent-soft:rgba(187,167,255,.2);
+    --studio-accent-line:rgba(205,190,255,.58); --studio-accent-text:#d8ccff; --studio-focus:#f2c94c;
+    --studio-info:#d3c4ff; --studio-danger:#ff9b8e; --studio-shadow-color:rgba(0,0,0,.30);
+    --studio-scrollbar:rgba(203,187,255,.44); --studio-scrollbar-hover:rgba(221,211,255,.7);
+}
+
+html[data-studio-theme="sunlit"], html[data-studio-theme="sunlit"] body, :root[data-laohu-theme-id="sunlit"], html:not([data-studio-appearance="dark"]) .studio-theme-card[data-theme-id="sunlit"] {
+    --studio-brand-primary:#3f5d19; --studio-create:#ffeda8; --studio-create-strong:#f2dc85; --studio-create-text:#293719;
+    --studio-bg:#f2ecdf; --studio-surface:#fffaf0; --studio-card:#fffdf7; --studio-soft:#e8edda; --studio-soft-strong:#d9e3c7;
+    --studio-line:#d9d1bc; --studio-line-strong:#b8ad91; --studio-text:#29372d; --studio-strong-text:#fffdf8; --studio-muted:#4c5b4f; --studio-faint:#4c5b4f;
+    --studio-accent:#3f5d19; --studio-accent-strong:#2e4710; --studio-accent-soft:rgba(77,104,19,.14); --studio-accent-line:rgba(63,93,25,.42);
+    --studio-accent-text:#365115; --studio-focus:#8a6700; --studio-info:#35564c; --studio-danger:#8a2924;
+    --studio-shadow-color:rgba(64,59,37,.11); --studio-scrollbar:rgba(63,93,25,.3); --studio-scrollbar-hover:rgba(63,93,25,.56);
+}
+html[data-studio-theme="sunlit"][data-studio-appearance="dark"], html[data-studio-theme="sunlit"][data-studio-appearance="dark"] body, :root[data-laohu-theme-id="sunlit"][data-laohu-theme="dark"], html[data-studio-appearance="dark"] .studio-theme-card[data-theme-id="sunlit"] {
+    --studio-bg:#22281e; --studio-surface:#2c3325; --studio-card:#37402d; --studio-soft:#3d4932; --studio-soft-strong:#4d5c3e;
+    --studio-line:#59644b; --studio-line-strong:#7d896b; --studio-text:#faf7ec; --studio-muted:#d9dfcb; --studio-faint:#d0d9c1;
+    --studio-accent:#4d6813; --studio-accent-strong:#3c5310; --studio-accent-soft:rgba(189,214,125,.19); --studio-accent-line:rgba(203,223,153,.52);
+    --studio-accent-text:#d7e8ad; --studio-focus:#ffeda8; --studio-info:#c6d8bd; --studio-danger:#ff9a8c;
+    --studio-shadow-color:rgba(0,0,0,.3); --studio-scrollbar:rgba(210,225,174,.42); --studio-scrollbar-hover:rgba(230,239,207,.7);
+}
+
+html[data-studio-theme="vermilion"], html[data-studio-theme="vermilion"] body, :root[data-laohu-theme-id="vermilion"], html:not([data-studio-appearance="dark"]) .studio-theme-card[data-theme-id="vermilion"] {
+    --studio-brand-primary:#963c2b; --studio-create:#efc66e; --studio-create-strong:#ddb052; --studio-create-text:#3c2b1d;
+    --studio-bg:#f8eee9; --studio-surface:#fff9f5; --studio-card:#fffdfb; --studio-soft:#f1ded6; --studio-soft-strong:#e7c9bd;
+    --studio-line:#e2c8be; --studio-line-strong:#be9e91; --studio-text:#3a2926; --studio-strong-text:#fffdf8; --studio-muted:#624b45; --studio-faint:#624b45;
+    --studio-accent:#963c2b; --studio-accent-strong:#762d21; --studio-accent-soft:rgba(150,60,43,.13); --studio-accent-line:rgba(150,60,43,.42);
+    --studio-accent-text:#762d21; --studio-focus:#8c2d21; --studio-info:#59464f; --studio-danger:#932a20;
+    --studio-shadow-color:rgba(76,43,32,.11); --studio-scrollbar:rgba(150,60,43,.3); --studio-scrollbar-hover:rgba(150,60,43,.56);
+}
+html[data-studio-theme="vermilion"][data-studio-appearance="dark"], html[data-studio-theme="vermilion"][data-studio-appearance="dark"] body, :root[data-laohu-theme-id="vermilion"][data-laohu-theme="dark"], html[data-studio-appearance="dark"] .studio-theme-card[data-theme-id="vermilion"] {
+    --studio-bg:#2b1d1b; --studio-surface:#382522; --studio-card:#45302b; --studio-soft:#50352f; --studio-soft-strong:#65433b;
+    --studio-line:#684a42; --studio-line-strong:#917066; --studio-text:#fff6f1; --studio-muted:#e5d0c8; --studio-faint:#ddc5bc;
+    --studio-accent:#9e3e2d; --studio-accent-strong:#873323; --studio-accent-soft:rgba(236,137,111,.19); --studio-accent-line:rgba(239,163,140,.52);
+    --studio-accent-text:#ffd0c1; --studio-focus:#f3cf75; --studio-info:#e5c6bb; --studio-danger:#ff9c8c;
+    --studio-shadow-color:rgba(0,0,0,.31); --studio-scrollbar:rgba(242,183,165,.43); --studio-scrollbar-hover:rgba(255,214,200,.68);
+}
+
+html[data-studio-theme="forest"], html[data-studio-theme="forest"] body, :root[data-laohu-theme-id="forest"], html:not([data-studio-appearance="dark"]) .studio-theme-card[data-theme-id="forest"] {
+    --studio-brand-primary:#315f4a; --studio-create:#e7c96a; --studio-create-strong:#d7b64e; --studio-create-text:#26382d;
+    --studio-bg:#edf3e8; --studio-surface:#f9fff7; --studio-card:#ffffff; --studio-soft:#e1ecd9; --studio-soft-strong:#d0e1ca;
+    --studio-line:#cbdcc9; --studio-line-strong:#9db5a0; --studio-text:#26392f; --studio-strong-text:#fffdf8; --studio-muted:#4b6154; --studio-faint:#4b6154;
+    --studio-accent:#315f4a; --studio-accent-strong:#244a39; --studio-accent-soft:rgba(49,95,74,.13); --studio-accent-line:rgba(49,95,74,.42);
+    --studio-accent-text:#244a39; --studio-focus:#805f00; --studio-info:#36584d; --studio-danger:#913c2d;
+    --studio-shadow-color:rgba(39,69,50,.11); --studio-scrollbar:rgba(49,95,74,.3); --studio-scrollbar-hover:rgba(49,95,74,.56);
+}
+html[data-studio-theme="forest"][data-studio-appearance="dark"], html[data-studio-theme="forest"][data-studio-appearance="dark"] body, :root[data-laohu-theme-id="forest"][data-laohu-theme="dark"], html[data-studio-appearance="dark"] .studio-theme-card[data-theme-id="forest"] {
+    --studio-bg:#1c2a25; --studio-surface:#263630; --studio-card:#31423b; --studio-soft:#384b42; --studio-soft-strong:#496054;
+    --studio-line:#53675b; --studio-line-strong:#7a9182; --studio-text:#f4f8ef; --studio-muted:#d0ddd2; --studio-faint:#c6d6ca;
+    --studio-accent:#315f4a; --studio-accent-strong:#284f3d; --studio-accent-soft:rgba(126,189,151,.18); --studio-accent-line:rgba(154,211,177,.5);
+    --studio-accent-text:#b9e4c9; --studio-focus:#e7c96a; --studio-info:#c2ddca; --studio-danger:#ff9c8b;
+    --studio-shadow-color:rgba(0,0,0,.3); --studio-scrollbar:rgba(177,218,190,.4); --studio-scrollbar-hover:rgba(214,239,221,.68);
+}
+
+html[data-studio-theme="classic"], html[data-studio-theme="classic"] body, :root[data-laohu-theme-id="classic"], html:not([data-studio-appearance="dark"]) .studio-theme-card[data-theme-id="classic"] {
+    --studio-brand-primary:#365d68; --studio-create:#e7c875; --studio-create-strong:#d8b452; --studio-create-text:#29373b;
+    --studio-bg:#f1f2ef; --studio-surface:#fbfcf9; --studio-card:#ffffff; --studio-soft:#e5eae8; --studio-soft-strong:#d8e0df;
+    --studio-line:#d1d9d7; --studio-line-strong:#a7b4b4; --studio-text:#293438; --studio-strong-text:#fffdf8; --studio-muted:#4f5d61; --studio-faint:#4f5d61;
+    --studio-accent:#365d68; --studio-accent-strong:#294851; --studio-accent-soft:rgba(54,93,104,.13); --studio-accent-line:rgba(54,93,104,.42);
+    --studio-accent-text:#294851; --studio-focus:#6e4a00; --studio-info:#345660; --studio-danger:#923c32;
+    --studio-shadow-color:rgba(35,50,54,.11); --studio-scrollbar:rgba(54,93,104,.3); --studio-scrollbar-hover:rgba(54,93,104,.56);
+}
+html[data-studio-theme="classic"][data-studio-appearance="dark"], html[data-studio-theme="classic"][data-studio-appearance="dark"] body, :root[data-laohu-theme-id="classic"][data-laohu-theme="dark"], html[data-studio-appearance="dark"] .studio-theme-card[data-theme-id="classic"] {
+    --studio-bg:#20282b; --studio-surface:#293438; --studio-card:#323f43; --studio-soft:#39494d; --studio-soft-strong:#4a5d61;
+    --studio-line:#56666a; --studio-line-strong:#829296; --studio-text:#f5f6f2; --studio-muted:#d2dddc; --studio-faint:#c9d6d6;
+    --studio-accent:#35636c; --studio-accent-strong:#294f57; --studio-accent-soft:rgba(138,193,200,.18); --studio-accent-line:rgba(166,213,218,.5);
+    --studio-accent-text:#b8e0e4; --studio-focus:#e7c875; --studio-info:#c4dcdf; --studio-danger:#ff9b8e;
+    --studio-shadow-color:rgba(0,0,0,.3); --studio-scrollbar:rgba(188,216,217,.4); --studio-scrollbar-hover:rgba(226,241,239,.68);
+}
+
+
+/* 卡片预览直接读取各身份声明的真实语义角色，不再维护第二份色值。 */
+.studio-theme-card { --theme-preview-bg:var(--studio-bg); --theme-preview-surface:var(--studio-surface); --theme-preview-accent:var(--studio-accent); --theme-preview-text:var(--studio-text); }

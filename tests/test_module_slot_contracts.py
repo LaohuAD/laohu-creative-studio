@@ -76,6 +76,39 @@ class SlotContractTests(unittest.TestCase):
         result = smm.validate_slot_binding('hypit', 'music', option(node_type='music_generation', operation='music', output_contract='audio,min=1,max=1'))
         self.assertTrue(result['valid'], result['reasons'])
 
+    def test_article_declares_six_real_canvas_output_slots_without_hypit_filtering(self):
+        module = smm.module_descriptor("article")
+        self.assertIsNotNone(module, "文章设置图必须是已注册宿主，不能冒充 canvas 或 hypit")
+        self.assertEqual(module["module_id"], "article")
+        slots = {item["id"]: item for item in module["slots"]}
+        self.assertEqual(set(slots), {"text", "image", "video", "audio", "music", "voice"})
+        expected = {
+            "text": ("text_generation", "text"),
+            "image": ("image_generation", "image"),
+            "video": ("video_generation", "video"),
+            "audio": ("audio_generation", "audio"),
+            "music": ("music_generation", "audio"),
+            "voice": ("audio_generation", "audio"),
+        }
+        for slot_id, (node_type, media_type) in expected.items():
+            descriptor = slots[slot_id]
+            self.assertEqual(descriptor["node_type"], node_type)
+            self.assertEqual(descriptor["expected_output"]["media_type"], media_type)
+            self.assertEqual(descriptor["selection_policy"], "fixed")
+
+    def test_article_uses_enabled_exact_node_contract_but_not_hypit_operation_exclusions(self):
+        # 同为 text-to-image 的 image-edit/upscale profile 按真实输出模型节点契约保留；
+        # Hypit 专属用途过滤只能施加于 hypit 宿主。
+        image_slot = smm.slot_descriptor("article", "image")
+        self.assertIsNotNone(image_slot)
+        profile = option(operation="image_upscale")
+        profile["node_type"] = "image_generation"
+        result = smm.validate_slot_binding("article", "image", profile)
+        self.assertTrue(result["valid"], result["reasons"])
+        disabled = smm.validate_slot_binding("article", "image", option(runnable=False))
+        self.assertFalse(disabled["valid"])
+        self.assertIn("ADAPTER_MISSING", [item["code"] for item in disabled["reasons"]])
+
 
 class HypitGenerationEligibilityTests(unittest.TestCase):
     def test_tools_and_incomplete_inputs_are_not_generation_candidates(self):
@@ -245,7 +278,7 @@ class ProjectionContractBoundaryTests(unittest.TestCase):
         import main
         from fastapi.testclient import TestClient
 
-        cls.client = TestClient(main.app)
+        cls.client = TestClient(main.app, base_url="http://127.0.0.1")
 
     def test_capabilities_endpoint_exposes_the_flat_projection(self):
         response = self.client.get("/api/model-capabilities")
@@ -264,13 +297,32 @@ class ProjectionContractBoundaryTests(unittest.TestCase):
                 self.assertIn(key, option, f"前端会读取 {key}，投影必须提供")
         self.assertTrue(any(o["runnable"] is True for o in options), "至少要有可运行候选")
 
-    def test_settings_page_loads_the_script_and_the_slot_container(self):
-        # Hypit 槽位设置位于 API 设置页的「模块模型」区，不是 hypit.html（那是原生 Studio 宿主页）。
+    def test_hypit_capabilities_endpoint_returns_the_full_option_projection(self):
+        response = self.client.get("/api/studio/hypit/models/capabilities")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        options = payload.get("options")
+        self.assertIsInstance(options, list)
+        self.assertTrue(options, "Hypit capability response must include its candidate options")
+        self.assertEqual(set(payload.get("slot_options") or {}), {"text", "image", "video", "audio", "music", "voice"})
+        consumed = ("option_id", "node_type", "runnable", "connection_id", "catalog_model_id",
+                    "region_id", "parameters", "inputs")
+        for option in options:
+            for key in consumed:
+                self.assertIn(key, option, f"Hypit candidate projection is missing {key}")
+
+    def test_settings_page_loads_the_shared_canvas_shell_and_route(self):
+        # Hypit 设置现在嵌入共享画布；API 页不再维护第二套六槽选择器。
         page = (ROOT / "static" / "api-settings.html").read_text(encoding="utf-8")
-        self.assertIn("hypit-settings.js", page, "设置页必须加载槽位脚本")
-        self.assertIn('id="hypitSlots"', page, "设置页必须提供槽位容器")
+        self.assertIn("hypit-settings.js", page, "设置页必须加载共享画布宿主脚本")
+        self.assertIn('id="hypitSettingsCanvasFrame"', page, "设置页必须挂载共享画布 iframe")
+        self.assertIn('id="hypitSettingsReset"', page, "共享画布需要原子重置入口")
+        self.assertIn('id="hypitSettingsNewTab"', page, "共享画布需要同一画布的独立编辑入口")
         source = (ROOT / "static" / "js" / "hypit-settings.js").read_text(encoding="utf-8")
-        self.assertIn("/api/model-capabilities", source, "必须取用扁平投影来源")
+        self.assertIn("fetch('/api/hypit/settings-canvas'", source, "宿主必须获取专用共享画布")
+        self.assertIn("SETTINGS_CANVAS_ID = 'hypit-settings'", source, "共享画布 ID 必须稳定")
+        self.assertIn("/static/smart-canvas.html", source, "必须复用智能画布页面")
+        self.assertIn("mode=hypit-settings", source, "专用模式必须通过同一画布 URL 识别")
 
     def test_missing_projection_is_not_silent(self):
         source = (ROOT / "static" / "js" / "hypit-settings.js").read_text(encoding="utf-8")

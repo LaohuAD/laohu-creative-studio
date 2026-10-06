@@ -1,13 +1,13 @@
 /* Hypit 设置只增加自己的作用域，避免改动现有平台和 ComfyUI 样式。 */
 .hypit-subnav,
 .hypit-settings-block {
-    --line: var(--studio-line, #ded8ce);
-    --line-strong: var(--studio-line-strong, #c7beb1);
-    --soft: var(--studio-soft, #f0ebe2);
-    --panel: var(--studio-surface, #fffaf2);
-    --text: var(--studio-text, #30363b);
-    --muted: var(--studio-muted, #6f7b83);
-    --bg: var(--studio-bg, #f7f3eb);
+    --line: var(--studio-line, #e4dce9);
+    --line-strong: var(--studio-line-strong, #c8bdd3);
+    --soft: var(--studio-soft, #f1ecf5);
+    --panel: var(--studio-surface, #fffdfb);
+    --text: var(--studio-text, #342e40);
+    --muted: var(--studio-muted, #706b7a);
+    --bg: var(--studio-bg, #fff9f0);
     color: var(--text);
     font-family: var(--studio-font-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif);
 }
@@ -24,11 +24,16 @@
     background: var(--soft);
 }
 
-.hypit-subnav-item:hover,
+.hypit-subnav-item:hover {
+    border-color: var(--studio-accent, var(--line-strong));
+    color: var(--studio-accent-text, var(--studio-accent-strong, var(--text)));
+    background: var(--studio-accent-soft, var(--panel));
+}
+
 .hypit-subnav-item.active {
     border-color: var(--studio-accent, var(--line-strong));
-    color: var(--studio-accent-strong, var(--text));
-    background: var(--studio-accent-soft, var(--panel));
+    color: #fff;
+    background: var(--studio-accent, var(--line-strong));
 }
 
 .hypit-logo-mark {
@@ -64,11 +69,11 @@
 }
 
 .hypit-settings-status[data-state="error"] {
-    color: var(--studio-danger, #b85c62);
+    color: var(--studio-danger, #f15b49);
 }
 
 .hypit-settings-status[data-state="success"] {
-    color: #3b8068;
+    color: var(--studio-success, #5f8a5f);
 }
 
 .hypit-settings-note {
@@ -109,7 +114,7 @@
 .hypit-capability-chip-meta {
     margin-top: 4px;
     color: var(--muted);
-    font-size: 10.5px;
+    font-size: 12px;
     line-height: 1.45;
 }
 
@@ -126,13 +131,13 @@
     gap: 8px;
     padding: 10px 12px;
     border: 1px solid var(--line);
-    border-radius: 16px;
-    background: var(--panel);
-    box-shadow: 0 8px 22px rgba(15, 23, 42, .045);
+    border-radius: var(--studio-radius-panel, 16px);
+    background: var(--studio-card, #fffdfb);
+    box-shadow: none;
 }
 .hypit-model-config-fallback { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-bottom:4px; }
-.hypit-model-config-fallback label { display:grid; gap:5px; min-width:0; color:var(--muted); font-size:10px; }
-.hypit-model-config-fallback select { width:100%; min-width:0; height:38px; padding:0 9px; border:1px solid var(--line); border-radius:9px; background:var(--card); color:var(--text); text-align:center; }
+.hypit-model-config-fallback label { display:grid; gap:5px; min-width:0; color:var(--muted); font-size:12px; }
+.hypit-model-config-fallback select { width:100%; min-width:0; height:40px; padding:0 9px; border:1px solid var(--line); border-radius:9px; background:var(--card); color:var(--text); text-align:center; }
 @media(max-width:700px){.hypit-model-config-fallback{grid-template-columns:1fr;}}
 
 /* Hypit 仅配置模型，运行参数由每次复刻请求提供。 */
@@ -146,7 +151,7 @@
 .hypit-slot-card .model-config-module .model-config-summary {
     width: 100%;
     max-width: none;
-    min-height: 34px;
+    min-height: 40px;
     justify-content: space-between;
     text-align: left;
 }
@@ -218,7 +223,7 @@
 .hypit-slot-description {
     margin-top: 4px;
     color: var(--muted);
-    font-size: 10.5px;
+    font-size: 12px;
     line-height: 1.45;
 }
 
@@ -228,7 +233,7 @@
     border: 1px solid var(--line);
     border-radius: 999px;
     color: var(--muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 850;
     white-space: nowrap;
 }
@@ -260,7 +265,7 @@
 .hypit-field-label,
 .hypit-parameter-label {
     color: var(--muted);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 850;
 }
 
@@ -269,7 +274,7 @@
 .hypit-parameter-field select {
     width: 100%;
     min-width: 0;
-    height: 34px;
+    height: 40px;
     padding: 0 9px;
     border: 1px solid var(--line);
     border-radius: 9px;
@@ -277,7 +282,7 @@
     background: var(--soft);
     color: var(--text);
     font: inherit;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
 }
 
@@ -285,7 +290,7 @@
 .hypit-parameter-field input:focus,
 .hypit-parameter-field select:focus {
     border-color: var(--studio-info, var(--line-strong));
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--studio-info, #7891a4) 18%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--studio-info, #8172a7) 18%, transparent);
 }
 
 .hypit-parameters {
@@ -299,14 +304,14 @@
 .hypit-parameters-title {
     grid-column: 1 / -1;
     color: var(--muted);
-    font-size: 10px;
+    font-size: 11.5px;
     font-weight: 900;
     letter-spacing: .06em;
     text-transform: uppercase;
 }
 
 .hypit-parameter-checkbox {
-    min-height: 34px;
+    min-height: 40px;
     display: flex;
     align-items: center;
     gap: 7px;
@@ -315,7 +320,7 @@
     border-radius: 9px;
     background: var(--soft);
     color: var(--text);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 750;
 }
 
@@ -359,8 +364,29 @@
     display: none !important;
 }
 
+/* 文章配置复用同一套专用画布外壳，与 Hypit 保持独立的画布身份。 */
+.layout.article-settings-mode #providerSettingsView > :not(#articleSettingsBlock) {
+    display: none !important;
+}
+
+.layout.article-settings-mode .content-head {
+    display: none !important;
+}
+
+.layout.article-settings-mode #articleSettingsBlock {
+    display: flex !important;
+}
+
+.layout.article-settings-mode #canvasModelSettingsBlock {
+    display: none !important;
+}
+
+.layout.article-settings-mode #articleSettingsNav {
+    border-color: var(--studio-focus, var(--strong));
+    background: var(--studio-focus-soft, var(--soft));
+}
+
 @media (max-width: 860px) {
-    .hypit-slot-grid,
     .hypit-capability-summary {
         grid-template-columns: 1fr 1fr;
     }
@@ -386,8 +412,8 @@
 
 html.studio-theme-dark body .hypit-logo-mark,
 body.studio-theme-dark .hypit-logo-mark {
-    background: #f5f6f8;
-    color: #0e1014;
+    background: var(--studio-accent, #7047eb);
+    color: var(--studio-strong-text, #241c30);
 }
 
 html.studio-theme-dark body .hypit-settings-status[data-state="error"],
@@ -397,7 +423,7 @@ body.studio-theme-dark .hypit-settings-status[data-state="error"] {
 
 html.studio-theme-dark body .hypit-settings-status[data-state="success"],
 body.studio-theme-dark .hypit-settings-status[data-state="success"] {
-    color: #6ee7b7;
+    color: var(--studio-success, #91bd91);
 }
 
 .hypit-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(56px,1fr));gap:5px;}
@@ -405,4 +431,288 @@ body.studio-theme-dark .hypit-settings-status[data-state="success"] {
 .hypit-choices button.active{background:var(--studio-info, var(--text));color:var(--studio-card, var(--panel));border-color:var(--studio-info, var(--text));}
 .hypit-choices button:hover{box-shadow:inset 0 0 0 1px var(--studio-info, var(--text));}
 .hypit-model-fields{grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,.85fr);}
-@media(max-width:960px){.hypit-slot-grid{grid-template-columns:1fr;}}
+
+.hypit-settings-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);}
+.hypit-settings-heading{min-width:0;}
+.hypit-settings-toolbar-actions{display:flex;align-items:center;gap:8px;flex:0 0 auto;}
+.hypit-settings-canvas{display:block;width:100%;height:min(78vh,920px);min-height:540px;border:1px solid var(--line);border-radius:14px;background:var(--page);}
+.hypit-settings-canvas[hidden]{display:none;}
+.hypit-settings-canvas.is-resetting{opacity:.58;pointer-events:none;}
+@media(max-width:760px){.hypit-settings-toolbar{align-items:stretch;flex-direction:column;padding:12px;}.hypit-settings-toolbar-actions{width:100%;}.hypit-settings-toolbar-actions .action-btn{flex:1;justify-content:center;}.hypit-settings-canvas{height:calc(100dvh - 245px);min-height:420px;}}
+
+/* Hypit 每槽先选来源；工作流映射留在当前槽位，不覆盖另一来源的已保存选择。 */
+.hypit-source-switch {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--soft);
+}
+
+.hypit-source-switch button {
+    min-width: 0;
+    min-height: 34px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.hypit-source-switch button[aria-pressed="true"] {
+    border-color: var(--studio-focus, var(--line-strong));
+    background: var(--studio-focus, var(--card));
+    color: var(--studio-strong-text, var(--text));
+    box-shadow: 0 1px 3px rgba(30, 24, 44, .12);
+}
+
+.hypit-source-switch button:focus-visible,
+.hypit-workflow-option:focus-visible,
+.hypit-workflow-confirm:focus-visible,
+.hypit-workflow-error button:focus-visible {
+    outline: 2px solid var(--studio-focus, var(--line-strong));
+    outline-offset: 2px;
+}
+
+.hypit-source-panel[hidden] { display: none !important; }
+.hypit-source-panel { min-width: 0; }
+
+.hypit-workflow-content {
+    min-width: 0;
+    display: grid;
+    gap: 12px;
+}
+
+.hypit-workflow-groups {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    align-items: start;
+    gap: 9px;
+}
+
+.hypit-workflow-group {
+    min-width: 0;
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    padding: 9px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--studio-card, var(--card));
+}
+
+.hypit-workflow-group h4,
+.hypit-workflow-editor h4 {
+    margin: 0;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.hypit-workflow-option {
+    width: 100%;
+    min-width: 0;
+    display: grid;
+    gap: 5px;
+    padding: 8px 9px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--studio-card, var(--card));
+    color: var(--text);
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+
+.hypit-workflow-option > span {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.hypit-workflow-option strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.hypit-workflow-option small,
+.hypit-workflow-selected span {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.hypit-workflow-option em {
+    color: var(--studio-danger, #9b342d);
+    font-size: 11px;
+    font-style: normal;
+    line-height: 1.4;
+}
+
+.hypit-workflow-option:hover:not(:disabled),
+.hypit-workflow-option.is-selected {
+    border-color: var(--studio-focus, var(--line-strong));
+    box-shadow: inset 0 0 0 1px var(--studio-focus, var(--line-strong));
+}
+
+.hypit-workflow-option:disabled {
+    cursor: not-allowed;
+    opacity: .7;
+}
+
+.hypit-workflow-editor {
+    min-width: 0;
+    display: grid;
+    gap: 9px;
+    padding: 11px;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    background: var(--soft);
+}
+
+.hypit-workflow-selected {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--text);
+    font-size: 13px;
+}
+
+.hypit-workflow-selected strong { overflow-wrap: anywhere; }
+
+.hypit-workflow-fields {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+    gap: 8px;
+}
+
+.hypit-workflow-field {
+    min-width: 0;
+    display: grid;
+    align-content: start;
+    gap: 5px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--studio-card, var(--card));
+}
+
+.hypit-workflow-field > strong {
+    min-width: 0;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 850;
+    overflow-wrap: anywhere;
+}
+
+.hypit-workflow-field > code {
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.hypit-workflow-description {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.hypit-workflow-role {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 750;
+}
+
+.hypit-workflow-role select,
+.hypit-workflow-field input,
+.hypit-workflow-field select {
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    padding: 5px 8px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: var(--studio-card, var(--card));
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+}
+
+.hypit-workflow-role small {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 650;
+}
+
+.hypit-workflow-validation,
+.hypit-workflow-message {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.hypit-workflow-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--studio-danger, #9b342d) 35%, transparent);
+    border-radius: 9px;
+    background: color-mix(in srgb, var(--studio-danger, #9b342d) 8%, var(--studio-card, var(--card)));
+    color: var(--studio-danger, #9b342d);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.hypit-workflow-error button {
+    min-height: 30px;
+    padding: 4px 9px;
+    border: 1px solid currentColor;
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.hypit-workflow-confirm {
+    justify-self: start;
+    min-height: 38px;
+    padding: 7px 13px;
+    border: 1px solid var(--studio-focus, var(--line-strong));
+    border-radius: 9px;
+    background: var(--studio-focus, var(--text));
+    color: var(--studio-strong-text, var(--studio-card, var(--panel)));
+    font: inherit;
+    font-size: 12px;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.hypit-workflow-confirm:disabled { cursor: not-allowed; opacity: .55; }
+
+@media (max-width: 620px) {
+    .hypit-workflow-groups,
+    .hypit-workflow-fields { grid-template-columns: minmax(0, 1fr); }
+    .hypit-workflow-selected { align-items: flex-start; flex-direction: column; }
+    .hypit-workflow-confirm { width: 100%; justify-self: stretch; }
+}

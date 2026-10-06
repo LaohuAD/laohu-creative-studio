@@ -111,28 +111,125 @@ def _query_payload(value: Any) -> dict[str, Any]:
     return value
 
 
-def _media_kind(url: str, item: dict[str, Any] | None = None) -> str:
+def _media_kind(url: str, item: dict[str, Any] | None = None, *, strict: bool = False) -> str:
     item = item or {}
-    explicit = str(item.get('kind') or item.get('mediaKind') or item.get('type') or '').strip().lower()
-    if explicit in {'image', 'video', 'audio', 'text', 'file'}:
-        return explicit
-    mime = str(item.get('mime') or mimetypes.guess_type(str(url or ''))[0] or '').lower()
+    if strict:
+        aliases = {'image': 'image', 'video': 'video', 'audio': 'audio', 'text': 'text'}
+        declared_types = [str(item.get(key) or '').strip().lower() for key in (
+            'mime_type', 'mimeType', 'mime', 'content_type', 'contentType',
+            'mediaType', 'media_type', 'fileType', 'file_type',
+        )]
+        for declared_type in declared_types:
+            if declared_type in aliases:
+                return aliases[declared_type]
+            if '/' in declared_type and declared_type.split('/', 1)[0] in aliases.values():
+                return declared_type.split('/', 1)[0]
+        source_url = str(item.get('_source_url') or url or '')
+        suffix = source_url.split('?', 1)[0].split('#', 1)[0].lower()
+        if any(suffix.endswith(ext) for ext in ('.txt', '.md', '.markdown', '.json', '.csv', '.yaml', '.yml', '.srt', '.vtt', '.log')):
+            return 'text'
+        mime = mimetypes.guess_type(source_url)[0] or ''
+    else:
+        explicit = str(item.get('kind') or item.get('mediaKind') or item.get('type') or '').strip().lower()
+        if explicit in {'image', 'video', 'audio', 'text', 'file'} and explicit != 'file':
+            return explicit
+        mime = str(item.get('mime') or item.get('mimeType') or item.get('contentType') or item.get('content_type') or
+                   item.get('fileType') or item.get('file_type') or mimetypes.guess_type(str(url or ''))[0] or '').lower()
+    if mime.startswith('image/'):
+        return 'image'
     if mime.startswith('video/'):
         return 'video'
     if mime.startswith('audio/'):
         return 'audio'
     if mime.startswith('text/'):
         return 'text'
-    return 'image'
+    return 'file' if strict else 'image'
 
 
-def _normalize_runninghub_result(value: Any) -> dict[str, Any]:
+def _normalize_runninghub_result(value: Any, *, strict: bool = False) -> dict[str, Any]:
     """把既有 RunningHub 查询返回统一成 studio_collect 可保存的结果形状。"""
     payload = copy.deepcopy(_query_payload(value))
     if not payload:
         return {}
-    if any(payload.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files')):
+    if not strict and any(payload.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files')):
         return payload
+
+    if strict:
+        raw = payload.get('raw') if isinstance(payload.get('raw'), dict) else {}
+        raw_data = raw.get('data') if isinstance(raw, dict) else None
+        raw_entries = []
+        if isinstance(raw_data, list):
+            raw_items = raw_data
+        elif isinstance(raw_data, dict):
+            raw_items = next((raw_data.get(key) for key in ('outputs', 'results', 'files', 'data')
+                              if isinstance(raw_data.get(key), list)), [])
+            if not raw_items and (raw_data.get('fileUrl') or raw_data.get('url')):
+                raw_items = [raw_data]
+        else:
+            raw_items = []
+        for raw_item in raw_items:
+            if isinstance(raw_item, str):
+                raw_entries.append({'url': raw_item, 'source': None})
+            elif isinstance(raw_item, dict):
+                raw_url = (raw_item.get('fileUrl') or raw_item.get('file_url') or raw_item.get('url') or
+                           raw_item.get('downloadUrl') or raw_item.get('download_url'))
+                if isinstance(raw_url, list):
+                    raw_entries.extend({'url': url, 'source': raw_item} for url in raw_url if url)
+                elif raw_url:
+                    raw_entries.append({'url': raw_url, 'source': raw_item})
+        prior_items = payload.get('image_items') or payload.get('items') or []
+        if not isinstance(prior_items, list):
+            prior_items = []
+        prior_urls = payload.get('urls') or payload.get('outputs') or []
+        if not isinstance(prior_urls, list):
+            prior_urls = [prior_urls]
+        if raw_entries:
+            entries = []
+            for index, raw_entry in enumerate(raw_entries):
+                cached = prior_items[index] if index < len(prior_items) and isinstance(prior_items[index], dict) else {}
+                url = cached.get('url') or (prior_urls[index] if index < len(prior_urls) else '') or raw_entry.get('url')
+                source = raw_entry.get('source') if isinstance(raw_entry, dict) else None
+                item = copy.deepcopy(source) if isinstance(source, dict) else {}
+                item['_source_url'] = str(raw_entry.get('url') or '')
+                if isinstance(cached, dict):
+                    for metadata_key in ('content_type', 'contentType', 'mime', 'mimeType', 'fileType', 'file_type'):
+                        if cached.get(metadata_key) and not item.get(metadata_key):
+                            item[metadata_key] = cached[metadata_key]
+                item['url'] = str(url or '')
+                entries.append(item)
+        else:
+            entries = []
+            for key in ('images', 'videos', 'audios', 'texts', 'files'):
+                values = payload.get(key)
+                if values is None:
+                    continue
+                if not isinstance(values, list):
+                    values = [values]
+                entries.extend(value if isinstance(value, dict) else {'url': value} for value in values)
+            if not entries:
+                entries = []
+            for value in prior_items:
+                item = copy.deepcopy(value) if isinstance(value, dict) else {'url': value}
+                # image_items 是旧查询结果的 UI 投影，kind 可能来自其未知→image 兜底。
+                item.pop('kind', None)
+                item.pop('mediaKind', None)
+                item.pop('type', None)
+                entries.append(item)
+            known = {str(item.get('url') or '') for item in entries}
+            entries.extend({'url': url} for url in prior_urls if str(url or '') not in known)
+        normalized = {key: copy.deepcopy(value) for key, value in payload.items()
+                      if key in {'status', 'state', 'task_id', 'taskId', 'provider_task_id', 'success', 'pending', 'jimeng_pending', 'failReason', 'text'}}
+        for item in entries:
+            url = str(item.get('url') or item.get('value') or '').strip()
+            if not url:
+                continue
+            item['url'] = url
+            kind = _media_kind(url, item, strict=True)
+            item.pop('_source_url', None)
+            item['kind'] = kind
+            normalized.setdefault({'image': 'images', 'video': 'videos', 'audio': 'audios', 'text': 'texts', 'file': 'files'}[kind], []).append(item)
+        return normalized
+
     items = payload.get('image_items') or payload.get('items') or []
     urls = payload.get('urls') or payload.get('outputs') or []
     if not isinstance(items, list):
@@ -190,6 +287,7 @@ class StudioAppExecution:
         resolve_comfy_fields: Callable[..., Any] | None = None,
         upload_runninghub_asset: Callable[..., Any] | None = None,
         upload_comfy_media: Callable[..., Any] | None = None,
+        task_metadata: Callable[..., Any] | None = None,
         poll_interval: float = 1.6,
         max_polls: int = 720,
     ):
@@ -207,6 +305,7 @@ class StudioAppExecution:
         self.resolve_comfy_fields = resolve_comfy_fields
         self.upload_runninghub_asset = upload_runninghub_asset
         self.upload_comfy_media = upload_comfy_media
+        self.task_metadata = task_metadata
         self.poll_interval = max(0.0, float(poll_interval))
         self.max_polls = max(1, int(max_polls))
         self.handles: dict[str, asyncio.Task] = {}
@@ -253,6 +352,9 @@ class StudioAppExecution:
             raise ValueError('此服务只接受 AI 应用和 ComfyUI 节点')
         request['request_id'] = str(request_id)
         request['client_id'] = str(settings.get('clientId') or settings.get('client_id') or request_id)
+        if str(canvas.get('id') or '') == 'hypit-settings':
+            # Hypit 的动态工作流必须根据真实类型或 MIME 分类；未知文件不能回退成图片。
+            request['strict_result'] = True
         if request['kind'] == 'comfy':
             request['platform_request'] = {
                 'prompt': request.get('prompt', ''),
@@ -284,6 +386,9 @@ class StudioAppExecution:
         if existing:
             return {'task_ids': [task_id], 'status': existing['status']}
         request = await self._prepare_request(canvas, node, request_id)
+        task_metadata = self.task_metadata(canvas, node, request) if self.task_metadata else {}
+        if not isinstance(task_metadata, dict):
+            raise ValueError('task_metadata 必须返回对象')
         validated = await _invoke(self.preflight, canvas, node, request, request_id)
         with self.lock:
             existing = self.storage.get_canvas_task(task_id)
@@ -293,6 +398,10 @@ class StudioAppExecution:
             current = next((item for item in latest.get('nodes', []) if item.get('id') == node.get('id')), None)
             if current is None or recipe(current) != recipe(node):
                 raise ValueError('预检期间节点已修改，请重新读取后运行')
+            if self.task_metadata:
+                latest_metadata = self.task_metadata(latest, current, request)
+                if latest_metadata != task_metadata:
+                    raise ValueError('预检期间 Hypit 流程或输入结果已修改，请重新读取后运行')
             current.setdefault('creationId', 'creation_' + uuid.uuid4().hex)
             if current.get('creationOwnerNodeId', current['id']) != current['id']:
                 current['creationParentId'] = current['creationId']
@@ -307,14 +416,14 @@ class StudioAppExecution:
                 'creationTask': True, 'runStatus': 'queued', 'isRunPlaceholder': True,
                 'pending': 1, 'runStartedAt': int(time.time() * 1000), 'images': [],
                 'runInputRefs': request['references'], 'runPrompt': request.get('prompt', ''),
-                'runRef': validated, 'creationSignature': signature,
+                'runRef': validated, 'creationSignature': signature, **copy.deepcopy(task_metadata),
             }
             for key in ('creationTasks', 'resultVersions'):
                 task.pop(key, None)
             self.storage.create_canvas_task({
                 'id': task_id, 'status': 'queued', 'kind': request['kind'],
                 'canvas_id': canvas['id'], 'node_id': node['id'], 'request': request,
-                'creation_snapshot': task,
+                'creation_snapshot': task, **copy.deepcopy(task_metadata),
             })
             current.setdefault('creationTasks', []).append(task)
             self.save(latest)
@@ -337,19 +446,36 @@ class StudioAppExecution:
                         for kind in ('image', 'video', 'audio')}
         indexes = {kind: 0 for kind in refs_by_kind}
         values = prepared.get('workflow_values') or {}
+        uploaded_by_url: dict[str, str] = {}
         for field in fields:
             raw = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
             if raw not in {'image', 'video', 'audio'}:
                 continue
+            if 'media_field_keys' in prepared:
+                field_key = str(field.get('id') or field.get('paramid') or field.get('paramId') or field.get('key') or '')
+                if field_key not in set(prepared.get('media_field_keys') or []):
+                    continue
             kind = raw
-            index = indexes[kind]
-            indexes[kind] += 1
-            ref = refs_by_kind[kind][index] if index < len(refs_by_kind[kind]) else None
+            field_key = str(field.get('id') or field.get('paramid') or field.get('paramId') or field.get('key') or '')
+            current_value = values.get(field_key)
+            ref = next((item for item in refs_by_kind[kind]
+                        if str(item.get('url') or item.get('path') or '') == str(current_value or '')
+                        ), None)
+            if ref is None and 'media_field_keys' not in prepared:
+                index = indexes[kind]
+                ref = refs_by_kind[kind][index] if index < len(refs_by_kind[kind]) else None
+                indexes[kind] += 1
+            if ref is None and field_key in set(prepared.get('media_field_keys') or []):
+                raise ValueError(f'工作流媒体字段 {field_key} 没有匹配的引用素材')
             if not ref or ref.get('comfy_name') or not self.upload_comfy_media:
                 continue
-            uploaded = await self._upload_value(self.upload_comfy_media, ref, prepared)
+            reference_key = str(ref.get('url') or ref.get('path') or '')
+            uploaded = uploaded_by_url.get(reference_key)
+            if not uploaded:
+                uploaded = await self._upload_value(self.upload_comfy_media, ref, prepared)
+                if uploaded:
+                    uploaded_by_url[reference_key] = uploaded
             if uploaded:
-                field_key = str(field.get('id') or field.get('paramid') or field.get('paramId') or field.get('key') or '')
                 field_node = str(field.get('node') or field.get('nodeId') or '')
                 field_input = str(field.get('input') or field.get('fieldName') or '')
                 values[field_key] = uploaded
@@ -367,7 +493,7 @@ class StudioAppExecution:
         refs = prepared.get('references') or []
         refs_by_kind = {kind: [ref for ref in refs if ref.get('kind') == kind and ref.get('url')]
                         for kind in ('image', 'video', 'audio')}
-        used: set[str] = set()
+        uploaded_by_url: dict[str, str] = {}
         for field in prepared.get('fields') or []:
             raw = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
             if raw not in refs_by_kind or not self.upload_runninghub_asset:
@@ -381,14 +507,23 @@ class StudioAppExecution:
             key = f'{node_id}::{field_name}' if node_id or field_name else str(
                 field.get('key') or field.get('paramid') or field.get('paramId') or ''
             ).strip()
+            media_field_keys = set(prepared.get('media_field_keys') or [])
+            if 'media_field_keys' in prepared and key not in media_field_keys:
+                continue
             value = (prepared.get('app_field_values') or {}).get(key)
-            ref = next((item for item in refs_by_kind[raw] if str(item.get('url')) == str(value) and id(item) not in used), None)
-            if ref is None:
+            ref = next((item for item in refs_by_kind[raw] if str(item.get('url')) == str(value)), None)
+            if ref is None and 'media_field_keys' not in prepared:
                 ref = next((item for item in refs_by_kind[raw] if id(item) not in used), None)
+            if ref is None and key in media_field_keys:
+                raise ValueError(f'工作流媒体字段 {key} 没有匹配的引用素材')
             if ref is None:
                 continue
-            used.add(id(ref))
-            uploaded = await self._upload_value(self.upload_runninghub_asset, ref, prepared)
+            reference_key = str(ref.get('url') or '')
+            uploaded = uploaded_by_url.get(reference_key)
+            if not uploaded:
+                uploaded = await self._upload_value(self.upload_runninghub_asset, ref, prepared)
+                if uploaded:
+                    uploaded_by_url[reference_key] = uploaded
             if not uploaded:
                 continue
             prepared.setdefault('app_field_values', {})[key] = uploaded
@@ -443,14 +578,15 @@ class StudioAppExecution:
         return prepared
 
     async def _run_runninghub(self, request: dict[str, Any], on_submitted=None) -> dict[str, Any]:
+        strict_result = request.get('strict_result') is True
         prepared = await self._prepare_runninghub_request(request)
         request.clear()
         request.update(prepared)
         submission = await _invoke(self.runninghub_submit, request)
         provider_task_id = _task_id_from_submission(submission)
         if not provider_task_id:
-            normalized = _normalize_runninghub_result(submission)
-            if any(normalized.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files')):
+            normalized = _normalize_runninghub_result(submission, strict=strict_result)
+            if any(normalized.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files', 'text')):
                 return normalized
             raise ValueError('RunningHub 提交成功但没有返回 taskId')
         request['provider_task_id'] = provider_task_id
@@ -464,10 +600,10 @@ class StudioAppExecution:
             payload = _query_payload(queried)
             last = payload
             status = str(payload.get('status') or payload.get('state') or '').strip().upper()
-            normalized = _normalize_runninghub_result(payload)
-            if status in {'SUCCESS', 'SUCCEEDED', 'COMPLETED'} or any(
-                normalized.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files')
-            ):
+            normalized = _normalize_runninghub_result(queried, strict=strict_result)
+            has_result = any(normalized.get(key) for key in ('images', 'videos', 'audios', 'texts', 'files', 'text'))
+            has_typed_result = any(normalized.get(key) for key in ('images', 'videos', 'audios', 'texts', 'text'))
+            if status in {'SUCCESS', 'SUCCEEDED', 'COMPLETED'} or (has_result and (not strict_result or has_typed_result)):
                 return normalized
             if status in {'FAILED', 'FAIL', 'ERROR', 'CANCELLED', 'CANCELED', 'TIMEOUT', 'REVOKED'}:
                 reason = payload.get('failReason') or payload.get('error') or payload.get('message') or status

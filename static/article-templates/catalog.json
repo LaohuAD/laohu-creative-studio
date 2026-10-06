@@ -1,0 +1,74 @@
+{
+  "templates": [
+    {
+      "id": "moyu-green",
+      "name": "摸鱼绿",
+      "name_en": "Moyu Green",
+      "color": "#059669",
+      "description": "教程、测评与工具清单；层级丰富，信息密度较高。",
+      "description_en": "Tutorials, reviews, and tool lists with layered, information-dense sections.",
+      "preview_url": "/static/article-templates/moyu-green.html"
+    },
+    {
+      "id": "red-white",
+      "name": "红白色系",
+      "name_en": "Red & White",
+      "color": "#DC2626",
+      "description": "深度分析与观点；编号章节、红色克制点缀。",
+      "description_en": "Deep analysis and opinion, with numbered sections and restrained red accents.",
+      "preview_url": "/static/article-templates/red-white.html"
+    },
+    {
+      "id": "graphite-minimal",
+      "name": "石墨极简风",
+      "name_en": "Graphite Minimal",
+      "color": "#52525B",
+      "description": "设计、科技评论与专业观点；大留白、灰阶和细分隔线。",
+      "description_en": "Design, technology reviews, and expert commentary with open space, grayscale, and fine rules.",
+      "preview_url": "/static/article-templates/graphite-minimal.html"
+    },
+    {
+      "id": "zen-whitespace",
+      "name": "留白禅意风",
+      "name_en": "Zen Whitespace",
+      "color": "#4A5D52",
+      "description": "随笔与冥想；疏朗排布、引言卡与充足留白。",
+      "description_en": "Essays and reflective writing with spacious layouts, quote cards, and generous whitespace.",
+      "preview_url": "/static/article-templates/zen-whitespace.html"
+    },
+    {
+      "id": "moyu-ticket",
+      "name": "摸鱼票据风",
+      "name_en": "Moyu Ticket",
+      "color": "#059669",
+      "description": "测评、工具对比与创意评测；票据结构、编号卡片和硬阴影。",
+      "description_en": "Reviews and tool comparisons with ticket-like sections, numbered cards, and hard shadows.",
+      "preview_url": "/static/article-templates/moyu-ticket.html"
+    },
+    {
+      "id": "olive-journal",
+      "name": "橄榄手记",
+      "name_en": "Olive Journal",
+      "color": "#1e1f23",
+      "description": "内刊手记、案例复盘与系统说明；编辑部页眉、多级章节、时间线和问答。",
+      "description_en": "Editorial notes, case studies, and structured guides with a magazine masthead, layered sections, timelines, and FAQ.",
+      "preview_url": "/static/article-templates/olive-journal.html"
+    }
+  ],
+  "source_fingerprints": {
+    "theme_index": "b30a9a0b7b260ba9f9c5043dc069edd458ed2c94705f96913b9326681a53483d",
+    "common_components": "24eb8645f0f2338daf5f063cd16319ed4b4a9b89b4ccf87de8e5187154f35860",
+    "themes": {
+      "moyu-green": "335a83a3d21f65050abd4e1511b82128482f75b7acd4448ea194d2c72c392dcd",
+      "red-white": "d48f87f6dca177a2d3ba26db2c70ba65a6c8b5617d90b81c122816522d3a1218",
+      "graphite-minimal": "575a8c03ce32b9fa2bf6fe9dfdff2ee751f13211c8ce5a7cdd55bf6557e456f1",
+      "zen-whitespace": "100fee8acb0043af9721333b7d7edd5ffb75d3fbaad2ccce6c6485811cf883e6",
+      "moyu-ticket": "fe44889fe60f4ae785fc1a57f429629a515a96707d05e18763af3702c9b1a918",
+      "olive-journal": "e6214fde2e1a605a15f36c66a827e1681587224b5f531628fc414d0555f91197"
+    }
+  },
+  "source_repository": "https://github.com/LaohuAD/laohu-creative-skills.git",
+  "source_skill_path": ".agents/skills/laohu-htmlshow-gzh",
+  "preview_source_repository": "https://github.com/isjiamu/gzh-design-skill",
+  "preview_source_path": "docs-gallery"
+}

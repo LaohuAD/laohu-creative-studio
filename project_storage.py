@@ -22,7 +22,7 @@ MEDIA_EXTENSIONS = {
     "image": {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".svg"},
     "video": {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv", ".flv"},
     "audio": {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"},
-    "text": {".txt", ".md", ".markdown", ".json", ".csv", ".yaml", ".yml", ".log"},
+    "text": {".txt", ".md", ".markdown", ".html", ".json", ".csv", ".yaml", ".yml", ".log"},
 }
 RUN_STATUS_TRANSITIONS = {
     "validated": {"queued", "submitted", "failed", "cancelled"},
@@ -446,6 +446,84 @@ class ProjectStorage:
         directory.mkdir(parents=True, exist_ok=True)
         return self._readable_target(directory, filename, digest)
 
+    def _same_asset_path(self, left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        try:
+            return self._asset_path(left).resolve() == self._asset_path(right).resolve()
+        except (OSError, StorageError):
+            return False
+
+    def _sync_external_results_for_material(self, item: dict[str, Any]) -> None:
+        """Keep result aliases pointed at the current path of their source material."""
+        material_id = str(item.get("id") or "")
+        relative = str(item.get("path") or "")
+        if not material_id or not relative:
+            return
+        target = self._asset_path(relative)
+        if not target.is_file():
+            return
+        material_digest = str(item.get("sha256") or "")
+        results = self._load_index(self.result_index_path)
+        changed = False
+        for result in results["items"]:
+            origin = result.get("origin")
+            if not isinstance(origin, dict) or origin.get("kind") != "external_cli":
+                continue
+            if origin.get("source_material_id") != material_id:
+                continue
+            if str(result.get("sha256") or "") != material_digest:
+                continue
+            if result.get("path") != relative or result.get("size") != target.stat().st_size:
+                result["path"] = relative
+                result["size"] = target.stat().st_size
+                result["updated_at"] = now_ms()
+                changed = True
+        if changed:
+            self._save_index(self.result_index_path, results)
+
+    def _result_references_material(self, result: dict[str, Any], material: dict[str, Any]) -> bool:
+        origin = result.get("origin")
+        if isinstance(origin, dict) and origin.get("source_material_id") == material.get("id"):
+            return True
+        return self._same_asset_path(str(result.get("path") or ""), str(material.get("path") or ""))
+
+    def _material_has_result_reference(
+        self,
+        material: dict[str, Any],
+        result_items: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        if result_items is None:
+            result_items = self._load_index(self.result_index_path)["items"]
+        return any(self._result_references_material(result, material) for result in result_items)
+
+    def _path_referenced_elsewhere(
+        self,
+        relative: str,
+        *,
+        result_items: list[dict[str, Any]] | None = None,
+        material_items: list[dict[str, Any]] | None = None,
+        excluding_result_id: str = "",
+        excluding_material_id: str = "",
+    ) -> bool:
+        if not relative:
+            return False
+        if result_items is None:
+            result_items = self._load_index(self.result_index_path)["items"]
+        if material_items is None:
+            material_items = self._load_index(self.material_index_path)["items"]
+        if any(
+            entry.get("id") != excluding_result_id
+            and self._same_asset_path(str(entry.get("path") or ""), relative)
+            for entry in result_items
+        ):
+            return True
+        return any(
+            entry.get("id") != excluding_material_id
+            and self._same_asset_path(str(entry.get("path") or ""), relative)
+            for entry in material_items
+        )
+
     def material_url(self, material_id: str) -> str:
         return f"/api/materials/{urllib.parse.quote(str(material_id or ''), safe='')}"
 
@@ -511,6 +589,7 @@ class ProjectStorage:
                     if old_path.is_file() and old_path != target:
                         shutil.move(str(old_path), str(target))
                     current["path"] = self._asset_relative(target)
+                    self._sync_external_results_for_material(current)
                 current["updated_at"] = now_ms()
                 if folder and not current.get("folder"):
                     current["folder"] = str(folder).strip("/\\")
@@ -576,6 +655,7 @@ class ProjectStorage:
                 if old_path.is_file() and old_path != target:
                     shutil.move(str(old_path), str(target))
                 item["path"] = self._asset_relative(target)
+                self._sync_external_results_for_material(item)
             item["updated_at"] = now_ms()
             self._save_index(self.material_index_path, index)
             value = dict(item)
@@ -601,6 +681,7 @@ class ProjectStorage:
             item["scopes"] = ["asset"]
             item["folder"] = str(folder or "").strip("/\\")
             item["updated_at"] = now_ms()
+            self._sync_external_results_for_material(item)
             self._save_index(self.material_index_path, index)
             value = dict(item)
             value["url"] = self.material_url(material_id)
@@ -626,6 +707,7 @@ class ProjectStorage:
                 shutil.move(str(old_path), str(target))
             item["path"] = self._asset_relative(target)
             item["updated_at"] = now_ms()
+            self._sync_external_results_for_material(item)
             self._save_index(self.material_index_path, index)
             value = dict(item)
             value["url"] = self.material_url(material_id)
@@ -657,6 +739,7 @@ class ProjectStorage:
                 raise StorageError("素材仍被画布引用，不能删除")
             scopes = set(item.get("scopes") or [])
             scopes.discard(scope)
+            old_relative = str(item.get("path") or "")
             if scopes:
                 item["scopes"] = sorted(scopes)
                 if scope == "asset" and "temporary" in scopes and str(item.get("path") or "").startswith("input/asset/"):
@@ -666,12 +749,23 @@ class ProjectStorage:
                         shutil.move(str(old_path), str(target))
                     item["path"] = self._asset_relative(target)
                 item["updated_at"] = now_ms()
+                if item.get("path") != old_relative:
+                    self._sync_external_results_for_material(item)
             else:
-                path = self._asset_path(item.get("path") or "")
-                path.unlink(missing_ok=True)
-                index["items"] = [entry for entry in index["items"] if entry.get("id") != material_id]
+                results = self._load_index(self.result_index_path)["items"]
+                if self._material_has_result_reference(item, results):
+                    item["scopes"] = []
+                    item["updated_at"] = now_ms()
+                else:
+                    index["items"] = [entry for entry in index["items"] if entry.get("id") != material_id]
+                    if not self._path_referenced_elsewhere(
+                        old_relative,
+                        result_items=results,
+                        material_items=index["items"],
+                    ):
+                        self._asset_path(old_relative).unlink(missing_ok=True)
             self._save_index(self.material_index_path, index)
-            return {"id": material_id, "removed_scope": scope, "deleted_file": not scopes}
+            return {"id": material_id, "removed_scope": scope, "deleted_file": not scopes and item not in index["items"]}
 
     def get_result(self, result_id: str) -> dict[str, Any] | None:
         index = self._load_index(self.result_index_path)
@@ -770,6 +864,25 @@ class ProjectStorage:
             if Path(name).suffix.lower() in known_extensions:
                 name = Path(name).stem or "生成结果"
             display_filename = f"{name}{extension}" if extension else name
+            materials = self._load_index(self.material_index_path)["items"]
+            origin = item.get("origin") if isinstance(item.get("origin"), dict) else {}
+            shared_by_source = bool(
+                origin.get("kind") == "external_cli"
+                and any(material.get("id") == origin.get("source_material_id") for material in materials)
+            )
+            shared_by_path = self._path_referenced_elsewhere(
+                str(item.get("path") or ""),
+                result_items=index["items"],
+                material_items=materials,
+                excluding_result_id=result_id,
+            )
+            if shared_by_source or shared_by_path:
+                item["display_name"] = display_filename
+                item["updated_at"] = now_ms()
+                self._save_index(self.result_index_path, index)
+                value = dict(item)
+                value["url"] = self.result_url(result_id)
+                return value
             digest = item.get("sha256") or (sha256_file(old_path) if old_path.is_file() else "")
             target = self._readable_target(
                 self.results_dir / (item.get("kind") or "file"),
@@ -854,6 +967,121 @@ class ProjectStorage:
                 self._save_index(self.result_index_path, index)
             return {**item, 'url': self.result_url(item['id'])}
 
+    @staticmethod
+    def _external_cli_identity(value: Any, field: str) -> str:
+        if not isinstance(value, str):
+            raise StorageError(f"外部素材登记字段 {field} 必须是字符串")
+        normalized = value.strip()
+        limits = {"provider": 80, "tool": 120, "model": 160, "task_id": 180}
+        limit = limits[field]
+        if not normalized or len(normalized) > limit:
+            raise StorageError(f"外部素材登记字段 {field} 不能为空或超过 {limit} 个字符")
+        if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+            raise StorageError(f"外部素材登记字段 {field} 不能包含控制字符")
+        lowered = normalized.lower()
+        if re.search(r"(?:https?://|data:|file://)", lowered):
+            raise StorageError(f"外部素材登记字段 {field} 不能包含 URL 或 data URI")
+        if re.search(r"\b(?:api[\s_-]?key|authorization|bearer|token|secret|password|signed[\s_-]?url)\b", lowered):
+            raise StorageError(f"外部素材登记字段 {field} 不能包含凭据内容")
+        if normalized.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:[\\/]", normalized):
+            raise StorageError(f"外部素材登记字段 {field} 不能是文件路径")
+        if any(part == ".." for part in re.split(r"[/\\]", normalized)):
+            raise StorageError(f"外部素材登记字段 {field} 不能包含路径穿越片段")
+        return normalized
+
+    def register_external_material_result(
+        self,
+        material_id: str,
+        *,
+        provider: str,
+        tool: str,
+        model: str,
+        task_id: str,
+        output_index: int,
+    ) -> dict[str, Any]:
+        """Create an external CLI result record that aliases a managed material file."""
+        source_id = str(material_id or "").strip()
+        if not source_id or len(source_id) > 200 or any(ord(character) < 32 for character in source_id):
+            raise StorageError("外部素材登记缺少有效素材 ID")
+        identity = {
+            "provider": self._external_cli_identity(provider, "provider"),
+            "tool": self._external_cli_identity(tool, "tool"),
+            "model": self._external_cli_identity(model, "model"),
+            "task_id": self._external_cli_identity(task_id, "task_id"),
+        }
+        if type(output_index) is not int or output_index < 1 or output_index > 100:
+            raise StorageError("外部素材登记字段 output_index 必须是 1 到 100 的整数")
+
+        with self._lock:
+            material_index = self._load_index(self.material_index_path)
+            material = next((entry for entry in material_index["items"] if entry.get("id") == source_id), None)
+            if not material:
+                raise StorageError("外部素材登记引用的素材不存在")
+            relative = str(material.get("path") or "")
+            try:
+                source_path = self._asset_path(relative).resolve()
+                managed_root = self.materials_dir.resolve()
+            except OSError as exc:
+                raise StorageError("外部素材登记的素材路径无效") from exc
+            if not source_path.is_relative_to(managed_root):
+                raise StorageError("外部素材登记只能引用 assets/input 内的受管素材")
+            if not source_path.is_file():
+                raise StorageError("外部素材登记引用的受管素材文件不存在")
+            digest = sha256_file(source_path)
+            expected_digest = str(material.get("sha256") or "").lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_digest) or digest != expected_digest:
+                raise StorageError("外部素材登记引用的素材内容与 SHA-256 索引不匹配")
+
+            receipt = {
+                "kind": "external_cli",
+                "source_material_id": source_id,
+                **identity,
+                "output_index": output_index,
+                "provenance_verified": False,
+            }
+            receipt_bytes = json.dumps(receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            result_id = f"res_{sha256_bytes(receipt_bytes)[:24]}"
+            index = self._load_index(self.result_index_path)
+            existing = next((entry for entry in index["items"] if (
+                isinstance(entry.get("origin"), dict) and entry.get("origin") == receipt
+            )), None)
+            if existing:
+                if existing.get("sha256") != digest:
+                    raise StorageError("相同外部素材回执已登记为不同文件内容，拒绝覆盖")
+                if existing.get("id") != result_id:
+                    raise StorageError("外部素材回执与已有结果标识不一致，拒绝覆盖")
+                changed = False
+                if existing.get("path") != relative or existing.get("size") != source_path.stat().st_size:
+                    existing["path"] = relative
+                    existing["size"] = source_path.stat().st_size
+                    existing["updated_at"] = now_ms()
+                    changed = True
+                if changed:
+                    self._save_index(self.result_index_path, index)
+                return {**existing, "url": self.result_url(result_id)}
+
+            collision = next((entry for entry in index["items"] if entry.get("id") == result_id), None)
+            if collision:
+                raise StorageError("外部素材回执生成的结果 ID 已被其他来源占用，拒绝覆盖")
+            timestamp = now_ms()
+            original_name = safe_name(str(material.get("original_name") or source_path.name), "素材")
+            item = {
+                "id": result_id,
+                "sha256": digest,
+                "display_name": safe_name(str(material.get("display_name") or original_name), "生成结果"),
+                "original_name": original_name,
+                "kind": str(material.get("kind") or media_kind(original_name)),
+                "mime": str(material.get("mime") or mimetypes.guess_type(original_name)[0] or "application/octet-stream"),
+                "size": source_path.stat().st_size,
+                "path": relative,
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "origin": receipt,
+            }
+            index["items"].append(item)
+            self._save_index(self.result_index_path, index)
+            return {**item, "url": self.result_url(result_id)}
+
     def delete_result(self, result_id: str) -> bool:
         with self._lock:
             index = self._load_index(self.result_index_path)
@@ -862,10 +1090,29 @@ class ProjectStorage:
                 return False
             remaining = [entry for entry in index["items"] if entry.get("id") != result_id]
             shared_path = str(item.get("path") or "")
-            if shared_path and not any(str(entry.get("path") or "") == shared_path for entry in remaining):
-                self._asset_path(shared_path).unlink(missing_ok=True)
             index["items"] = remaining
             self._save_index(self.result_index_path, index)
+
+            material_index = self._load_index(self.material_index_path)
+            origin = item.get("origin") if isinstance(item.get("origin"), dict) else {}
+            source_id = str(origin.get("source_material_id") or "") if origin.get("kind") == "external_cli" else ""
+            orphaned = next((entry for entry in material_index["items"] if entry.get("id") == source_id and not entry.get("scopes")), None)
+            if orphaned and not self._material_has_result_reference(orphaned, remaining):
+                material_index["items"] = [entry for entry in material_index["items"] if entry.get("id") != source_id]
+                if not self._path_referenced_elsewhere(
+                    str(orphaned.get("path") or ""),
+                    result_items=remaining,
+                    material_items=material_index["items"],
+                ):
+                    self._asset_path(str(orphaned.get("path") or "")).unlink(missing_ok=True)
+                self._save_index(self.material_index_path, material_index)
+
+            if shared_path and not self._path_referenced_elsewhere(
+                shared_path,
+                result_items=remaining,
+                material_items=material_index["items"],
+            ):
+                self._asset_path(shared_path).unlink(missing_ok=True)
             return True
 
     def material_reference_count(self, material_id: str) -> int:

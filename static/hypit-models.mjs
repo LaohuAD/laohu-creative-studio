@@ -1,9 +1,9 @@
 /** 工作台项目模型表面：只声明输入语义，参数和真实平台由项目绑定的精确档案验证。 */
 import { defineExactModelModule, createExactModelPrimaryGenerationFragment, exactModelTextInputName, exactModelMediaInputNames } from '@hypit/hypit/model-kit';
 import { sealGenerationPortTable, sealGenerationMediaBinding, sealGenerationRequestDraft } from '@hypit/hypit/generation';
-import { createMarkupSurfaceHostFacet } from '@hypit/hypit/author-kit';
+import { canonicalize, createMarkupSurfaceHostFacet, sealGraphFragment } from '@hypit/hypit/author-kit';
 import { artifactTypes } from '@hypit/hypit/artifact';
-import { textTypes } from '@hypit/hypit/text';
+import { sealText, textTypes } from '@hypit/hypit/text';
 import endpointPackage from './hypit-endpoint.mjs';
 
 const moduleRef = {name:'@laohu/studio-models',version:'1'};
@@ -81,4 +81,94 @@ const facets=definitions.map(mode=>{
 });
 export const hypitPackage={format:'hypit.node-package@1',modules:[{manifest:model.manifest}],
   components:[model.component],hostFacets:[model.hostFacet,...facets,...endpointPackage.hostFacets]};
+
+// Text 结果属于 @hypit/text 的 Text 类型，不是图片/视频/音频 Blob。
+const textCapability = {module:moduleRef,name:'text-generation'};
+const textRequestProducer = {module:moduleRef,name:'request-text-generation'};
+const textGenerationFacet = createMarkupSurfaceHostFacet({
+  module:moduleRef,
+  declaration:{name:'text',tag:'Text',mode:'structured',outputs:[textTypes.text],
+    vocabulary:{summary:'Generate Text using the model selected for this Hypit project.',
+      attributes:[{name:'id',kind:'identifier',required:true,summary:'Output name'},
+        {name:'prompt',kind:'reference',required:true,accepts:[textTypes.text],summary:'Text input'},
+        {name:'parameters',kind:'literal',required:false,summary:'JSON object of per-request parameters'}],
+      ports:[{name:'text',type:textTypes.text,summary:'Generated Text'}],
+      notes:['The project’s shared Hypit text model and configured workflow provide the output.'] }},
+  handler:({element,resolveReference})=>{
+    const id=element.attributes.id;
+    if(typeof id!=='string'||!id.trim())throw new Error('id is required');
+    for(const key of Object.keys(element.attributes))if(!['id','prompt','parameters'].includes(key))throw new Error(`Unknown attribute: ${key}`);
+    const prompt=reference(element,'prompt',textTypes.text,resolveReference);
+    let parameters={};
+    if(element.attributes.parameters!==undefined){
+      if(typeof element.attributes.parameters!=='string')throw new Error('parameters must be a JSON object literal');
+      parameters=JSON.parse(element.attributes.parameters);
+      if(!parameters||typeof parameters!=='object'||Array.isArray(parameters))throw new Error('parameters must be a JSON object');
+    }
+    const parameterRecord=`${id}.parameters`;
+    const fragment=sealGraphFragment({
+      inputs:[{name:'prompt',type:textTypes.text},{name:'parameters',type:textTypes.text}],
+      operations:[{id:'generate',producer:textRequestProducer,
+        inputs:{prompt:{kind:'fragment-input',name:'prompt'},parameters:{kind:'fragment-input',name:'parameters'}},
+        result:{kind:'need',name:'generation'}}],
+      exports:[{name:'text',type:textTypes.text,root:{kind:'fragment-operation',operation:'generate'}}],
+    });
+    return {records:[{id:parameterRecord,type:textTypes.text,
+        value:{kind:'inline',value:sealText(JSON.stringify(parameters))},range:element.range}],
+      components:[{id,fragment:fragment.id,inputs:{prompt:prompt.ref,parameters:{kind:'record',id:parameterRecord}},
+        outputs:{text:`${id}.text`},range:element.range}],fragments:[fragment]};
+  },
+});
+
+const textManifest={...model.manifest,
+  capabilities:[...model.manifest.capabilities,{name:textCapability.name,returns:textTypes.text}],
+  producers:[...model.manifest.producers,{name:textRequestProducer.name,
+    inputs:[{name:'prompt',type:textTypes.text},{name:'parameters',type:textTypes.text}],outputs:[],
+    needs:[{name:'generation',capability:textCapability,returns:textTypes.text}]}]};
+const textProducerFacet={producer:textRequestProducer,handler:({inputs})=>{
+  const inlineText=(name)=>{
+    const stored=inputs[name]?.value;
+    if(!stored||stored.kind!=='inline'||typeof stored.value?.value!=='string')throw new Error(`${name} must be inline Text`);
+    return stored.value.value;
+  };
+  const prompt=inlineText('prompt');
+  let parameters;
+  try{parameters=JSON.parse(inlineText('parameters'));}
+  catch(error){throw new Error(`parameters must be JSON: ${error instanceof Error?error.message:String(error)}`);}
+  if(!parameters||typeof parameters!=='object'||Array.isArray(parameters))throw new Error('parameters must be a JSON object');
+  return {outputs:{},needs:{generation:canonicalize({ports:{prompt:[prompt],parameters:[JSON.stringify(parameters)]}})}};
+}};
+const textPlannedNeed={producer:textRequestProducer,port:'generation',capability:textCapability,
+  plan:({state,step})=>{
+    const current=state.plan.steps.find(item=>item.id===step);
+    if(!current)return undefined;
+    const records=new Map(state.records.map(record=>[record.id,record]));
+    const textValue=(id)=>{
+      const stored=records.get(id)?.value;
+      return stored?.kind==='inline'&&typeof stored.value?.value==='string'?stored.value.value:undefined;
+    };
+    const ports={};
+    const parameterText=textValue(current.inputs.parameters);
+    if(parameterText===undefined)return undefined;
+    ports.parameters=[parameterText];
+    const prompt=textValue(current.inputs.prompt);
+    const pendingInputs=[];
+    if(prompt===undefined){
+      const producedBy=new Map(state.plan.steps.flatMap(item=>Object.values(item.outputs).map(record=>[record,item.id])));
+      pendingInputs.push({input:'prompt',record:current.inputs.prompt,
+        ...(producedBy.get(current.inputs.prompt)?{sourceStep:producedBy.get(current.inputs.prompt)}:{})});
+    }else ports.prompt=[prompt];
+    return {constraints:canonicalize({ports}),pendingInputs};
+  },
+  present:(specification)=>{
+    const ports=specification.constraints?.ports||{};
+    const fields={};
+    for(const [key,values] of Object.entries(ports))if(values.length)fields[key]=values;
+    return {fields,references:{}};
+  }};
+
+// 用 Text capability 声明更新包清单，并把返回真实 Text 类型的 producer 与原媒体生成 surface 并列注册。
+hypitPackage.modules[0].manifest=textManifest;
+hypitPackage.components.push({producers:[textProducerFacet],plannedNeeds:[textPlannedNeed]});
+hypitPackage.hostFacets.push(textGenerationFacet);
 export default hypitPackage;

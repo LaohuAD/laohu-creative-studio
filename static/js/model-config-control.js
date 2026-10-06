@@ -21,6 +21,15 @@
 
     function text(value) { return String(value == null ? '' : value).trim(); }
     function language() { return global.StudioI18n?.lang?.() === 'en' ? 'en' : 'zh'; }
+    function parameterPresentation(optionId) {
+        try {
+            var saved = JSON.parse(global.localStorage.getItem('smart_canvas_personalization_v1') || '{}');
+            var all = saved && saved.parameterPresentation && typeof saved.parameterPresentation === 'object'
+                ? saved.parameterPresentation : {};
+            var scoped = all[text(optionId)];
+            return scoped && typeof scoped === 'object' ? scoped : {};
+        } catch (error) { return {}; }
+    }
 
     function el(tag, className, content) {
         var node = document.createElement(tag);
@@ -49,6 +58,7 @@
         var state = Core.createState(config.selection);
         var instanceId = 'mc' + (++instances);
         var catalog = config.catalog || { options: [] };
+        var catalogSignature = JSON.stringify(catalog);
         var context = config.context || {};
         var profiles = {};
         var destroyed = false;
@@ -175,6 +185,12 @@
         head.appendChild(tagRow);
         popover.appendChild(head);
 
+        var commitError = el('div', 'model-config-error');
+        commitError.setAttribute('role', 'alert');
+        commitError.setAttribute('aria-live', 'assertive');
+        commitError.hidden = true;
+        popover.appendChild(commitError);
+
         var stages = el('div', 'model-config-stages');
         var columns = {};
         ['family', 'platform', 'variant'].forEach(function (stage, index) {
@@ -212,11 +228,21 @@
             transition(state.open ? 'cancel' : 'open');
         });
 
+        // 保留点击触发时的传播路径。列表项处理器会同步重绘并移除 event.target，
+        // 因此文档级 click 不能再用重绘后的 contains(target) 判断是否点在菜单内。
+        var lastPopoverClick = null;
+        on(popover, 'click', function (event) { lastPopoverClick = event; });
+
         // 点击完成后再收起，避免 mousedown 折叠前一块导致下一按钮移动、吞掉本次点击。
         on(doc, 'click', function (event) {
+            var path = typeof event.composedPath === 'function' ? event.composedPath() : event.path;
+            var clickedInside = Array.isArray(path)
+                ? path.indexOf(popover) !== -1 || path.indexOf(root) !== -1
+                : event === lastPopoverClick || popover.contains(event.target) || root.contains(event.target);
+            if (event === lastPopoverClick) lastPopoverClick = null;
             if (inline || destroyed || !state.open) return;
             var target = event.target;
-            if (popover.contains(target) || root.contains(target)) return;
+            if (clickedInside || popover.contains(target) || root.contains(target)) return;
             transition('cancel');
         });
 
@@ -231,11 +257,14 @@
 
         on(searchInput, 'input', function () {
             transition('search', { query: searchInput.value });
-            render();
         });
 
         on(popover, 'scroll', function (event) { event.stopPropagation(); }, true);
-        on(popover, 'wheel', function (event) { event.stopPropagation(); }, { passive: true });
+        on(popover, 'wheel', function (event) {
+            var stageList = event.target && event.target.closest && event.target.closest('.model-config-stage-options');
+            if (stageList && popover.classList.contains('is-module') && root.closest('.canvas-agent-dialog')) return;
+            event.stopPropagation();
+        }, { passive: true });
 
         on(copyBtn, 'click', function (event) {
             event.preventDefault();
@@ -255,6 +284,7 @@
 
         var openAdvanced = false;
         var focusPanel = 'model';
+        var commitAttemptId = 0;
 
         /* --------------------------------------------------------- 状态转换 */
 
@@ -272,15 +302,39 @@
             if (result.effects.persist) {
                 // 只有第三栏提交会走到这里，且一次写完整选择（§5.6）
                 var committed = result.effects.committed;
+                var previousSelection = before.committed;
+                var attemptedOption = Core.findOption(optionsById(), committed.optionId);
+                var attemptId = (commitAttemptId += 1);
                 Promise.resolve()
                     .then(function () {
                         return typeof config.onCommit === 'function'
                             ? config.onCommit({ selection: committed, baseRevision: state.committed.revision, changes: { optionId: committed.optionId, parameters: committed.parameters } })
                             : null;
                     })
-                    .then(function () { render(); })
+                    .then(function () {
+                        if (!destroyed && attemptId === commitAttemptId) {
+                            state = Object.assign({}, state, { lastError: '' });
+                            // 叶子点击时已将本次选择投影到控件。保存等待期间用户可能
+                            // 已重开菜单继续浏览；成功回包只需清除旧错误，不能重建三栏。
+                            commitError.hidden = true;
+                            commitError.textContent = '';
+                        }
+                    })
                     .catch(function (error) {
-                        state = Object.assign({}, state, { lastError: String(error && error.message || error) });
+                        if (destroyed || attemptId !== commitAttemptId) return;
+                        state = Object.assign({}, state, {
+                            committed: previousSelection,
+                            draft: {
+                                familyId: Core.familyIdOf(attemptedOption),
+                                platformKey: Core.platformKeyOf(attemptedOption),
+                                optionId: text(committed.optionId)
+                            },
+                            open: true,
+                            previewOptionId: '',
+                            lastError: String(error && error.message || error)
+                        });
+                        if (!inline) popover.hidden = false;
+                        if (!inline) place();
                         render();
                     });
             }
@@ -335,6 +389,12 @@
             var stagesData = Core.projectStages(optionsById(), state);
             renderTrigger(stagesData);
             renderTags(stagesData);
+            commitError.hidden = !state.lastError;
+            commitError.textContent = state.lastError
+                ? (language() === 'en'
+                    ? 'Save failed: ' + state.lastError + '. Choose the run mode again to retry.'
+                    : '保存失败：' + state.lastError + '。请再次选择运行模式重试。')
+                : '';
             renderFamilies(stagesData);
             renderPlatforms(stagesData);
             renderVariants(stagesData);
@@ -346,8 +406,11 @@
                 stages.hidden = focusPanel === 'parameters';
                 panel.hidden = focusPanel === 'model' || panel.hidden;
             }
-            // 只有真的搜索且无结果时才显示空状态
-            noMatch.hidden = !(text(state.search) && !stagesData.families.length);
+            // 搜索或标签没有结果时保留筛选入口，避免用户被困在空列表里。
+            noMatch.textContent = language() === 'en'
+                ? 'No models match the current search or filters.'
+                : '没有符合当前搜索或筛选条件的模型。';
+            noMatch.hidden = !((text(state.search) || (state.tags || []).length) && !stagesData.families.length);
         }
 
         function renderTrigger(stagesData) {
@@ -365,19 +428,63 @@
             optionsById().forEach(function (option) {
                 (option.capability_tags || []).forEach(function (tag, index) {
                     labels[tag] = language() === 'en' ? (option.capability_tags_en?.[index] || tag) : tag;
+                    pool[tag] = true;
                 });
             });
-            stagesData.families.forEach(function (family) {
-                family.tags.forEach(function (tag) { pool[tag] = true; });
-            });
             tagRow.replaceChildren();
-            Object.keys(pool).slice(0, 8).forEach(function (tag) {
+            Object.keys(pool).forEach(function (tag) {
                 var chip = el('button', 'model-config-tag', labels[tag] || tag);
                 chip.type = 'button';
-                chip.classList.toggle('is-on', (state.tags || []).indexOf(tag) !== -1);
-                on(chip, 'click', function () { transition('toggleTag', { tag: tag }); render(); });
+                chip.setAttribute('data-model-config-tag', tag);
+                var selected = (state.tags || []).indexOf(tag) !== -1;
+                chip.classList.toggle('is-on', selected);
+                chip.setAttribute('aria-pressed', selected ? 'true' : 'false');
+                on(chip, 'click', function () {
+                    transition('toggleTag', { tag: tag });
+                    focusTag(tag);
+                });
                 tagRow.appendChild(chip);
             });
+            var filtersActive = !!text(state.search) || (state.tags || []).length > 0;
+            if (filtersActive) {
+                var clear = el('button', 'model-config-tag model-config-clear-filters',
+                    language() === 'en' ? 'Clear filters' : '清除筛选');
+                clear.type = 'button';
+                clear.setAttribute('aria-label', language() === 'en' ? 'Clear all model filters' : '清除全部模型筛选');
+                on(clear, 'click', function () {
+                    searchInput.value = '';
+                    transition('clearFilters');
+                    searchInput.focus({ preventScroll: true });
+                });
+                tagRow.appendChild(clear);
+            }
+        }
+
+        function focusTag(tag) {
+            var chips = tagRow.querySelectorAll('[data-model-config-tag]');
+            for (var i = 0; i < chips.length; i += 1) {
+                if (chips[i].getAttribute('data-model-config-tag') === tag) {
+                    chips[i].focus({ preventScroll: true });
+                    return;
+                }
+            }
+        }
+
+        function focusStageOption(attribute, value, list) {
+            var rows = list.querySelectorAll('[data-' + attribute + ']');
+            for (var i = 0; i < rows.length; i += 1) {
+                if (rows[i].getAttribute('data-' + attribute) === value) {
+                    rows[i].focus({ preventScroll: true });
+                    revealFocusedOption(rows[i]);
+                    return;
+                }
+            }
+        }
+
+        function revealFocusedOption(row) {
+            if (row && typeof row.scrollIntoView === 'function') {
+                row.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
         }
 
         function renderFamilies(stagesData) {
@@ -387,10 +494,14 @@
                 row.type = 'button';
                 row.setAttribute('role', 'option');
                 row.setAttribute('data-option-id', family.id);
+                row.setAttribute('data-family-id', family.id);
                 row.classList.toggle('is-current', family.id === stagesData.draftFamilyId);
                 row.appendChild(el('span', 'model-config-option-label', family.label[language()] || family.id));
                 row.appendChild(el('span', 'model-config-option-count', String(family.options.length)));
-                on(row, 'click', function () { transition('selectFamily', { familyId: family.id }); render(); });
+                on(row, 'click', function () {
+                    transition('selectFamily', { familyId: family.id });
+                    focusStageOption('family-id', family.id, columns.family.list);
+                });
                 columns.family.list.appendChild(row);
             });
         }
@@ -405,7 +516,10 @@
                 row.classList.toggle('is-current', platform.key === stagesData.draftPlatformKey);
                 row.appendChild(el('span', 'model-config-option-label', platform.label));
                 row.appendChild(el('span', 'model-config-option-count', String(platform.count)));
-                on(row, 'click', function () { transition('selectPlatform', { platformKey: platform.key }); render(); });
+                on(row, 'click', function () {
+                    transition('selectPlatform', { platformKey: platform.key });
+                    focusStageOption('platform-key', platform.key, columns.platform.list);
+                });
                 columns.platform.list.appendChild(row);
             });
         }
@@ -438,7 +552,10 @@
                 }
                 // hover 与键盘 focus 都必须触发同一份只读预览（A04/A05）
                 on(row, 'mouseenter', function () { transition('previewOption', { optionId: option.option_id }); });
-                on(row, 'focus', function () { transition('previewOption', { optionId: option.option_id }); });
+                on(row, 'focus', function () {
+                    revealFocusedOption(row);
+                    transition('previewOption', { optionId: option.option_id });
+                });
                 on(row, 'mouseleave', function () { transition('clearPreview', {}); });
                 on(row, 'blur', function () { transition('clearPreview', {}); });
                 on(row, 'click', function () {
@@ -473,11 +590,29 @@
             var option = Core.findOption(optionsById(), state.committed.optionId);
             var profile = profileFor(option);
             var specs = (profile && profile.parameters) || {};
-            var keys = Object.keys(specs).filter(function (key) { return !specs[key].ui_hidden; });
+            var optionId = text(state.committed.optionId);
+            var presentation = parameterPresentation(optionId);
+            function mustStayVisible(spec) {
+                return typeof Core.parameterMustStayVisible === 'function'
+                    ? Core.parameterMustStayVisible(spec)
+                    : !!(spec && (spec.required === true || (spec.ui && spec.ui.required === true) || text(spec.level).toLowerCase() === 'required')
+                        && (spec.default === undefined || spec.default === null || spec.default === ''));
+            }
+            var keys = Object.keys(specs).filter(function (key) {
+                if (mustStayVisible(specs[key])) return true;
+                return !specs[key].ui_hidden;
+            });
+            var originalOrder = Object.keys(specs);
+            keys.sort(function (left, right) {
+                var leftOrder = presentation[left] && Number.isInteger(presentation[left].order) ? presentation[left].order : originalOrder.indexOf(left) * 1000;
+                var rightOrder = presentation[right] && Number.isInteger(presentation[right].order) ? presentation[right].order : originalOrder.indexOf(right) * 1000;
+                return leftOrder - rightOrder;
+            });
+            var requiredGuardKeys = keys.filter(function (key) { return mustStayVisible(specs[key]); });
             var advancedKeys = keys.filter(function (key) {
                 var spec = specs[key];
                 var uiLevel = (spec.ui && spec.ui.level) || (spec.level === 'advanced' ? 'advanced' : 'common');
-                return uiLevel === 'advanced';
+                return uiLevel === 'advanced' && requiredGuardKeys.indexOf(key) === -1;
             });
             var commonKeys = keys.filter(function (key) { return advancedKeys.indexOf(key) === -1; });
 
@@ -503,7 +638,18 @@
                 var spec = specs[key] || {};
                 var group = el('div', 'model-config-param');
                 group.setAttribute('data-param-key', key);
-                group.appendChild(el('div', 'model-config-param-title', spec.label || spec.title || key));
+                group.setAttribute('data-parameter-key', key);
+                group.setAttribute('data-parameter-option-id', optionId);
+                var fieldPresentation = presentation[key] || {};
+                if (fieldPresentation.width === 'full' || fieldPresentation.width === 'half') {
+                    group.setAttribute('data-parameter-width', fieldPresentation.width);
+                }
+                var guardedRequired = mustStayVisible(spec);
+                if (guardedRequired) group.setAttribute('data-required-parameter-guard', 'visible');
+                var title = el('div', 'model-config-param-title');
+                title.appendChild(el('span', null, spec.label || spec.title || key));
+                if (guardedRequired) title.appendChild(el('small', 'model-config-param-required', english ? 'Required' : '必填'));
+                group.appendChild(title);
                 var row = el('div', 'model-config-param-options');
                 var values = parameterOptions(spec);
                 values.forEach(function (value) {
@@ -526,7 +672,10 @@
                     var input = el('input', 'model-config-param-input');
                     input.type = numeric ? 'number' : 'text';
                     input.setAttribute('aria-label', spec.label || spec.title || key);
-                    input.value = selected[key] != null ? selected[key] : (spec.default != null ? spec.default : '');
+                    var validDefault = typeof Core.parameterDefaultIsValid === 'function'
+                        ? Core.parameterDefaultIsValid(spec)
+                        : spec.default != null && spec.default !== '';
+                    input.value = selected[key] != null ? selected[key] : (validDefault ? spec.default : '');
                     if (numeric) {
                         if (spec.min != null) input.min = spec.min;
                         if (spec.max != null) input.max = spec.max;
@@ -596,10 +745,13 @@
             popover: popover,
             getState: function () { return state; },
             updateCatalog: function (nextCatalog) {
-                catalog = nextCatalog || { options: [] };
+                var next = nextCatalog || { options: [] };
+                var nextSignature = JSON.stringify(next);
+                if (nextSignature === catalogSignature) return;
+                catalog = next;
+                catalogSignature = nextSignature;
                 indexProfiles();
                 transition('catalogUpdated', { options: optionsById() });
-                render();
             },
             updateContext: function (nextContext) {
                 context = nextContext || {};

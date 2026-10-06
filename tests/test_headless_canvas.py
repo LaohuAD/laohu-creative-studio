@@ -33,7 +33,7 @@ class HeadlessCanvasTests(unittest.IsolatedAsyncioTestCase):
         self.task_counter = 0
 
         def load_canvas(canvas_id):
-            self.assertEqual(canvas_id, "canvas-1")
+            self.assertEqual(canvas_id, self.stored["id"])
             with self.lock:
                 return copy.deepcopy(self.stored)
 
@@ -89,6 +89,172 @@ class HeadlessCanvasTests(unittest.IsolatedAsyncioTestCase):
             validate_model=validate_model,
             notify=notify,
         )
+
+    def _use_hypit_settings_canvas(self):
+        self.stored = {
+            "id": "hypit-settings",
+            "kind": "smart",
+            "project": "hypit-settings",
+            "revision": 1,
+            "hypit_flow_schema_version": 1,
+            "hypit_legacy_migration_done": True,
+            "nodes": [],
+            "connections": [],
+            "settings": {},
+            "logs": [],
+            "viewport": {"x": 0, "y": 0, "scale": 1},
+        }
+
+    async def test_hypit_output_creation_is_settings_canvas_only_and_reuses_slot(self):
+        self._use_hypit_settings_canvas()
+        created = await self.executor.execute(
+            "hypit-settings",
+            "create_node",
+            {"kind": "hypit_output", "slot": "image", "title": "图片输出", "x": 640, "y": 80},
+            "create-hypit-output",
+        )
+        moved = await self.executor.execute(
+            "hypit-settings",
+            "update_node",
+            {"node_id": created["node_id"], "x": 940, "y": 245},
+            "move-hypit-output",
+        )
+        self.assertEqual((moved["node"]["x"], moved["node"]["y"]), (940, 245))
+        repeated = await self.executor.execute(
+            "hypit-settings",
+            "create_node",
+            {"kind": "hypit_output", "slot": "image", "title": "再次添加图片输出"},
+            "focus-existing-hypit-output",
+        )
+        outputs = [node for node in self.stored["nodes"] if node.get("type") == "smart-hypit-output"]
+        self.assertEqual(len(outputs), 1)
+        self.assertEqual(repeated["node_id"], created["node_id"])
+        self.assertEqual(repeated["node"]["hypitSlot"], "image")
+        self.assertEqual((repeated["node"]["x"], repeated["node"]["y"]), (940, 245))
+        self.assertTrue(repeated["existing"])
+
+        self.stored = {"id": "canvas-1", "revision": 1, "nodes": [], "connections": [], "settings": {}}
+        with self.assertRaises(ValueError):
+            await self.executor.execute(
+                "canvas-1",
+                "create_node",
+                {"kind": "hypit_output", "slot": "image", "title": "普通画布不能创建"},
+                "reject-ordinary-output",
+            )
+        self.assertEqual(self.stored["nodes"], [])
+
+    async def test_hypit_output_connections_validate_and_replace_atomically(self):
+        self._use_hypit_settings_canvas()
+        output = await self.executor.execute(
+            "hypit-settings",
+            "create_node",
+            {"kind": "hypit_output", "slot": "image", "title": "图片输出"},
+            "create-output-for-connect",
+        )
+        self.stored["nodes"].extend([
+            {"id": "image-node", "type": "smart-image-generator", "title": "图片生成", "outputKind": "image", "images": []},
+            {"id": "text-node", "type": "smart-text-generator", "title": "文本生成", "outputKind": "text", "images": []},
+            {"id": "app-node", "type": "smart-ai-app", "title": "AI 应用", "outputKind": "dynamic", "images": []},
+        ])
+        first = await self.executor.execute(
+            "hypit-settings", "connect", {"from": "image-node", "to": output["node_id"]}, "connect-static-image"
+        )
+        self.assertEqual(first["connections"][-1]["from"], "image-node")
+
+        replaced = await self.executor.execute(
+            "hypit-settings", "connect", {"from": "app-node", "to": output["node_id"]}, "replace-with-dynamic-app"
+        )
+        incoming = [edge for edge in replaced["connections"] if edge.get("to") == output["node_id"]]
+        self.assertEqual(len(incoming), 1)
+        self.assertEqual(incoming[0]["from"], "app-node")
+
+        before_invalid = copy.deepcopy(self.stored["connections"])
+        with self.assertRaises(ValueError):
+            await self.executor.execute(
+                "hypit-settings", "connect", {"from": "text-node", "to": output["node_id"]}, "reject-static-text"
+            )
+        self.assertEqual(self.stored["connections"], before_invalid)
+
+        with self.assertRaises(ValueError):
+            await self.executor.execute(
+                "hypit-settings", "connect", {"from": output["node_id"], "to": "image-node", "relation": "story"},
+                "reject-output-source",
+            )
+        self.assertEqual(self.stored["connections"], before_invalid)
+
+    async def test_hypit_dynamic_app_preserves_explicit_field_for_unknown_media(self):
+        self._use_hypit_settings_canvas()
+        self.stored["nodes"] = [
+            {
+                "id": "unknown-source",
+                "type": "smart-material",
+                "title": "未识别素材",
+                "images": [{"kind": "vendor-payload", "url": "/assets/input.bin"}],
+            },
+            {
+                "id": "dynamic-app",
+                "type": "smart-ai-app",
+                "title": "动态应用",
+                "runSettings": {"rhFields": [{"nodeId": "2", "fieldName": "image", "fieldType": "IMAGE"}]},
+            },
+            {
+                "id": "second-unknown-source",
+                "type": "smart-material",
+                "title": "未映射素材",
+                "images": [{"kind": "vendor-payload", "url": "/assets/second.bin"}],
+            },
+        ]
+        result = await self.executor.execute(
+            "hypit-settings",
+            "connect",
+            {"from": "unknown-source", "to": "dynamic-app", "target_field_key": "user-selected::attachment"},
+            "connect-explicit-unknown-app-field",
+        )
+        self.assertEqual(len(result["connections"]), 1)
+        self.assertEqual(result["connections"][0]["from"], "unknown-source")
+        self.assertEqual(result["connections"][0]["targetFieldKey"], "user-selected::attachment")
+
+        unmapped = await self.executor.execute(
+            "hypit-settings",
+            "connect",
+            {"from": "second-unknown-source", "to": "dynamic-app"},
+            "connect-unmapped-app-source",
+        )
+        self.assertIn("second-unknown-source", [edge["from"] for edge in unmapped["connections"]])
+        self.assertFalse(any(edge.get("from") == "second-unknown-source" and edge.get("targetFieldKey") for edge in unmapped["connections"]))
+
+    async def test_hypit_input_lock_is_boolean_and_scoped_to_settings_materials(self):
+        self._use_hypit_settings_canvas()
+        material = await self.executor.execute(
+            "hypit-settings",
+            "create_node",
+            {"kind": "material", "title": "固定输入", "text": "保留此素材"},
+            "create-hypit-material",
+        )
+        locked = await self.executor.execute(
+            "hypit-settings", "update_node", {"node_id": material["node_id"], "hypitInputLocked": True},
+            "lock-hypit-input",
+        )
+        self.assertIs(locked["node"]["hypitInputLocked"], True)
+
+        with self.assertRaises(ValueError):
+            await self.executor.execute(
+                "hypit-settings", "update_node", {"node_id": material["node_id"], "hypitInputLocked": "yes"},
+                "reject-nonboolean-lock",
+            )
+        persisted = next(node for node in self.stored["nodes"] if node["id"] == material["node_id"])
+        self.assertIs(persisted["hypitInputLocked"], True)
+
+        self.stored = {"id": "canvas-1", "revision": 1, "nodes": [], "connections": [], "settings": {}}
+        ordinary = await self.executor.execute(
+            "canvas-1", "create_node", {"kind": "material", "title": "普通素材", "text": "内容"},
+            "create-ordinary-material-for-lock",
+        )
+        with self.assertRaises(ValueError):
+            await self.executor.execute(
+                "canvas-1", "update_node", {"node_id": ordinary["node_id"], "hypitInputLocked": True},
+                "reject-ordinary-input-lock",
+            )
 
     async def test_create_update_connect_duplicate_branch_and_reopen(self):
         material = await self.executor.execute(

@@ -6,19 +6,31 @@
   const el = name => document.getElementById(name);
   const text = (zh,en) => String(window.StudioI18n?.lang?.() || document.documentElement.lang).startsWith('en') ? en : zh;
   let openedSource = '', failedSource = '', nativeOrigin = '', refreshing = false;
-  function currentTheme(fallback) {
-    if (fallback === 'dark' || fallback === 'light') return fallback;
-    return document.documentElement.classList.contains('studio-theme-dark') || document.body.classList.contains('studio-theme-dark') ? 'dark' : 'light';
+  function currentThemePreference() {
+    return window.StudioTheme?.getPreference?.() || {version:1, themeId:'studio-violet', appearance:'light'};
+  }
+  function currentTheme() {
+    return window.StudioTheme?.get?.() || (document.documentElement.classList.contains('studio-theme-dark') || document.body.classList.contains('studio-theme-dark') ? 'dark' : 'light');
   }
   function notifyNativeTheme(event) {
     const frame = el('nativeStudio');
     if (!frame?.contentWindow || !nativeOrigin) return;
-    frame.contentWindow.postMessage({type: 'laohu-theme', theme: currentTheme(event?.detail?.theme)}, nativeOrigin);
+    const preference = currentThemePreference();
+    frame.contentWindow.postMessage({
+      type:'laohu-theme', theme:currentTheme(), themeId:preference.themeId,
+      appearance:preference.appearance, resolvedAppearance:event?.detail?.resolvedAppearance || currentTheme(),
+      preference
+    }, nativeOrigin);
   }
   function themedStudioUrl(value) {
     const url = new URL(value);
     if (!['localhost','127.0.0.1'].includes(url.hostname) || url.protocol !== 'http:') throw new Error('Invalid Studio URL');
+    const preference = currentThemePreference();
     url.searchParams.set('laohu_theme', currentTheme());
+    url.searchParams.set('laohu_theme_id', preference.themeId);
+    url.searchParams.set('laohu_appearance', preference.appearance);
+    url.searchParams.set('laohu_resolved_appearance', currentTheme());
+    url.searchParams.set('laohu_parent_origin', location.origin);
     nativeOrigin = url.origin;
     return url;
   }

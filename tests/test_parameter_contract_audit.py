@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import model_capabilities as mc
+import main
 from studio_model_evaluation import validate_parameter_value
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,3 +126,80 @@ console.log(JSON.stringify(c.parameterIssues({model_id:'fixture',parameters:{
 '''
         result = subprocess.run(['node', '-e', script], cwd=ROOT, check=True, capture_output=True, text=True)
         self.assertEqual(json.loads(result.stdout), {'clip': 'PARAM_REQUIRED'})
+
+    def test_laohu_raw_snapshot_and_seedream_v5_flash_contracts(self):
+        snapshot = json.loads((ROOT / 'data/model_capabilities/snapshots/ai-money-catalog.json').read_text())
+        raw_models = snapshot.get('source_models') or []
+        raw_ids = {item.get('id') for item in raw_models if isinstance(item, dict)}
+        self.assertEqual(snapshot.get('source_model_count'), 274)
+        self.assertEqual(len(raw_models), 274)
+        self.assertEqual(len(raw_ids), 274)
+        self.assertIn('FlashVSR_video_upscale', snapshot['video_models'])
+
+        expected = {
+            'seedream-v5-flash-t2i': 'text_to_image',
+            'seedream-v5-flash-i2i': 'image_to_image',
+            'dola-seedream-5.0-flash-t2i': 'text_to_image',
+            'dola-seedream-5.0-flash-i2i': 'image_to_image',
+        }
+        self.assertTrue(set(expected).issubset(raw_ids))
+        provider = {
+            'id': 'ai-money', 'name': 'laohu', 'enabled': True, 'protocol': 'openai',
+            'chat_models': [], 'image_models': list(expected), 'video_models': [], 'audio_models': [],
+        }
+        registry = mc.ModelCapabilityRegistry(ROOT)
+        for model_id, operation in expected.items():
+            with self.subTest(model=model_id):
+                profile = registry.find_model([provider], 'ai-money', model_id, 'image_generation')
+                self.assertTrue(profile['runnable'])
+                self.assertEqual(profile['operation'], operation)
+                self.assertEqual(profile['platform']['endpoint'], '/v1/image/generations')
+                self.assertEqual(profile['parameters']['resolution']['options'], ['1k', '1.5k', '2k'])
+                self.assertEqual(profile['parameters']['output_format']['options'], ['jpeg', 'png'])
+                self.assertEqual((profile['parameters']['width']['min'], profile['parameters']['width']['max']), (240, 8192))
+                self.assertEqual((profile['parameters']['height']['min'], profile['parameters']['height']['max']), (240, 8192))
+                self.assertEqual(profile['inputs']['prompt']['min_chars'], 5)
+                self.assertEqual(profile['inputs']['prompt']['max_chars'], 5000)
+                parameters = {'resolution': '1.5k', 'output_format': 'png'}
+                if operation == 'image_to_image':
+                    self.assertEqual((profile['inputs']['reference']['min'], profile['inputs']['reference']['max']), (1, 10))
+                    self.assertEqual(profile['inputs']['reference']['max_bytes'], 30 * 1024 * 1024)
+                    counts = {'prompt': 1, 'reference': 1}
+                    metadata = {'prompt': {'characters': 12}, 'reference': {'bytes': 1024}}
+                    refs = ['https://example.test/reference.png']
+                else:
+                    counts = {'prompt': 1}
+                    metadata = {'prompt': {'characters': 12}}
+                    refs = []
+                registry.validate_request([provider], 'ai-money', model_id, 'image_generation',
+                                          input_counts=counts, input_metadata=metadata, parameters=parameters)
+                for characters in (4, 5001):
+                    with self.subTest(model=model_id, characters=characters), self.assertRaises(mc.ModelCapabilityError):
+                        registry.validate_request([provider], 'ai-money', model_id, 'image_generation',
+                                                  input_counts=counts,
+                                                  input_metadata={'prompt': {'characters': characters}, **({'reference': {'bytes': 1024}} if operation == 'image_to_image' else {})},
+                                                  parameters=parameters)
+                if operation == 'image_to_image':
+                    with self.assertRaises(mc.ModelCapabilityError):
+                        registry.validate_request([provider], 'ai-money', model_id, 'image_generation',
+                                                  input_counts=counts,
+                                                  input_metadata={'prompt': {'characters': 12}, 'reference': {'bytes': 30 * 1024 * 1024 + 1}},
+                                                  parameters=parameters)
+                    with self.assertRaises(mc.ModelCapabilityError):
+                        registry.validate_request([provider], 'ai-money', model_id, 'image_generation',
+                                                  input_counts={'prompt': 1, 'reference': 11},
+                                                  parameters=parameters)
+                mapped = registry.platform_parameters(profile, parameters)
+                body = main.ai_money_image_request_body('足够长度的提示词', model_id, reference_urls=refs,
+                                                        capability_parameters=mapped)
+                self.assertEqual(body['model'], model_id)
+                self.assertEqual(body['metadata'], {'resolution': '1.5k', 'output_format': 'png'})
+                self.assertEqual(body.get('images', []), refs)
+                # Width/height are sent only when resolution is omitted; the official docs say resolution wins otherwise.
+                dimension_parameters = {'width': 1024, 'height': 768, 'output_format': 'jpeg'}
+                dimension_mapping = registry.platform_parameters(profile, dimension_parameters)
+                dimension_body = main.ai_money_image_request_body('足够长度的提示词', model_id,
+                                                                   reference_urls=refs,
+                                                                   capability_parameters=dimension_mapping)
+                self.assertEqual(dimension_body['metadata'], {'width': 1024, 'height': 768, 'output_format': 'jpeg'})
+                self.assertNotIn('resolution', dimension_body['metadata'])

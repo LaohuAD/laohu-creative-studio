@@ -1,24 +1,30 @@
 :root {
-    --studio-font-ui:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",sans-serif;
-    --studio-bg:#f7f3eb;
-    --studio-surface:#fffaf2;
-    --studio-card:#fffdf8;
-    --studio-soft:#f0ebe2;
-    --studio-soft-strong:#e4ddd2;
-    --studio-line:#ded8ce;
-    --studio-line-strong:#c7beb1;
-    --studio-text:#30363b;
-    --studio-muted:#6f7b83;
-    --studio-faint:#98a0a3;
-    --studio-accent:#b48a5a;
-    --studio-accent-strong:#916a43;
-    --studio-accent-soft:rgba(180,138,90,.14);
-    --studio-info:#7891a4;
-    --studio-danger:#b85c62;
-    --studio-strong-text:#30363b;
-    --studio-shadow-color:rgba(74,60,44,.10);
-    --studio-scrollbar:rgba(113,128,137,.48);
-    --studio-scrollbar-hover:rgba(113,128,137,.70);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     --page:var(--studio-bg);
     --bg:var(--studio-bg);
     --bg-base:var(--studio-bg);
@@ -43,25 +49,27 @@ html.studio-theme-dark,
 html.theme-dark,
 body.studio-theme-dark,
 body.theme-dark {
-    --studio-bg:#202528;
-    --studio-surface:#282d2f;
-    --studio-card:#303638;
-    --studio-soft:#252a2d;
-    --studio-soft-strong:#3a4245;
-    --studio-line:#465055;
-    --studio-line-strong:#627078;
-    --studio-text:#f2eee7;
-    --studio-muted:#bec5c4;
-    --studio-faint:#929da1;
-    --studio-accent:#d4b47a;
-    --studio-accent-strong:#ecd29b;
-    --studio-accent-soft:rgba(212,180,122,.16);
-    --studio-info:#a7bac4;
-    --studio-danger:#ed9a96;
-    --studio-strong-text:#272b2c;
-    --studio-shadow-color:rgba(0,0,0,.28);
-    --studio-scrollbar:rgba(167,186,196,.46);
-    --studio-scrollbar-hover:rgba(167,186,196,.72);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     --page:var(--studio-bg);
     --bg:var(--studio-bg);
     --bg-base:var(--studio-bg);

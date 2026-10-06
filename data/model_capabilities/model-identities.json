@@ -686,13 +686,13 @@
         "node_type": "image_generation",
         "operation": "text_to_image"
       },
-      "canonical_family_id": "series-image-grok-image",
+      "canonical_family_id": "series-image-gpt-image",
       "model_version": "",
       "edition_id": "",
       "display_mode": "2 · 默认 · 低价渠道",
       "evidence": {
         "status": "reviewed",
-        "source_ref": "五类节点_统一系列分类_V3.md / image_generation",
+        "source_ref": "docs/model-capabilities/平台适配说明.md / laohu Image G 身份映射修正（2026-10-05）",
         "matched_token": "laohu-image-g-v2-lowprice"
       }
     },
@@ -703,13 +703,13 @@
         "node_type": "image_generation",
         "operation": "text_or_reference_to_image"
       },
-      "canonical_family_id": "series-image-grok-image",
+      "canonical_family_id": "series-image-gpt-image",
       "model_version": "",
       "edition_id": "",
       "display_mode": "2.5 · Flare · 默认",
       "evidence": {
         "status": "reviewed",
-        "source_ref": "五类节点_统一系列分类_V3.md / image_generation",
+        "source_ref": "docs/model-capabilities/平台适配说明.md / laohu Image G 身份映射修正（2026-10-05）",
         "matched_token": "laohu-image-g-v2.5-flare"
       }
     },
@@ -720,13 +720,13 @@
         "node_type": "image_generation",
         "operation": "text_or_reference_to_image"
       },
-      "canonical_family_id": "series-image-grok-image",
+      "canonical_family_id": "series-image-gpt-image",
       "model_version": "",
       "edition_id": "",
       "display_mode": "2.5 · 默认 · 低价渠道",
       "evidence": {
         "status": "reviewed",
-        "source_ref": "五类节点_统一系列分类_V3.md / image_generation",
+        "source_ref": "docs/model-capabilities/平台适配说明.md / laohu Image G 身份映射修正（2026-10-05）",
         "matched_token": "laohu-image-g-v2.5-lowprice"
       }
     },
@@ -737,13 +737,13 @@
         "node_type": "image_generation",
         "operation": "text_or_reference_to_image"
       },
-      "canonical_family_id": "series-image-grok-image",
+      "canonical_family_id": "series-image-gpt-image",
       "model_version": "",
       "edition_id": "",
       "display_mode": "2.5 · Sunburst · 默认",
       "evidence": {
         "status": "reviewed",
-        "source_ref": "五类节点_统一系列分类_V3.md / image_generation",
+        "source_ref": "docs/model-capabilities/平台适配说明.md / laohu Image G 身份映射修正（2026-10-05）",
         "matched_token": "laohu-image-g-v2.5-sunburst"
       }
     },
@@ -754,13 +754,13 @@
         "node_type": "image_generation",
         "operation": "image_to_image"
       },
-      "canonical_family_id": "series-image-grok-image",
+      "canonical_family_id": "series-image-gpt-image",
       "model_version": "",
       "edition_id": "",
       "display_mode": "2 · 图生图",
       "evidence": {
         "status": "reviewed",
-        "source_ref": "五类节点_统一系列分类_V3.md / image_generation",
+        "source_ref": "docs/model-capabilities/平台适配说明.md / laohu Image G 身份映射修正（2026-10-05）",
         "matched_token": "laohu-image-g2-i2i"
       }
     },
@@ -771,13 +771,13 @@
         "node_type": "image_generation",
         "operation": "text_to_image"
       },
-      "canonical_family_id": "series-image-grok-image",
+      "canonical_family_id": "series-image-gpt-image",
       "model_version": "",
       "edition_id": "",
       "display_mode": "2 · 文生图",
       "evidence": {
         "status": "reviewed",
-        "source_ref": "五类节点_统一系列分类_V3.md / image_generation",
+        "source_ref": "docs/model-capabilities/平台适配说明.md / laohu Image G 身份映射修正（2026-10-05）",
         "matched_token": "laohu-image-g2-t2i"
       }
     },
@@ -14896,6 +14896,210 @@
         "status": "reviewed",
         "source_ref": "五类节点_统一系列分类_V3.md / video_generation",
         "matched_token": "xai/grok-imagine/text-to-video-official-stable"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/sunburst/text-to-image/stable-token",
+        "node_type": "image_generation",
+        "operation": "text_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Sunburst · Stable Token",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/sunburst/text-to-image/stable-token"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/sunburst/image-to-image/stable-token",
+        "node_type": "image_generation",
+        "operation": "image_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Sunburst · Stable Token",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/sunburst/image-to-image/stable-token"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/flare/text-to-image/stable-token",
+        "node_type": "image_generation",
+        "operation": "text_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Flare · Stable Token",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/flare/text-to-image/stable-token"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/flare/image-to-image/stable-token",
+        "node_type": "image_generation",
+        "operation": "image_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Flare · Stable Token",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/flare/image-to-image/stable-token"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/flare/text-to-image/economy",
+        "node_type": "image_generation",
+        "operation": "text_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Flare · Economy",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/flare/text-to-image/economy"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/flare/image-to-image/economy",
+        "node_type": "image_generation",
+        "operation": "image_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Flare · Economy",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/flare/image-to-image/economy"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/sunburst/text-to-image/economy",
+        "node_type": "image_generation",
+        "operation": "text_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Sunburst · Economy",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/sunburst/text-to-image/economy"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "runninghub",
+        "model_id": "gpt-image-2.5/sunburst/image-to-image/economy",
+        "node_type": "image_generation",
+        "operation": "image_to_image"
+      },
+      "canonical_family_id": "series-image-gpt-image",
+      "model_version": "2.5",
+      "edition_id": "",
+      "display_mode": "2.5 · Sunburst · Economy",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/blob/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4/models_registry.json; https://www.runninghub.ai/call-api/search-api/standard-model",
+        "matched_token": "gpt-image-2.5/sunburst/image-to-image/economy"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "ai-money",
+        "model_id": "dola-seedream-5.0-flash-i2i",
+        "node_type": "image_generation",
+        "operation": "image_to_image"
+      },
+      "canonical_family_id": "series-image-seedream",
+      "model_version": "5",
+      "edition_id": "flash",
+      "display_mode": "5.0 · Flash · 海外 · .ai · 图生图",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://api.lao-hu.com/docs/llms.txt (2026-10-05)",
+        "matched_token": "dola-seedream-5.0-flash-i2i"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "ai-money",
+        "model_id": "dola-seedream-5.0-flash-t2i",
+        "node_type": "image_generation",
+        "operation": "text_to_image"
+      },
+      "canonical_family_id": "series-image-seedream",
+      "model_version": "5",
+      "edition_id": "flash",
+      "display_mode": "5.0 · Flash · 海外 · .ai · 文生图",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://api.lao-hu.com/docs/llms.txt (2026-10-05)",
+        "matched_token": "dola-seedream-5.0-flash-t2i"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "ai-money",
+        "model_id": "seedream-v5-flash-i2i",
+        "node_type": "image_generation",
+        "operation": "image_to_image"
+      },
+      "canonical_family_id": "series-image-seedream",
+      "model_version": "5",
+      "edition_id": "flash",
+      "display_mode": "5.0 · Flash · 国内 · .cn · 图生图",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://api.lao-hu.com/docs/llms.txt (2026-10-05)",
+        "matched_token": "seedream-v5-flash-i2i"
+      }
+    },
+    {
+      "match": {
+        "capability_provider_id": "ai-money",
+        "model_id": "seedream-v5-flash-t2i",
+        "node_type": "image_generation",
+        "operation": "text_to_image"
+      },
+      "canonical_family_id": "series-image-seedream",
+      "model_version": "5",
+      "edition_id": "flash",
+      "display_mode": "5.0 · Flash · 国内 · .cn · 文生图",
+      "evidence": {
+        "status": "reviewed",
+        "source_ref": "https://api.lao-hu.com/docs/llms.txt (2026-10-05)",
+        "matched_token": "seedream-v5-flash-t2i"
       }
     }
   ]

@@ -17,6 +17,8 @@ import traceback
 import shutil
 import glob
 import asyncio
+from contextvars import ContextVar
+import copy
 import logging
 import requests
 import zipfile
@@ -42,10 +44,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from canvas_core.request_boundary import LocalRequestBoundary
-from project_storage import ProjectStorage, StorageError, media_kind as stored_media_kind
+from project_storage import ProjectStorage, StorageError, media_kind as stored_media_kind, sha256_file as storage_sha256_file
 from static.release_update import allowed_file as release_allowed_file, validate_package, package_url, LATEST_URL as R2_LATEST_URL, MAX_PACKAGE_BYTES
 from static.model_migrations import normalize_laohu_model_id
-from model_capabilities import ModelCapabilityError, ModelCapabilityRegistry, jimeng_image_resolution_options, save_provider_catalog_snapshot, save_runninghub_registry_snapshot
+from model_capabilities import (
+    NODE_MODEL_FIELDS,
+    ModelCapabilityError,
+    ModelCapabilityRegistry,
+    generation_visibility_issue,
+    jimeng_image_resolution_options,
+    save_provider_catalog_snapshot,
+    save_runninghub_registry_snapshot,
+)
 
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
@@ -77,6 +87,9 @@ logging.getLogger("uvicorn.access").addFilter(QuietAccessLogFilter())
 app = FastAPI()
 
 MODEL_CAPABILITY_REGISTRY = ModelCapabilityRegistry(Path(__file__).resolve().parent)
+
+# 仅由已通过服务端画布预检的 Studio 任务设置；下游共享模型路由据此保留该次提交时的精确资格。
+_STUDIO_VALIDATED_MODEL_CONTEXT = ContextVar("studio_validated_model_context", default=None)
 
 app.add_middleware(LocalRequestBoundary)
 
@@ -282,7 +295,7 @@ RUNNINGHUB_REGION_DEFAULTS = {
         "wallet_env": "RUNNINGHUB_GLOBAL_WALLET_API_KEY",
     },
 }
-RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/developer-kit/model-registry.public.json"
+RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
 RUNNINGHUB_OFFICIAL_REGISTRY_SNAPSHOT_FILE = os.path.join(
     DATA_DIR,
     "model_capabilities",
@@ -1096,6 +1109,17 @@ def model_list_from_values(values):
             deduped.append(item)
     return deduped
 
+def normalize_model_option_ids(values):
+    """规整按精确运行选项禁用的 ID；未知旧值保留以避免升级时重启用。"""
+    result = []
+    for value in values if isinstance(values, list) else []:
+        option_id = str(value or "").strip()
+        if option_id and len(option_id) <= 200 and re.fullmatch(r"[A-Za-z0-9_-]+", option_id) and option_id not in result:
+            result.append(option_id)
+        if len(result) >= 10000:
+            break
+    return result
+
 def laohu_model_list(values):
     return model_list_from_values(normalize_laohu_model_id(value) for value in (values or []))
 
@@ -1485,6 +1509,7 @@ def runninghub_empty_region_config(region):
         "chat_models": [],
         "video_models": [],
         "audio_models": [],
+        "disabled_model_options": [],
         "model_names": {},
         "rh_apps": [],
         "rh_workflows": [],
@@ -1505,6 +1530,7 @@ def normalize_runninghub_regions(item):
         "chat_models": item.get("chat_models") or [],
         "video_models": item.get("video_models") or [],
         "audio_models": item.get("audio_models") or [],
+        "disabled_model_options": item.get("disabled_model_options") or [],
         "model_names": item.get("model_names") if isinstance(item.get("model_names"), dict) else {},
         "rh_apps": item.get("rh_apps") or [],
         "rh_workflows": item.get("rh_workflows") or [],
@@ -1529,6 +1555,7 @@ def normalize_runninghub_regions(item):
         config["chat_models"] = model_list_from_values(config.get("chat_models") or [])
         config["video_models"] = model_list_from_values(config.get("video_models") or [])
         config["audio_models"] = model_list_from_values(config.get("audio_models") or [])
+        config["disabled_model_options"] = normalize_model_option_ids(config.get("disabled_model_options"))
         config["model_names"] = normalize_model_name_map(config.get("model_names"))
         config["rh_apps"] = normalize_runninghub_entries(config.get("rh_apps") or [], "app")
         config["rh_workflows"] = normalize_runninghub_entries(config.get("rh_workflows") or [], "workflow")
@@ -1570,6 +1597,7 @@ def runninghub_provider_for_region(provider, region=None, require_enabled=False)
     provider["chat_models"] = active["chat_models"]
     provider["video_models"] = active["video_models"]
     provider["audio_models"] = active["audio_models"]
+    provider["disabled_model_options"] = active.get("disabled_model_options") or []
     provider["model_names"] = active.get("model_names") or {}
     provider["rh_apps"] = active["rh_apps"]
     provider["rh_workflows"] = active["rh_workflows"]
@@ -1657,6 +1685,13 @@ def normalize_provider(item):
         "chat_models": model_list_from_values(chat_models),
         "video_models": video_models,
         "audio_models": audio_models,
+        "disabled_model_options": (
+            normalize_model_option_ids(item.get("disabled_model_options"))
+            if provider_id != "runninghub"
+            else normalize_model_option_ids(
+                runninghub_regions.get(runninghub_region, {}).get("disabled_model_options")
+            )
+        ),
         "model_names": normalize_laohu_model_name_map(item.get("model_names")) if provider_id == "ai-money" else normalize_model_name_map(item.get("model_names")),
         "model_protocols": normalize_model_protocols(item.get("model_protocols")),
         "ms_loras": normalize_ms_loras(item.get("ms_loras") or []),
@@ -1667,7 +1702,7 @@ def normalize_provider(item):
         "volcengine_region": volc_region,
     }
 
-def load_api_providers():
+def load_api_providers(*, migrate_legacy_env=True):
     defaults = default_api_providers()
     if not os.path.exists(API_PROVIDERS_FILE):
         return merge_default_api_providers(defaults)
@@ -1677,7 +1712,7 @@ def load_api_providers():
         providers = [normalize_provider(item) for item in raw if isinstance(item, dict)]
         providers = merge_default_api_providers(providers or defaults, inject_missing=not bool(providers))
         runninghub = next((item for item in providers if item.get("id") == "runninghub"), None)
-        if runninghub:
+        if runninghub and migrate_legacy_env:
             migrate_runninghub_legacy_env(runninghub)
         return providers
     except Exception as e:
@@ -1903,33 +1938,687 @@ def public_model_catalog(providers=None):
     return catalog
 
 def build_model_capability_catalog(providers=None):
-    catalog = MODEL_CAPABILITY_REGISTRY.build_catalog(providers if providers is not None else load_api_providers())
+    active_providers = providers if providers is not None else load_api_providers()
+    catalog = MODEL_CAPABILITY_REGISTRY.build_catalog(active_providers)
+    _filter_disabled_model_options(catalog, active_providers)
     # 统一可执行选项投影：前端不再自行计算稳定标识，避免前后端各算一套（§13.5、§11.2）。
     try:
         options = studio_model_selection.compile_catalog_options(catalog)
     except Exception:  # pragma: no cover - 投影失败不得让目录接口整体不可用
         options = []
+    options = _filter_compiled_disabled_options(options, active_providers)
     catalog["options"] = options
     catalog["catalog_revision"] = studio_model_selection.catalog_revision(options)
     catalog["selection_contract_version"] = studio_model_selection.SCHEMA_VERSION
     return catalog
 
-def validate_model_capability_request(provider_id, model_id, node_type, input_counts=None, input_roles=None, parameters=None, providers=None):
+
+def _disabled_option_ids_for_provider(provider, region=""):
+    if not isinstance(provider, dict):
+        return set()
+    if str(provider.get("id") or "").strip().lower() == "runninghub":
+        selected_region = str(region or provider.get("rh_region") or "").strip().lower()
+        region_config = (provider.get("rh_regions") or {}).get(selected_region)
+        if isinstance(region_config, dict):
+            return set(normalize_model_option_ids(region_config.get("disabled_model_options")))
+    return set(normalize_model_option_ids(provider.get("disabled_model_options")))
+
+
+def _filter_disabled_model_options(catalog, providers):
+    """从正式候选投影中移除精确停用项，不改变用户启用的模型 ID 列表。"""
+    if not isinstance(catalog, dict):
+        return catalog
+    configured_by_id = {
+        str(item.get("id") or "").strip().lower(): item
+        for item in (providers or []) if isinstance(item, dict)
+    }
+    filtered_providers = []
+    for provider in catalog.get("providers") or []:
+        if not isinstance(provider, dict):
+            continue
+        connection_id = str(provider.get("id") or "").strip().lower()
+        configured = configured_by_id.get(connection_id)
+        if not configured:
+            filtered_providers.append(provider)
+            continue
+        kept_models = []
+        for model in provider.get("models") or []:
+            if not isinstance(model, dict):
+                continue
+            try:
+                model_options = studio_model_selection.compile_catalog_options({
+                    "providers": [{**provider, "models": [model]}],
+                })
+            except Exception:
+                model_options = []
+            if not model_options:
+                kept_models.append(model)
+                continue
+            allowed_options = [
+                option for option in model_options
+                if str(option.get("option_id") or "") not in _disabled_option_ids_for_provider(
+                    configured, option.get("region_id") or "",
+                )
+            ]
+            if not allowed_options:
+                continue
+            region_profiles = model.get("region_profiles")
+            if isinstance(region_profiles, dict) and len(allowed_options) != len(model_options):
+                allowed_regions = {str(item.get("region_id") or "").strip().lower() for item in allowed_options}
+                model = copy.deepcopy(model)
+                model["region_profiles"] = {
+                    key: value for key, value in region_profiles.items()
+                    if str(key or "").strip().lower() in allowed_regions
+                }
+                model["regions"] = sorted(model["region_profiles"])
+                if not model["region_profiles"]:
+                    continue
+            kept_models.append(model)
+        provider["models"] = kept_models
+        provider["families"] = MODEL_CAPABILITY_REGISTRY._family_catalog(kept_models)
+        filtered_providers.append(provider)
+    catalog["providers"] = filtered_providers
+    return catalog
+
+
+def _filter_compiled_disabled_options(options, providers):
+    """以稳定 option_id 精确过滤正式候选，避免兄弟操作随整模型误显。"""
+    configured_by_id = {
+        str(item.get("id") or "").strip().lower(): item
+        for item in (providers or []) if isinstance(item, dict)
+    }
+    visible = []
+    for option in options or []:
+        if not isinstance(option, dict):
+            continue
+        configured = configured_by_id.get(str(option.get("connection_id") or "").strip().lower())
+        if configured is None:
+            visible.append(option)
+            continue
+        region_id = str(option.get("region_id") or "").strip().lower()
+        if str(option.get("option_id") or "") not in _disabled_option_ids_for_provider(configured, region_id):
+            visible.append(option)
+    return visible
+
+
+CANVAS_MODEL_MANAGEMENT_HIDDEN_PROVIDER_IDS = {"agnes", "openai-compatible", "modelscope", "volcengine"}
+
+
+def _management_profile_ready(profile):
+    if not isinstance(profile, dict):
+        return False
+    if MODEL_CAPABILITY_REGISTRY.validation_mode(profile) != "strict":
+        return False
+    if MODEL_CAPABILITY_REGISTRY.readiness(profile) != "ready":
+        return False
+    if profile.get("runnable") is False:
+        return False
+    return not generation_visibility_issue(profile)
+
+
+def _management_profiles_for_scope(capability_id, profile_set, provider, region=""):
+    profiles = [item for item in (profile_set or {}).get("models") or [] if isinstance(item, dict)]
+    scoped_provider = copy.deepcopy(provider) if isinstance(provider, dict) else {}
+    if capability_id == "runninghub":
+        region_config = (provider.get("rh_regions") or {}).get(str(region or "").strip().lower())
+        if isinstance(region_config, dict):
+            scoped_provider["rh_region"] = str(region or "").strip().lower()
+            for field_name in set(NODE_MODEL_FIELDS.values()):
+                scoped_provider[field_name] = copy.deepcopy(region_config.get(field_name) or [])
+
+    snapshot_data = {}
+    if capability_id == "runninghub":
+        snapshot_profiles = MODEL_CAPABILITY_REGISTRY.runninghub_snapshot_profiles(region or "global")
+        for model_id, profile in snapshot_profiles.items():
+            node_type = str(profile.get("node_type") or "")
+            field_name = NODE_MODEL_FIELDS.get(node_type)
+            if field_name:
+                scoped_provider.setdefault(field_name, []).append(model_id)
+    else:
+        snapshot_path = (
+            Path(MODEL_CAPABILITY_REGISTRY.root)
+            / "data" / "model_capabilities" / "snapshots"
+            / f"{capability_id}-catalog.json"
+        )
+        try:
+            with snapshot_path.open("r", encoding="utf-8") as handle:
+                snapshot_data = json.load(handle)
+        except (OSError, ValueError, TypeError):
+            snapshot_data = {}
+
+    # 管理目录与正式目录使用同一个 profile 解析器：静态档案缺失时，
+    # 只从本地已保存的模型目录或当前配置 ID 尝试动态适配，再由严格门槛筛选。
+    profile_ids_by_field = {}
+    for profile in profiles:
+        node_type = str(profile.get("node_type") or "")
+        field_name = NODE_MODEL_FIELDS.get(node_type)
+        model_id = str(profile.get("model_id") or "").strip()
+        if field_name and model_id:
+            profile_ids_by_field.setdefault(field_name, []).append(model_id)
+    for field_name in set(NODE_MODEL_FIELDS.values()):
+        values = [
+            *(scoped_provider.get(field_name) or []),
+            *(snapshot_data.get(field_name) or []),
+            *(profile_ids_by_field.get(field_name) or []),
+        ]
+        scoped_provider[field_name] = model_list_from_values(values)
+
+    candidates = MODEL_CAPABILITY_REGISTRY._catalog_models_for_provider(
+        scoped_provider, capability_id, profile_set or {}, region=region,
+    )
+    return [
+        item for item in candidates
+        if str(item.get("node_type") or "") in NODE_MODEL_FIELDS and _management_profile_ready(item)
+    ]
+
+
+def _build_model_management_catalog(providers=None):
+    """从已登记能力档案构造管理目录，不依赖用户当前模型选择列表。"""
+    configured = providers if providers is not None else load_api_providers(migrate_legacy_env=False)
+    loaded = MODEL_CAPABILITY_REGISTRY.load()
+    profile_sets = loaded.get("profiles") or {}
+    management_providers = []
+    for original in configured or []:
+        if not isinstance(original, dict) or original.get("enabled", True) is False:
+            continue
+        connection_id = str(original.get("id") or "").strip().lower()
+        if connection_id in CANVAS_MODEL_MANAGEMENT_HIDDEN_PROVIDER_IDS:
+            continue
+        capability_id = MODEL_CAPABILITY_REGISTRY.capability_provider_id(original)
+        profile_set = profile_sets.get(capability_id) or {}
+        provider = copy.deepcopy(original)
+
+        def ids_by_node_type(scope_region=""):
+            result = {node_type: [] for node_type in NODE_MODEL_FIELDS}
+            for profile in _management_profiles_for_scope(
+                capability_id, profile_set, original, scope_region
+            ):
+                node_type = str(profile.get("node_type") or "")
+                model_id = str(profile.get("model_id") or "").strip()
+                if node_type in result and model_id and model_id not in result[node_type]:
+                    result[node_type].append(model_id)
+            return result
+
+        def add_scope_ids(target, scoped_ids):
+            # audio_generation 与 music_generation 共用 audio_models 存储字段；
+            # 按字段合并两种用途，不能由后遍历的类型覆盖前一种。
+            values_by_field = {}
+            for node_type, field_name in NODE_MODEL_FIELDS.items():
+                values = values_by_field.setdefault(
+                    field_name,
+                    model_list_from_values(target.get(field_name) or []),
+                )
+                for model_id in scoped_ids.get(node_type) or []:
+                    if model_id not in values:
+                        values.append(model_id)
+            for field_name, values in values_by_field.items():
+                target[field_name] = values
+
+        if capability_id == "runninghub":
+            raw_regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
+            if raw_regions:
+                for region, config in raw_regions.items():
+                    if not isinstance(config, dict) or config.get("enabled") is not True:
+                        continue
+                    scoped_ids = ids_by_node_type(str(region))
+                    add_scope_ids(config, scoped_ids)
+                provider["rh_regions"] = raw_regions
+            else:
+                scoped_ids = ids_by_node_type(str(provider.get("rh_region") or "global"))
+                add_scope_ids(provider, scoped_ids)
+        else:
+            scoped_ids = ids_by_node_type()
+            add_scope_ids(provider, scoped_ids)
+        management_providers.append(provider)
+
+    catalog = MODEL_CAPABILITY_REGISTRY.build_catalog(management_providers)
+    # 管理界面需要完整能力 profile 才能检查已停用项；只投影脱敏的目录字段，不暴露站点地址或凭据。
+    safe_catalog = {
+        key: copy.deepcopy(catalog[key])
+        for key in ("schema_version", "updated_at") if key in catalog
+    }
+    safe_providers = []
+    for catalog_provider in catalog.get("providers") or []:
+        if not isinstance(catalog_provider, dict):
+            continue
+        safe_provider = {
+            key: copy.deepcopy(catalog_provider[key])
+            for key in (
+                "id", "name", "protocol", "capability_provider_id", "profile_updated_at",
+                "models", "families",
+            ) if key in catalog_provider
+        }
+        safe_provider["regions"] = [
+            {
+                "region": str(item.get("region") or ""),
+                "enabled": bool(item.get("enabled")),
+                "model_count": int(item.get("model_count") or 0),
+            }
+            for item in catalog_provider.get("regions") or [] if isinstance(item, dict)
+        ]
+        safe_providers.append(safe_provider)
+    safe_catalog["providers"] = safe_providers
+    options = studio_model_selection.compile_catalog_options(catalog)
+    configured_by_id = {
+        str(item.get("id") or "").strip().lower(): item
+        for item in (configured or []) if isinstance(item, dict)
+    }
+    visible_options = []
+    for option in options:
+        if (
+            option.get("validation_mode") != "strict"
+            or option.get("readiness") != "ready"
+            or not option.get("runnable")
+            or not option.get("selectable")
+            or option.get("selection_unavailable_reason")
+        ):
+            continue
+        provider = configured_by_id.get(str(option.get("connection_id") or "").strip().lower())
+        if not provider or provider.get("enabled", True) is False:
+            continue
+        field_name = NODE_MODEL_FIELDS.get(str(option.get("node_type") or ""))
+        if not field_name:
+            continue
+        if str(option.get("connection_id") or "").strip().lower() == "runninghub":
+            region = str(option.get("region_id") or "").strip().lower()
+            config = (provider.get("rh_regions") or {}).get(region)
+            if not isinstance(config, dict) or config.get("enabled") is not True:
+                continue
+        else:
+            config = provider
+        configured_ids = model_list_from_values(config.get(field_name) or [])
+        if option.get("capability_provider_id") == "ai-money":
+            configured_ids = laohu_model_list(configured_ids)
+        disabled_options = set(normalize_model_option_ids(config.get("disabled_model_options")))
+        item = copy.deepcopy(option)
+        item["enabled"] = (
+            str(item.get("catalog_model_id") or "") in configured_ids
+            and str(item.get("option_id") or "") not in disabled_options
+        )
+        visible_options.append(item)
+
+    revision_data = [
+        {
+            "option_id": item.get("option_id"),
+            "profile_revision": item.get("profile_revision"),
+            "readiness": item.get("readiness"),
+            "enabled": bool(item.get("enabled")),
+        }
+        for item in sorted(visible_options, key=lambda item: str(item.get("option_id") or ""))
+    ]
+    digest = hashlib.sha256(json.dumps(
+        {"contract": studio_model_selection.SCHEMA_VERSION, "options": revision_data},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()[:16]
+    return {
+        "options": visible_options,
+        "catalog": safe_catalog,
+        "catalog_revision": f"rev_{digest}",
+        "selection_contract_version": studio_model_selection.SCHEMA_VERSION,
+    }
+
+
+def build_model_management_catalog():
+    return _build_model_management_catalog()
+
+
+def _guard_disabled_model_option(
+    provider_id, model_id, node_type, operation="", region="", providers=None,
+    option_id="", endpoint_id="",
+):
+    active = providers if providers is not None else load_api_providers(migrate_legacy_env=False)
+    provider = next((
+        item for item in active or []
+        if str(item.get("id") or "").strip().lower() == str(provider_id or "").strip().lower()
+    ), None)
+    if not provider:
+        return
+    is_runninghub = str(provider.get("id") or "").strip().lower() == "runninghub"
+    if is_runninghub:
+        requested_region = str(region or "").strip().lower()
+        if requested_region and requested_region not in RUNNINGHUB_REGION_DEFAULTS:
+            raise ModelCapabilityError("RunningHub 站点标识无效，请重新选择站点")
+        selected_region = runninghub_normalize_region(
+            requested_region or provider.get("rh_region"), provider.get("rh_region") or "global",
+        )
+        region_config = (provider.get("rh_regions") or {}).get(selected_region)
+        if not isinstance(region_config, dict) and isinstance(provider.get("disabled_model_options"), list):
+            # 已按站点投影的 provider 可能不再带完整 rh_regions。
+            disabled = provider.get("disabled_model_options") or []
+        else:
+            disabled = region_config.get("disabled_model_options") or [] if isinstance(region_config, dict) else []
+    else:
+        # 普通 API provider 没有站点维度，忽略客户端附带的 region，避免把准确模型身份过滤成空集。
+        selected_region = ""
+        disabled = provider.get("disabled_model_options") or []
+    normalized_model = normalize_laohu_model_id(model_id) if MODEL_CAPABILITY_REGISTRY.capability_provider_id(provider) == "ai-money" else str(model_id or "").strip()
+    normalized_node = str(node_type or "").strip()
+    normalized_operation = str(operation or "").strip()
+    normalized_endpoint = str(endpoint_id or "").strip()
+    expected_option_id = studio_model_selection.compute_option_id(
+        connection_id=str(provider_id or "").strip().lower(),
+        region_id=selected_region,
+        deployment_id="",
+        node_type=normalized_node,
+        catalog_model_id=normalized_model,
+        endpoint_id=normalized_endpoint,
+        operation=normalized_operation,
+    )
+    disabled_ids = set(normalize_model_option_ids(disabled))
+    if option_id and str(option_id) != expected_option_id:
+        raise ModelCapabilityError("模型目录选项与已解析的运行配置不一致，请重新选择")
+    if expected_option_id in disabled_ids:
+        raise ModelCapabilityError("该精确模型运行模式已在 API 设置中停用")
+    if not disabled_ids:
+        return
+    catalog = _build_model_management_catalog(active)
+    model_matches = [
+        item for item in catalog.get("options") or []
+        if str(item.get("connection_id") or "").strip().lower() == str(provider_id or "").strip().lower()
+        and str(item.get("region_id") or "").strip().lower() == selected_region
+        and str(item.get("node_type") or "") == normalized_node
+        and str(item.get("catalog_model_id") or "") == normalized_model
+    ]
+    matches = [
+        item for item in model_matches
+        if (not normalized_operation or str(item.get("operation") or "") == normalized_operation)
+        and (not normalized_endpoint or str(item.get("endpoint_id") or "") == normalized_endpoint)
+    ]
+    if option_id:
+        exact = [item for item in matches if str(item.get("option_id") or "") == expected_option_id]
+        if len(exact) != 1:
+            raise ModelCapabilityError("所选模型选项已变化，请重新选择后再运行")
+        if exact and exact[0].get("enabled") is not True:
+            raise ModelCapabilityError("该精确模型运行模式已在 API 设置中停用")
+        return
+    disabled_matches = [item for item in model_matches if str(item.get("option_id") or "") in disabled_ids]
+    if not disabled_matches and expected_option_id not in disabled_ids:
+        return
+    if not matches:
+        raise ModelCapabilityError("该精确模型运行选项已变化，请重新读取目录后再运行")
+    exact = [item for item in matches if str(item.get("option_id") or "") == expected_option_id]
+    if len(exact) != 1:
+        raise ModelCapabilityError("该模型对应多个精确运行选项，请重新选择运行模式")
+    if str(exact[0].get("option_id") or "") in disabled_ids or exact[0].get("enabled") is not True:
+        raise ModelCapabilityError("该精确模型运行模式已在 API 设置中停用")
+
+
+def _read_raw_api_provider_records_locked():
+    if not os.path.isfile(API_PROVIDERS_FILE):
+        raise HTTPException(status_code=503, detail="API 平台配置文件不存在，已停止模型启用修改")
     try:
-        return MODEL_CAPABILITY_REGISTRY.validate_request(
-            providers if providers is not None else load_api_providers(),
+        with open(API_PROVIDERS_FILE, "r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=500, detail="API 平台配置无法安全读取，原文件未修改") from exc
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise HTTPException(status_code=500, detail="API 平台配置格式无效，原文件未修改")
+    return value
+
+
+def _api_provider_catalog_view(raw_records):
+    try:
+        return [normalize_provider(item) for item in raw_records]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="API 平台配置无法安全规整，原文件未修改") from exc
+
+
+def patch_canvas_model_option_enabled(option_id, enabled, catalog_revision):
+    """只更改一个精确模型选项，不接收或覆盖整个 provider 配置。"""
+    option_id = str(option_id or "").strip()
+    if not option_id or not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="模型选项更新参数无效")
+    with GLOBAL_CONFIG_LOCK:
+        raw_records = _read_raw_api_provider_records_locked()
+        normalized = _api_provider_catalog_view(raw_records)
+        catalog = _build_model_management_catalog(normalized)
+        if str(catalog.get("catalog_revision") or "") != str(catalog_revision or ""):
+            raise HTTPException(status_code=409, detail={
+                "message": "模型目录已变化，请重新读取后再修改。",
+                "catalog_revision": catalog.get("catalog_revision") or "",
+            })
+        option = next((item for item in catalog["options"] if item.get("option_id") == option_id), None)
+        if option is None:
+            raise HTTPException(status_code=404, detail="模型选项不存在或当前平台/站点未启用")
+
+        connection_id = str(option.get("connection_id") or "").strip().lower()
+        capability_provider_id = str(option.get("capability_provider_id") or "").strip().lower()
+        node_type = str(option.get("node_type") or "").strip()
+        field_name = NODE_MODEL_FIELDS.get(node_type)
+        model_id = str(option.get("catalog_model_id") or "").strip()
+        region = str(option.get("region_id") or "").strip().lower()
+        if not field_name or not model_id:
+            raise HTTPException(status_code=409, detail="模型选项身份不完整，未修改配置")
+
+        raw_provider = next((item for item in raw_records if str(item.get("id") or "").strip().lower() == connection_id), None)
+        normalized_provider = next((item for item in normalized if str(item.get("id") or "").strip().lower() == connection_id), None)
+        if not raw_provider or not normalized_provider:
+            raise HTTPException(status_code=409, detail="模型所属平台已变化，请重新读取目录")
+        if raw_provider.get("enabled", True) is False:
+            raise HTTPException(status_code=409, detail="平台已停用，不能调整其模型")
+
+        if connection_id == "runninghub":
+            raw_regions = raw_provider.get("rh_regions") if isinstance(raw_provider.get("rh_regions"), dict) else None
+            if raw_regions is not None:
+                target = raw_regions.get(region)
+                if not isinstance(target, dict) or target.get("enabled") is not True:
+                    raise HTTPException(status_code=409, detail="RunningHub 站点已停用，不能调整其模型")
+            else:
+                # 旧版单站结构仅承载原活动站点；不得借更新悄悄改写另一站。
+                if region != str(normalized_provider.get("rh_region") or "").strip().lower():
+                    raise HTTPException(status_code=409, detail="该 RunningHub 站点尚未配置")
+                target = raw_provider
+        else:
+            target = raw_provider
+
+        current_values = target.get(field_name)
+        if not isinstance(current_values, list):
+            raise HTTPException(status_code=500, detail="模型白名单格式无效，原配置未修改")
+        normalized_ids = [
+            normalize_laohu_model_id(value) if capability_provider_id == "ai-money" else str(value or "").strip()
+            for value in current_values
+        ]
+        disabled_ids = normalize_model_option_ids(target.get("disabled_model_options"))
+        if enabled:
+            model_was_enabled = model_id in normalized_ids
+            siblings = [
+                item for item in catalog["options"]
+                if str(item.get("connection_id") or "").strip().lower() == connection_id
+                and str(item.get("region_id") or "").strip().lower() == region
+                and str(item.get("node_type") or "") == node_type
+                and str(item.get("catalog_model_id") or "") == model_id
+            ]
+            if not model_was_enabled:
+                for sibling in siblings:
+                    sibling_id = str(sibling.get("option_id") or "")
+                    if sibling_id and sibling_id != option_id and sibling_id not in disabled_ids:
+                        disabled_ids.append(sibling_id)
+            if model_id not in normalized_ids:
+                current_values.append(model_id)
+            disabled_ids = [value for value in disabled_ids if value != option_id]
+        else:
+            if option_id not in disabled_ids:
+                disabled_ids.append(option_id)
+            siblings = [
+                item for item in catalog["options"]
+                if str(item.get("connection_id") or "").strip().lower() == connection_id
+                and str(item.get("region_id") or "").strip().lower() == region
+                and str(item.get("node_type") or "") == node_type
+                and str(item.get("catalog_model_id") or "") == model_id
+            ]
+            another_operation_enabled = any(
+                item.get("option_id") != option_id
+                and item.get("enabled") is True
+                and item.get("option_id") not in disabled_ids
+                for item in siblings
+            )
+            if not another_operation_enabled:
+                current_values[:] = [
+                    value for value in current_values
+                    if (normalize_laohu_model_id(value) if capability_provider_id == "ai-money" else str(value or "").strip()) != model_id
+                ]
+        target["disabled_model_options"] = disabled_ids
+        try:
+            atomic_write_json(Path(API_PROVIDERS_FILE), raw_records)
+        except (DataFileError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail="模型启用设置保存失败，原配置保留") from exc
+
+        updated = _build_model_management_catalog(_api_provider_catalog_view(raw_records))
+        updated_option = next((item for item in updated["options"] if item.get("option_id") == option_id), None)
+        return {
+            "option_id": option_id,
+            "enabled": bool(updated_option and updated_option.get("enabled")),
+            "catalog_revision": updated.get("catalog_revision") or "",
+        }
+
+def _resolve_model_option_descriptor(providers, provider_id, model_id, node_type, option_id, region=""):
+    """用目录签发的 option ID 解析唯一 operation 与 endpoint。"""
+    option_id = str(option_id or "").strip()
+    if not option_id:
+        return None
+    catalog = MODEL_CAPABILITY_REGISTRY.build_catalog(providers or [])
+    options = studio_model_selection.compile_catalog_options(catalog)
+    provider = next((item for item in providers or []
+                     if str(item.get("id") or "").strip().lower()
+                     == str(provider_id or "").strip().lower()), {})
+    capability_id = MODEL_CAPABILITY_REGISTRY.capability_provider_id(provider)
+    requested_model = normalize_laohu_model_id(model_id) if capability_id == "ai-money" else str(model_id or "").strip()
+    is_runninghub = str(provider_id or "").strip().lower() == "runninghub"
+    if is_runninghub:
+        requested_region = runninghub_normalize_region(region or provider.get("rh_region"), "global")
+    else:
+        # 非 RunningHub 没有站点维度，不能让客户端附带的 region 改变 option 身份。
+        requested_region = ""
+    matches = [item for item in options
+               if str(item.get("option_id") or "") == option_id
+               and str(item.get("connection_id") or "").strip().lower() == str(provider_id or "").strip().lower()
+               and str(item.get("catalog_model_id") or "").strip() == requested_model
+               and str(item.get("node_type") or "").strip() == str(node_type or "").strip()
+               and str(item.get("region_id") or "").strip().lower() == requested_region]
+    if len(matches) != 1:
+        raise ModelCapabilityError("模型目录选项已变化或身份不完整，请重新选择")
+    return matches[0]
+
+
+def validate_model_capability_request(
+    provider_id, model_id, node_type, input_counts=None, input_roles=None, parameters=None,
+    providers=None, operation="", region="", option_id="",
+):
+    try:
+        active_providers = providers if providers is not None else load_api_providers()
+        option = _resolve_model_option_descriptor(
+            active_providers, provider_id, model_id, node_type, option_id, region=region,
+        ) if option_id else None
+        if option:
+            selected_operation = str(option.get("operation") or option.get("variant_id") or "")
+            allowed_operation_names = {
+                selected_operation,
+                str(option.get("variant_id") or "").strip(),
+            }
+            if operation and str(operation).strip() not in allowed_operation_names:
+                raise ModelCapabilityError("模型目录选项与请求的运行模式不一致，请重新选择")
+            operation = selected_operation
+        profile = MODEL_CAPABILITY_REGISTRY.validate_request(
+            active_providers,
             str(provider_id or "").strip(),
             str(model_id or "").strip(),
             str(node_type or "").strip(),
             input_counts=input_counts or {},
             input_roles=input_roles or {},
             parameters=parameters or {},
+            operation=operation or "",
+            endpoint_id=str(option.get("endpoint_id") or "") if option else "",
+            region=region,
         )
+        _guard_disabled_model_option(
+            provider_id, profile.get("model_id") or model_id, node_type,
+            operation=profile.get("operation") or profile.get("variant_id") or operation or "", region=region,
+            providers=active_providers, option_id=option_id,
+            endpoint_id=profile.get("endpoint_id") or "",
+        )
+        return profile
     except ModelCapabilityError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-def resolve_model_capability_request(provider_id, model_id, family_id, node_type, input_counts=None, input_roles=None, parameters=None, operation="", providers=None):
+def resolve_model_capability_request(
+    provider_id, model_id, family_id, node_type, input_counts=None, input_roles=None,
+    parameters=None, operation="", providers=None, region="", option_id="",
+    allow_disabled_option=False, endpoint_id="",
+):
     active_providers = providers if providers is not None else load_api_providers()
+    execution_context = _validated_studio_model_context(
+        provider_id, model_id, node_type, region=region, operation=operation,
+    )
+    if execution_context and option_id and str(option_id) != str(execution_context.get("option_id") or ""):
+        execution_context = None
+    effective_operation = str(operation or "").strip()
+    effective_endpoint_id = str(endpoint_id or "").strip()
+    if execution_context:
+        active_providers = _provider_with_validated_model(active_providers, execution_context)
+        effective_operation = str(execution_context.get("operation") or effective_operation)
+        effective_endpoint_id = str(execution_context.get("endpoint_id") or effective_endpoint_id)
+    elif option_id:
+        try:
+            selected_option = _resolve_model_option_descriptor(
+                active_providers, provider_id, model_id, node_type, option_id, region=region,
+            )
+        except ModelCapabilityError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        selected_operation = str(selected_option.get("operation") or selected_option.get("variant_id") or "")
+        selected_endpoint = str(selected_option.get("endpoint_id") or "")
+        allowed_operation_names = {
+            selected_operation,
+            str(selected_option.get("variant_id") or "").strip(),
+        }
+        if effective_operation and effective_operation not in allowed_operation_names:
+            raise HTTPException(status_code=400, detail="模型目录选项与请求的运行模式不一致，请重新选择")
+        if effective_endpoint_id and effective_endpoint_id != selected_endpoint:
+            raise HTTPException(status_code=400, detail="模型目录选项与请求地址不一致，请重新选择")
+        effective_operation = selected_operation
+        effective_endpoint_id = selected_endpoint
+
+    def guard_profile(profile):
+        if execution_context:
+            provider = next((item for item in active_providers or []
+                             if str(item.get("id") or "").strip().lower()
+                             == str(provider_id or "").strip().lower()), {})
+            model = str(profile.get("model_id") or model_id).strip()
+            if MODEL_CAPABILITY_REGISTRY.capability_provider_id(provider) == "ai-money":
+                model = normalize_laohu_model_id(model)
+            region_id = (
+                runninghub_normalize_region(region or provider.get("rh_region"), "global")
+                if str(provider_id or "").strip().lower() == "runninghub" else ""
+            )
+            resolved_option_id = studio_model_selection.compute_option_id(
+                connection_id=str(provider_id or "").strip().lower(),
+                region_id=region_id,
+                deployment_id="",
+                node_type=str(node_type or "").strip(),
+                catalog_model_id=model,
+                endpoint_id=str(profile.get("endpoint_id") or "").strip(),
+                operation=str(profile.get("operation") or profile.get("variant_id") or "").strip(),
+            )
+            if (
+                resolved_option_id == str(execution_context.get("option_id") or "")
+                and str(profile.get("endpoint_id") or "").strip() == str(execution_context.get("endpoint_id") or "")
+                and str(profile.get("operation") or profile.get("variant_id") or "").strip()
+                == str(execution_context.get("operation") or "")
+            ):
+                return profile
+        if not allow_disabled_option:
+            _guard_disabled_model_option(
+                provider_id, profile.get("model_id") or model_id, node_type,
+                operation=profile.get("operation") or profile.get("variant_id") or effective_operation,
+                region=region,
+                providers=active_providers, option_id=option_id,
+                endpoint_id=profile.get("endpoint_id") or "",
+            )
+        return profile
+
     try:
         if str(model_id or "").strip():
             try:
@@ -1941,6 +2630,9 @@ def resolve_model_capability_request(provider_id, model_id, family_id, node_type
                     input_counts=input_counts or {},
                     input_roles=input_roles or {},
                     parameters=parameters or {},
+                    operation=effective_operation,
+                    endpoint_id=effective_endpoint_id,
+                    region=region,
                 )
                 requested_family = str(family_id or "").strip()
                 if requested_family and str(profile.get("family_id") or "").strip() != requested_family:
@@ -1948,12 +2640,12 @@ def resolve_model_capability_request(provider_id, model_id, family_id, node_type
                 requested_operation = str(operation or "").strip()
                 if requested_operation and requested_operation not in {profile.get("operation"), profile.get("variant_id")}:
                     raise ModelCapabilityError(f"模型 {model_id} 不支持操作 {requested_operation}")
-                return profile
+                return guard_profile(profile)
             except ModelCapabilityError:
                 if not str(family_id or "").strip():
                     raise
         if str(family_id or "").strip():
-            return MODEL_CAPABILITY_REGISTRY.resolve_family_variant(
+            profile = MODEL_CAPABILITY_REGISTRY.resolve_family_variant(
                 active_providers,
                 provider_id,
                 family_id,
@@ -1961,17 +2653,21 @@ def resolve_model_capability_request(provider_id, model_id, family_id, node_type
                 input_counts=input_counts or {},
                 input_roles=input_roles or {},
                 parameters=parameters or {},
-                operation=operation,
+                operation=effective_operation,
             )
-        return MODEL_CAPABILITY_REGISTRY.validate_request(
-            active_providers,
-            provider_id,
-            model_id,
-            node_type,
-            input_counts=input_counts or {},
-            input_roles=input_roles or {},
-            parameters=parameters or {},
-        )
+            return guard_profile(profile)
+        return guard_profile(MODEL_CAPABILITY_REGISTRY.validate_request(
+                active_providers,
+                provider_id,
+                model_id,
+                node_type,
+                input_counts=input_counts or {},
+                input_roles=input_roles or {},
+                parameters=parameters or {},
+                operation=effective_operation,
+                endpoint_id=effective_endpoint_id,
+                region=region,
+            ))
     except ModelCapabilityError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3415,6 +4111,7 @@ class ModelCapabilityDryRunRequest(BaseModel):
     model_id: str = ""
     family_id: str = ""
     operation: str = ""
+    option_id: str = ""
     node_type: str = ""
     inputs: Dict[str, Any] = Field(default_factory=dict)
     input_counts: Dict[str, int] = Field(default_factory=dict)
@@ -3431,6 +4128,7 @@ class CanvasPreflightRequest(BaseModel):
     model_id: str = ""
     family_id: str = ""
     operation: str = ""
+    option_id: str = ""
     node_type: str = ""
     inputs: Dict[str, Any] = Field(default_factory=dict)
     input_counts: Dict[str, int] = Field(default_factory=dict)
@@ -3599,6 +4297,15 @@ class CanvasMediaTransformRequest(BaseModel):
 class LocalImageImportRequest(BaseModel):
     path: str = ""
     paths: List[str] = Field(default_factory=list)
+
+class ExternalCliMaterialResultRequest(BaseModel):
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+    material_id: str = Field(min_length=1, max_length=160)
+    provider: str = Field(min_length=1, max_length=80)
+    tool: str = Field(min_length=1, max_length=120)
+    model: str = Field(min_length=1, max_length=160)
+    task_id: str = Field(min_length=1, max_length=180)
+    output_index: int = Field(ge=1, le=100, strict=True)
 
 class LocalAssetCaptionRequest(BaseModel):
     names: List[str] = []
@@ -4281,27 +4988,227 @@ def normalize_canvas_kind(kind="classic"):
 PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
 SMART_CANVAS_PERSONALIZATION_PATH = os.path.join(DATA_DIR, "smart_canvas_personalization.json")
 
+_SMART_CANVAS_PERSONALIZATION_MAPS = (
+    "executionLayouts",
+    "parameterOptionOrder",
+    "modelOrder",
+    "parameterPresentation",
+)
+
+
+def validate_smart_canvas_personalization(value, *, allow_missing_version=False):
+    """验证展示偏好格式；此数据不能定义模型参数、默认值或请求契约。"""
+    if not isinstance(value, dict):
+        raise ValueError("画布个性化配置必须是对象")
+    version = value.get("version", 1 if allow_missing_version else None)
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise ValueError("画布个性化配置版本无效")
+
+    normalized = copy.deepcopy(value)
+    normalized["version"] = 1
+    reset_epoch = normalized.get("reset_epoch", 0)
+    if isinstance(reset_epoch, bool) or not isinstance(reset_epoch, int) or reset_epoch < 0:
+        raise ValueError("画布个性化 reset_epoch 必须是非负整数")
+    normalized["reset_epoch"] = reset_epoch
+    for key in _SMART_CANVAS_PERSONALIZATION_MAPS:
+        if key not in normalized:
+            normalized[key] = {}
+        if not isinstance(normalized[key], dict):
+            raise ValueError(f"画布个性化字段 {key} 必须是对象")
+
+    # 这个映射只保存字段的显示状态、宽度与顺序，不接受参数值或选项定义。
+    for option_id, fields in normalized["parameterPresentation"].items():
+        if not isinstance(option_id, str) or not option_id.strip() or len(option_id) > 240:
+            raise ValueError("参数展示偏好中的模型选项 ID 无效")
+        if not isinstance(fields, dict):
+            raise ValueError("参数展示偏好中的字段列表必须是对象")
+        for field_key, presentation in fields.items():
+            if not isinstance(field_key, str) or not field_key.strip() or len(field_key) > 160:
+                raise ValueError("参数展示偏好中的字段键无效")
+            if not isinstance(presentation, dict):
+                raise ValueError("参数展示偏好必须是字段显示设置对象")
+            if set(presentation) - {"visible", "width", "order"}:
+                raise ValueError("参数展示偏好只能保存旧可见性兼容字段、布局宽度和顺序")
+            if "visible" in presentation and not isinstance(presentation.get("visible"), bool):
+                raise ValueError("旧参数展示偏好 visible 必须是布尔值")
+            if presentation.get("width") not in {"full", "half"}:
+                raise ValueError("参数展示偏好 width 必须是 full 或 half")
+            order = presentation.get("order")
+            if order is not None and (isinstance(order, bool) or not isinstance(order, int) or order < 0):
+                raise ValueError("参数展示偏好 order 必须是非负整数")
+            # 兼容旧客户端数据，但参数契约字段永远不能被展示偏好隐藏。
+            presentation.pop("visible", None)
+    return normalized
+
+
+def merge_smart_canvas_personalization(existing, incoming):
+    """合并偏好更新，保留旧客户端未发送的有效字段和历史展示信息。"""
+    current = validate_smart_canvas_personalization(existing)
+    update = validate_smart_canvas_personalization(incoming, allow_missing_version=True)
+
+    def merge_mapping(old_value, new_value):
+        merged = copy.deepcopy(old_value)
+        for key, value in new_value.items():
+            if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key] = merge_mapping(merged[key], value)
+            else:
+                merged[key] = copy.deepcopy(value)
+        return merged
+
+    merged = copy.deepcopy(current)
+    for key, value in update.items():
+        if key == "version":
+            continue
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = merge_mapping(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return validate_smart_canvas_personalization(merged)
+
+
+def reset_smart_canvas_presentation_preferences(*, scope="all", option_id="", node_type="", management_options=None):
+    """在调用方持有 CANVAS_LOCK 时重置展示偏好，不修改模型白名单或参数契约。"""
+    normalized_scope = str(scope or "").strip().lower()
+    selected_option = str(option_id or "").strip()
+    selected_node_type = str(node_type or "").strip()
+    if normalized_scope not in {"all", "node"}:
+        raise ValueError("展示偏好重置范围必须是 all 或 node")
+    if normalized_scope == "all" and (selected_option or selected_node_type):
+        raise ValueError("整体重置不接受模型选项或节点类型")
+    if normalized_scope == "node" and (not selected_option or not selected_node_type):
+        raise ValueError("单模型重置必须提供精确 option_id 和 node_type")
+
+    path = Path(SMART_CANVAS_PERSONALIZATION_PATH)
+    if path.exists():
+        try:
+            stored = validate_smart_canvas_personalization(read_json_file(path))
+        except (DataFileError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail=f"画布个性化配置无法安全重置，原文件未修改：{exc}") from exc
+    else:
+        stored = {"version": 1, **{key: {} for key in _SMART_CANVAS_PERSONALIZATION_MAPS}}
+
+    if normalized_scope == "all":
+        for key in _SMART_CANVAS_PERSONALIZATION_MAPS:
+            stored[key] = {}
+    else:
+        if management_options is None:
+            raise ValueError("单模型重置必须传入服务端精确模型目录")
+        option = next((item for item in management_options
+                       if isinstance(item, dict) and str(item.get("option_id") or "") == selected_option), None)
+        if option is None or str(option.get("node_type") or "") != selected_node_type:
+            raise ValueError("模型选项与节点类型不匹配或已不在受管目录中")
+
+        provider_id = str(option.get("provider_id") or option.get("connection_id") or "").strip()
+        family_id = str(option.get("family_id") or option.get("canonical_family_id") or "").strip()
+        model_id = str(option.get("model_id") or option.get("catalog_model_id") or "").strip()
+        if not provider_id or not family_id or not model_id:
+            raise ValueError("模型目录缺少稳定身份字段，展示偏好未重置")
+
+        # 该布局键与 capabilityLayoutKey 保持同一构造顺序。
+        layout_key = "::".join((selected_node_type, provider_id, family_id, model_id))
+        stored["parameterPresentation"].pop(selected_option, None)
+        parameter_order_prefix = f"parameter-options::{layout_key}::"
+        for key in list(stored["parameterOptionOrder"]):
+            if str(key).startswith(parameter_order_prefix):
+                stored["parameterOptionOrder"].pop(key, None)
+        stored["executionLayouts"].pop(layout_key, None)
+
+        # 清掉当前模型所属用途的家族、平台和运行模式排序；其他媒体用途不受影响。
+        model_order_scopes = {
+            f"families::{selected_node_type}",
+            f"platforms::{selected_node_type}",
+            f"variants::{selected_node_type}::{family_id}",
+        }
+        family_prefix = f"families::{selected_node_type}::"
+        for key in list(stored["modelOrder"]):
+            scope_key = str(key)
+            if scope_key in model_order_scopes or scope_key.startswith(family_prefix):
+                stored["modelOrder"].pop(key, None)
+
+    result = validate_smart_canvas_personalization(stored)
+    result["reset_epoch"] += 1
+    try:
+        atomic_write_json(path, result)
+    except (DataFileError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"画布个性化重置失败，原文件未修改：{exc}") from exc
+    return result
+
+
 @app.get("/api/smart-canvas/personalization")
 async def get_smart_canvas_personalization():
     path = Path(SMART_CANVAS_PERSONALIZATION_PATH)
-    if not path.exists():
-        return {"version": 1, "executionLayouts": {}, "parameterOptionOrder": {}, "modelOrder": {}}
-    try:
-        value = read_json_file(path)
-    except (DataFileError, OSError, ValueError) as exc:
-        raise HTTPException(status_code=500, detail=f"画布个性化配置读取失败：{exc}") from exc
-    return value if isinstance(value, dict) else {"version": 1}
+    with CANVAS_LOCK:
+        if not path.exists():
+            return {"version": 1, "executionLayouts": {}, "parameterOptionOrder": {}, "modelOrder": {}, "parameterPresentation": {}}
+        try:
+            value = read_json_file(path)
+        except (DataFileError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail=f"画布个性化配置读取失败：{exc}") from exc
+        try:
+            return validate_smart_canvas_personalization(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=f"画布个性化配置无效：{exc}") from exc
 
 @app.put("/api/smart-canvas/personalization")
 async def put_smart_canvas_personalization(payload: Dict[str, Any]):
-    allowed = {
-        "version": max(1, int(payload.get("version") or 1)),
-        "executionLayouts": payload.get("executionLayouts") if isinstance(payload.get("executionLayouts"), dict) else {},
-        "parameterOptionOrder": payload.get("parameterOptionOrder") if isinstance(payload.get("parameterOptionOrder"), dict) else {},
-        "modelOrder": payload.get("modelOrder") if isinstance(payload.get("modelOrder"), dict) else {},
-    }
-    atomic_write_json(Path(SMART_CANVAS_PERSONALIZATION_PATH), allowed)
+    path = Path(SMART_CANVAS_PERSONALIZATION_PATH)
+    try:
+        update = validate_smart_canvas_personalization(payload, allow_missing_version=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"画布个性化更新无效：{exc}") from exc
+
+    with CANVAS_LOCK:
+        if path.exists():
+            try:
+                existing = validate_smart_canvas_personalization(read_json_file(path))
+            except (DataFileError, OSError, ValueError) as exc:
+                raise HTTPException(status_code=500, detail=f"画布个性化配置无法安全更新，原文件未修改：{exc}") from exc
+        else:
+            existing = {"version": 1, **{key: {} for key in _SMART_CANVAS_PERSONALIZATION_MAPS}}
+
+        try:
+            incoming_epoch = update.get("reset_epoch", 0)
+            current_epoch = existing.get("reset_epoch", 0)
+            if incoming_epoch != current_epoch:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "画布展示偏好已重置，请先重新读取设置后再保存。",
+                        "reset_epoch": current_epoch,
+                    },
+                )
+            merged = merge_smart_canvas_personalization(existing, update)
+            atomic_write_json(path, merged)
+        except HTTPException:
+            raise
+        except (DataFileError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=500, detail=f"画布个性化配置保存失败，原文件未修改：{exc}") from exc
     return {"ok": True}
+
+
+@app.post("/api/smart-canvas/personalization/reset")
+async def reset_smart_canvas_personalization(payload: Dict[str, Any]):
+    try:
+        if set(payload) - {"scope", "option_id", "node_type"}:
+            raise ValueError("展示偏好重置请求包含未知字段")
+        scope = str(payload.get("scope") or "").strip().lower()
+        option_id = str(payload.get("option_id") or "").strip()
+        node_type = str(payload.get("node_type") or "").strip()
+        management_options = None
+        if scope == "node":
+            # 目录读取可能访问配置锁，先在 CANVAS_LOCK 外取快照再做偏好文件写入。
+            try:
+                management_options = _build_model_management_catalog().get("options") or []
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="无法读取精确模型目录，展示偏好未重置") from exc
+        with CANVAS_LOCK:
+            result = reset_smart_canvas_presentation_preferences(
+                scope=scope, option_id=option_id, node_type=node_type,
+                management_options=management_options,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "personalization": result}
 DEFAULT_PROJECT_ID = "default"
 
 def load_projects():
@@ -4352,6 +5259,8 @@ def list_projects():
     projects = ensure_default_project()
     counts = {}
     for rec in iter_canvas_records(include_deleted=False):
+        if is_settings_canvas(rec):
+            continue
         if rec.get("kind") != "smart":
             continue
         pid = rec.get("project") or DEFAULT_PROJECT_ID
@@ -4482,7 +5391,7 @@ def iter_canvas_records(include_deleted=False):
     return records
 
 def list_canvases():
-    records = [record for record in iter_canvas_records(include_deleted=False) if record.get("kind") == "smart"]
+    records = [record for record in filter_settings_canvas_records(iter_canvas_records(include_deleted=False)) if record.get("kind") == "smart"]
     return sorted(
         records,
         key=lambda item: (
@@ -4492,7 +5401,7 @@ def list_canvases():
     )
 
 def list_deleted_canvases():
-    records = [record for record in iter_canvas_records(include_deleted=True) if record.get("kind") == "smart"]
+    records = [record for record in filter_settings_canvas_records(iter_canvas_records(include_deleted=True)) if record.get("kind") == "smart"]
     return sorted(records, key=lambda item: item["deleted_at"], reverse=True)
 
 def canvas_asset_url_value(value):
@@ -4639,6 +5548,8 @@ def canvas_assets_index():
         except Exception:
             continue
         if normalize_canvas_kind(canvas.get("kind")) != "smart":
+            continue
+        if is_settings_canvas(canvas):
             continue
         if canvas.get("deleted_at"):
             continue
@@ -8714,6 +9625,34 @@ def sync_all_canvas_result_origins():
         except (OSError, ValueError, TypeError):
             continue
 
+@app.post("/api/results/register-external-cli-material")
+async def register_external_cli_material_result(payload: ExternalCliMaterialResultRequest, request: Request):
+    """Expose an existing managed material through the shared result index.
+
+    The supplied CLI receipt is provenance metadata only; this route cannot create
+    or attest a Studio run, provider task state, or model success.
+    """
+    ensure_same_origin_request(request)
+    if not await asyncio.to_thread(PROJECT_STORAGE.get_material, payload.material_id):
+        raise HTTPException(status_code=404, detail="受管素材不存在")
+    try:
+        result = await asyncio.to_thread(
+            PROJECT_STORAGE.register_external_material_result,
+            payload.material_id,
+            provider=payload.provider,
+            tool=payload.tool,
+            model=payload.model,
+            task_id=payload.task_id,
+            output_index=payload.output_index,
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "item": result_public_item(result),
+        "studio_task_proof": False,
+    }
+
 @app.get("/api/results")
 async def list_generation_results(kind: str = "all", prune_missing: bool = True):
     sync_all_canvas_result_origins()
@@ -8955,10 +9894,95 @@ async def get_generation_result(result_id: str):
     item = PROJECT_STORAGE.get_result(result_id) or {}
     return FileResponse(str(path), media_type=item.get("mime") or content_type_for_path(str(path)), filename=item.get("display_name") or path.name)
 
+
+def studio_article_media_references(reference_kind: str, reference_ids) -> dict[str, list[dict[str, Any]]]:
+    """只检查文章显式保存的共享媒体 ID，不从正文 HTML/URL 推测引用。"""
+    key = "asset_id" if reference_kind == "asset" else "result_id" if reference_kind == "result" else ""
+    if not key:
+        raise ValueError("文章媒体引用类型必须是 asset 或 result")
+    target_ids = {str(item or "").strip() for item in (reference_ids or []) if str(item or "").strip()}
+    if not target_ids:
+        return {}
+    projects = STUDIO_PROJECTS.list(module="article")
+    references: dict[str, dict[tuple[str, str], dict[str, Any]]] = {item_id: {} for item_id in target_ids}
+    for project in projects:
+        project_id = str(project.get("id") or "").strip()
+        if not project_id:
+            continue
+        try:
+            article = STUDIO_ARTICLES.get(project_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+        title = str(article.get("title") or project.get("name") or "未命名文章")
+
+        def record(items, location):
+            for index, item in enumerate(items if isinstance(items, list) else []):
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get(key) or "").strip()
+                if item_id not in target_ids:
+                    continue
+                identity = (project_id, title)
+                entry = references[item_id].setdefault(identity, {
+                    "article_id": project_id,
+                    "article_title": title,
+                    "locations": [],
+                })
+                entry["locations"].append(f"{location}[{index}]")
+
+        record(article.get("cover_variants"), "cover_variants")
+        record(article.get("media_refs"), "media_refs")
+        if reference_kind == "result":
+            variants = article.get("variants")
+            if isinstance(variants, dict):
+                for theme_id, item in variants.items():
+                    if not isinstance(item, dict):
+                        continue
+                    item_id = str(item.get(key) or "").strip()
+                    if item_id not in target_ids:
+                        continue
+                    identity = (project_id, title)
+                    entry = references[item_id].setdefault(identity, {
+                        "article_id": project_id,
+                        "article_title": title,
+                        "locations": [],
+                    })
+                    entry["locations"].append(f"variants.{theme_id}")
+    return {
+        item_id: list(by_article.values())
+        for item_id, by_article in references.items()
+        if by_article
+    }
+
+
+def ensure_no_studio_article_media_references(reference_kind: str, reference_ids) -> None:
+    references = studio_article_media_references(reference_kind, reference_ids)
+    if not references:
+        return
+    label = "文章封面或正文" if reference_kind == "asset" else "文章封面、媒体或排版正文"
+    cited_articles = {}
+    for entries in references.values():
+        for reference in entries:
+            project_id = reference["article_id"]
+            cited_articles.setdefault(project_id, reference)
+    article_names = "、".join(
+        f"《{reference['article_title']}》（{project_id}）"
+        for project_id, reference in cited_articles.items()
+    )
+    raise HTTPException(
+        status_code=409,
+        detail=f"所选共享素材仍被{label}引用，不能删除。请先从文章 {article_names} 中移除引用。",
+    )
+
+
 @app.post("/api/results/delete")
 async def delete_generation_results(payload: Dict[str, Any], request: Request):
     ensure_same_origin_request(request)
     ids = [str(item or "").strip() for item in ((payload or {}).get("ids") or []) if str(item or "").strip()]
+    # 先检查整批文章引用，避免批量操作删到一半才撞上被文章使用的结果。
+    ensure_no_studio_article_media_references("result", ids)
     removed = sum(1 for result_id in ids if PROJECT_STORAGE.delete_result(result_id))
     return {"removed": removed}
 
@@ -9435,6 +10459,7 @@ def remove_asset_library_file(item) -> None:
         return
     material_id = str((item or {}).get("material_id") or "").strip() if isinstance(item, dict) else ""
     if material_id:
+        ensure_no_studio_article_media_references("asset", [material_id])
         material = PROJECT_STORAGE.get_material(material_id)
         scopes = set((material or {}).get("scopes") or [])
         referenced = PROJECT_STORAGE.material_reference_count(material_id) > 0 and scopes <= {"asset"}
@@ -12016,8 +13041,15 @@ def runninghub_json_headers(provider, use_wallet=True):
 
 def runninghub_provider(region=None, require_enabled=True):
     requested = runninghub_request_region(region)
+    if require_enabled:
+        provider = get_api_provider_exact("runninghub")
+    else:
+        providers = load_api_providers(migrate_legacy_env=False)
+        provider = next((item for item in providers if item.get("id") == "runninghub"), None)
+        if not provider:
+            raise HTTPException(status_code=400, detail="未找到 API 平台：runninghub")
     return runninghub_provider_for_region(
-        get_api_provider_exact("runninghub"),
+        provider,
         requested,
         require_enabled=require_enabled,
     )
@@ -12127,10 +13159,10 @@ def runninghub_local_asset_path(url):
         return None
     return path
 
-def runninghub_output_ext(remote, content_type=""):
+def runninghub_output_ext(remote, content_type="", *, strict=False):
     tail = str(remote or "").split("?", 1)[0].split("#", 1)[0]
     ext = os.path.splitext(tail)[1].lower().strip(".")
-    allowed = {"png","jpg","jpeg","webp","gif","bmp","mp4","webm","mov","m4v","mkv","mp3","wav","ogg","m4a","flac","aac"}
+    allowed = {"png","jpg","jpeg","webp","gif","bmp","mp4","webm","mov","m4v","mkv","mp3","wav","ogg","m4a","flac","aac","txt","md","markdown","json","csv","yaml","yml","srt","vtt","log"}
     if ext in allowed:
         return ext
     ct = str(content_type or "").lower()
@@ -12150,7 +13182,12 @@ def runninghub_output_ext(remote, content_type=""):
         return "webp"
     if "jpeg" in ct:
         return "jpg"
-    return "png"
+    if ct.startswith("text/"):
+        subtype = ct.split("/", 1)[1].split(";", 1)[0].strip()
+        return {"plain": "txt", "markdown": "md", "csv": "csv", "vtt": "vtt"}.get(subtype, "txt")
+    if "json" in ct:
+        return "json"
+    return "bin" if strict else "png"
 
 def rewrite_runninghub_file_url(url):
     text = str(url or "")
@@ -12192,19 +13229,21 @@ def runninghub_extract_outputs(data):
     """兼容旧调用方，只返回 RunningHub 输出地址。"""
     return [item["url"] for item in runninghub_extract_output_items(data) if item.get("url")]
 
-async def runninghub_store_remote_output(client, remote):
+async def runninghub_store_remote_output(client, remote, *, strict=False, return_metadata=False):
     remote = rewrite_runninghub_file_url(remote)
     if not str(remote or "").startswith(("http://", "https://")):
-        return remote
+        return (remote, "") if return_metadata else remote
     response = await client.get(remote, follow_redirects=True)
     if not response.is_success:
-        return remote
-    ext = runninghub_output_ext(remote, response.headers.get("content-type", ""))
+        return (remote, "") if return_metadata else remote
+    content_type = str(response.headers.get("content-type", "") or "")
+    ext = runninghub_output_ext(remote, content_type, strict=strict)
     filename = f"rh_{uuid.uuid4().hex[:12]}.{ext}"
     path = output_path_for(filename, "output")
     with open(path, "wb") as f:
         f.write(response.content)
-    return output_url_for(filename, "output")
+    local_url = output_url_for(filename, "output")
+    return (local_url, content_type) if return_metadata else local_url
 
 def runninghub_fail_reason(raw):
     data = raw.get("data") if isinstance(raw, dict) else None
@@ -12385,12 +13424,12 @@ def runninghub_registry_fallback():
     return image + video
 
 def runninghub_official_registry_items(raw):
-    """Strictly parse the public developer-kit registry.
+    """Strictly parse the official RunningHub source registry.
 
     A generic OpenAI ``data`` list is deliberately not accepted here: LLM
     discovery must never masquerade as the standard image/video/audio catalog.
     """
-    models = raw.get("models") if isinstance(raw, dict) else None
+    models = raw if isinstance(raw, list) else raw.get("models") if isinstance(raw, dict) else None
     if not isinstance(models, list):
         return []
     parsed = []
@@ -14810,6 +15849,9 @@ async def delete_local_assets(payload: dict, request: Request):
     names = payload.get("names") if isinstance(payload, dict) else None
     if not isinstance(names, list):
         names = []
+    ensure_no_studio_article_media_references(
+        "asset", [str(name) for name in names if str(name).startswith("mat_")]
+    )
     deleted = []
     for name in names:
         if str(name).startswith("mat_"):
@@ -15054,12 +16096,16 @@ async def runninghub_app_info(webappId: str = "", region: str = ""):
 
 @app.post("/api/runninghub/submit")
 async def runninghub_submit(payload: RunningHubSubmitRequest):
+    return await _runninghub_submit(payload)
+
+
+async def _runninghub_submit(payload: RunningHubSubmitRequest, *, trusted_fields=None):
     webapp_id = str(payload.webappId or "").strip()
     if not webapp_id:
         raise HTTPException(status_code=400, detail="webappId 必填")
     provider = runninghub_provider(payload.region)
     api_key = runninghub_api_key(provider, use_wallet=payload.useWallet, region=payload.region)
-    entry = runninghub_entry_config_from_model(provider, f"app:{webapp_id}", region=payload.region)
+    entry = {"fields": trusted_fields} if isinstance(trusted_fields, list) else runninghub_entry_config_from_model(provider, f"app:{webapp_id}", region=payload.region)
     if not entry:
         raise HTTPException(status_code=400, detail=f"RunningHub AI 应用未同步官方 Schema：{webapp_id}")
     try:
@@ -15094,6 +16140,10 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
 
 @app.post("/api/runninghub/workflow-submit")
 async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
+    return await _runninghub_workflow_submit(payload)
+
+
+async def _runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest, *, trusted_fields=None, trusted_workflow=None):
     workflow_id = str(payload.workflowId or "").strip()
     if not workflow_id:
         raise HTTPException(status_code=400, detail="workflowId 必填")
@@ -15104,12 +16154,19 @@ async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
         "workflowId": workflow_id,
         "addMetadata": True,
     }
-    if payload.nodeInfoList:
-        body["nodeInfoList"] = sanitize_runninghub_node_info_list(payload.nodeInfoList)
-    workflow_payload = payload.workflow
+    node_info_list = payload.nodeInfoList or []
+    if isinstance(trusted_fields, list):
+        try:
+            node_info_list = validate_runninghub_node_info_list(node_info_list, trusted_fields)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if node_info_list:
+        body["nodeInfoList"] = sanitize_runninghub_node_info_list(node_info_list)
+    workflow_payload = trusted_workflow if trusted_workflow is not None else payload.workflow
     if workflow_payload:
         if isinstance(workflow_payload, (dict, list)):
-            body["workflow"] = json.dumps(sanitize_seed_like_workflow_values(workflow_payload), ensure_ascii=False)
+            snapshot_payload = copy.deepcopy(workflow_payload) if trusted_workflow is not None else sanitize_seed_like_workflow_values(workflow_payload)
+            body["workflow"] = json.dumps(snapshot_payload, ensure_ascii=False)
         else:
             body["workflow"] = str(workflow_payload)
     url = runninghub_endpoint_url(provider, "/task/openapi/create")
@@ -15302,6 +16359,10 @@ def delete_runninghub_workflow(workflow_id: str, region: str = ""):
 
 @app.get("/api/runninghub/query")
 async def runninghub_query(taskId: str = "", useWallet: bool = False, region: str = ""):
+    return await _runninghub_query(taskId, useWallet, region, strict=False)
+
+
+async def _runninghub_query(taskId: str = "", useWallet: bool = False, region: str = "", *, strict=False):
     task_id = str(taskId or "").strip()
     if not task_id:
         raise HTTPException(status_code=400, detail="taskId 必填")
@@ -15321,16 +16382,37 @@ async def runninghub_query(taskId: str = "", useWallet: bool = False, region: st
         status = "PENDING"
         urls = []
         image_items = []
+        text_value = ""
         if code in (0, "0"):
             status = "SUCCESS"
             for output_item in runninghub_extract_output_items(raw.get("data")):
                 remote = output_item["url"]
                 try:
-                    local_url = await runninghub_store_remote_output(client, remote)
+                    if strict:
+                        local_url, content_type = await runninghub_store_remote_output(
+                            client, remote, strict=True, return_metadata=True,
+                        )
+                    else:
+                        local_url = await runninghub_store_remote_output(client, remote)
+                        content_type = ""
                 except Exception:
                     local_url = remote
+                    content_type = ""
                 urls.append(local_url)
-                image_items.append(image_output_meta(local_url, output_item.get("source")))
+                meta = image_output_meta(local_url, output_item.get("source"))
+                if strict:
+                    meta.pop("kind", None)
+                    if content_type:
+                        meta["content_type"] = content_type
+                    if output_item.get("source") is None:
+                        meta["source_url"] = remote
+                image_items.append(meta)
+            if strict and isinstance(raw.get("data"), dict):
+                raw_data = raw["data"]
+                candidate = next((raw_data.get(key) for key in ("text", "content", "value", "result")
+                                  if isinstance(raw_data.get(key), str) and raw_data.get(key).strip()), "")
+                if candidate:
+                    text_value = candidate
         elif code in (804, "804"):
             status = "RUNNING"
         elif code in (813, "813"):
@@ -15341,7 +16423,10 @@ async def runninghub_query(taskId: str = "", useWallet: bool = False, region: st
         else:
             status = "UNKNOWN"
             log_runninghub_error("query-unknown", raw, endpoint=url, taskId=task_id, code=code)
-        return {"success": True, "data": {"status": status, "urls": urls, "image_items": image_items, "failReason": runninghub_fail_reason(raw), "code": code, "raw": raw}}
+        result = {"success": True, "data": {"status": status, "urls": urls, "image_items": image_items, "failReason": runninghub_fail_reason(raw), "code": code, "raw": raw}}
+        if text_value:
+            result["data"]["text"] = text_value
+        return result
 
 @app.post("/api/runninghub/upload-asset")
 async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest):
@@ -15888,6 +16973,8 @@ async def model_capability_dry_run(payload: ModelCapabilityDryRunRequest):
             parameters=payload.parameters,
             operation=payload.operation,
             providers=[get_api_provider(payload.provider_id, region=payload.region)],
+            region=payload.region,
+            option_id=payload.option_id,
         )
         metadata = canvas_input_metadata(profile, payload.inputs, payload.input_metadata)
         MODEL_CAPABILITY_REGISTRY.validate_input_metadata(profile, metadata)
@@ -15902,7 +16989,241 @@ async def model_capability_dry_run(payload: ModelCapabilityDryRunRequest):
 
 @app.post("/api/canvas-preflight")
 async def canvas_preflight(payload: CanvasPreflightRequest):
-    graph = validate_canvas_preflight_graph(payload.nodes, payload.connections)
+    verified_canvas = None
+    if (
+        str(payload.canvas_id or "").strip() == CANVAS_SETTINGS_CANVAS_ID
+        and str(payload.node_id or "").strip()
+    ):
+        try:
+            candidate_canvas = CANVAS_SETTINGS_SERVICE.ensure_canvas()
+        except (HTTPException, OSError, ValueError):
+            candidate_canvas = None
+        if candidate_canvas and _canvas_settings_selected_option(payload, candidate_canvas):
+            verified_canvas = candidate_canvas
+    return await _canvas_preflight_impl(payload, verified_canvas=verified_canvas)
+
+
+def _canvas_settings_selected_option(payload, canvas):
+    if not isinstance(canvas, dict) or str(canvas.get("id") or "") != CANVAS_SETTINGS_CANVAS_ID:
+        return None
+    if not payload.option_id:
+        return None
+    node_id = str(payload.node_id or "").strip()
+    node = next((item for item in canvas.get("nodes") or []
+                 if isinstance(item, dict) and str(item.get("id") or "") == node_id), None)
+    if not node:
+        return None
+    selection = node.get("modelSelection") if isinstance(node.get("modelSelection"), dict) else {}
+    if str(selection.get("option_id") or "") != str(payload.option_id):
+        return None
+    node_capability_types = {
+        "smart-text-generator": "text_generation",
+        "smart-image-generator": "image_generation",
+        "smart-video-generator": "video_generation",
+        "smart-audio-generator": "audio_generation",
+        "smart-music-generator": "music_generation",
+    }
+    canonical_node_type = node_capability_types.get(str(node.get("type") or ""))
+    if not canonical_node_type or canonical_node_type != str(payload.node_type or "").strip():
+        return None
+    expected_provider = str(selection.get("connection_id") or "").strip().lower()
+    if not expected_provider or expected_provider != str(payload.provider_id or "").strip().lower():
+        return None
+    settings = node.get("runSettings") if isinstance(node.get("runSettings"), dict) else {}
+    setting_keys = {
+        "text_generation": ("textProvider", "textModel"),
+        "image_generation": ("provider_id", "model"),
+        "video_generation": ("videoProvider", "videoModel"),
+        "audio_generation": ("audioProvider", "audioModel"),
+        "music_generation": ("musicProvider", "musicModel"),
+    }
+    provider_key, model_key = setting_keys.get(str(payload.node_type or ""), ("", ""))
+    if not provider_key or not model_key:
+        return None
+    if str(settings.get(provider_key) or "").strip().lower() != str(payload.provider_id or "").strip().lower():
+        return None
+    if str(settings.get(model_key) or "").strip() != str(payload.model_id or "").strip():
+        return None
+    stored_operation = str(selection.get("operation") or "").strip()
+    if not stored_operation or stored_operation != str(payload.operation or "").strip():
+        return None
+    if expected_provider == "runninghub":
+        stored_region = str(
+            payload.region or selection.get("region_id") or settings.get("rhRegion") or settings.get("region") or ""
+        ).strip().lower()
+        try:
+            requested_region = runninghub_request_region(stored_region, allow_empty=True)
+        except HTTPException:
+            return None
+        selected_region = runninghub_normalize_region(
+            requested_region or selection.get("region_id") or settings.get("rhRegion") or settings.get("region"),
+            "global",
+        )
+    else:
+        selected_region = ""
+    catalog = _build_model_management_catalog()
+    option = next((item for item in catalog.get("options") or []
+                   if str(item.get("option_id") or "") == str(payload.option_id)), None)
+    if (
+        not option
+        or str(option.get("connection_id") or "").strip().lower() != str(payload.provider_id or "").strip().lower()
+        or str(option.get("catalog_model_id") or "").strip() != str(payload.model_id or "").strip()
+        or str(option.get("node_type") or "").strip() != canonical_node_type
+        or str(option.get("operation") or "").strip() != stored_operation
+        or str(option.get("region_id") or "").strip().lower() != selected_region
+    ):
+        return None
+    return option
+
+
+def _provider_for_canvas_settings_test(option):
+    provider_id = str(option.get("connection_id") or "").strip().lower()
+    region = str(option.get("region_id") or "").strip().lower()
+    provider = get_api_provider(provider_id, region=region)
+    node_type = str(option.get("node_type") or "")
+    field_name = NODE_MODEL_FIELDS.get(node_type)
+    model_id = str(option.get("catalog_model_id") or "").strip()
+    if not field_name or not model_id:
+        raise HTTPException(status_code=400, detail="模型目录选项身份不完整")
+    current = list(provider.get(field_name) or [])
+    normalized_model = normalize_laohu_model_id(model_id) if MODEL_CAPABILITY_REGISTRY.capability_provider_id(provider) == "ai-money" else model_id
+    normalized_current = {
+        normalize_laohu_model_id(value) if MODEL_CAPABILITY_REGISTRY.capability_provider_id(provider) == "ai-money" else str(value or "").strip()
+        for value in current
+    }
+    if normalized_model not in normalized_current:
+        current.append(normalized_model)
+    provider[field_name] = current
+    return [provider]
+
+
+def _studio_model_execution_context(canvas, node, request, manager_option=None, request_id=""):
+    """为本次已通过预检的节点运行冻结精确模型身份，供共享生成路由继续使用。"""
+    provider_id = str(request.get("provider_id") or "").strip().lower()
+    model_id = str(request.get("model") or "").strip()
+    node_type = str(request.get("kind") or "").strip() + "_generation"
+    region = str(request.get("region") or "").strip()
+    option_id = str(request.get("option_id") or "").strip()
+    if not provider_id or not model_id or node_type not in NODE_MODEL_FIELDS:
+        return None
+    if manager_option:
+        providers = _provider_for_canvas_settings_test(manager_option)
+    else:
+        providers = [get_api_provider(provider_id, region=region)]
+    profile = resolve_model_capability_request(
+        provider_id,
+        model_id,
+        "",
+        node_type,
+        input_counts=request.get("input_counts") or {},
+        input_roles=request.get("input_roles") or {},
+        parameters=request.get("parameters") or {},
+        operation=request.get("operation") or "",
+        providers=providers,
+        region=region,
+        option_id=option_id,
+        allow_disabled_option=bool(manager_option),
+    )
+    resolved_model_id = str(profile.get("model_id") or model_id).strip()
+    if MODEL_CAPABILITY_REGISTRY.capability_provider_id(providers[0]) == "ai-money":
+        resolved_model_id = normalize_laohu_model_id(resolved_model_id)
+    if provider_id == "runninghub":
+        region_id = runninghub_normalize_region(region or providers[0].get("rh_region"), "global")
+    else:
+        region_id = ""
+    resolved_operation = str(profile.get("operation") or profile.get("variant_id") or "").strip()
+    endpoint_id = str(profile.get("endpoint_id") or "").strip()
+    resolved_option_id = studio_model_selection.compute_option_id(
+        connection_id=provider_id,
+        region_id=region_id,
+        deployment_id="",
+        node_type=node_type,
+        catalog_model_id=resolved_model_id,
+        endpoint_id=endpoint_id,
+        operation=resolved_operation,
+    )
+    if option_id and option_id != resolved_option_id:
+        raise HTTPException(status_code=409, detail="节点保存的精确模型选项已变化，请重新选择")
+    if manager_option and str(manager_option.get("option_id") or "") != resolved_option_id:
+        raise HTTPException(status_code=409, detail="管理目录中的精确模型选项与节点保存内容不一致")
+    return {
+        "validated": True,
+        "canvas_id": str(canvas.get("id") or ""),
+        "node_id": str(node.get("id") or ""),
+        "request_id": str(request_id or ""),
+        "option_id": resolved_option_id,
+        "connection_id": provider_id,
+        "capability_provider_id": MODEL_CAPABILITY_REGISTRY.capability_provider_id(providers[0]),
+        "region_id": region_id,
+        "node_type": node_type,
+        "catalog_model_id": resolved_model_id,
+        "endpoint_id": endpoint_id,
+        "operation": resolved_operation,
+        "manager_test": bool(manager_option),
+    }
+
+
+def _validated_studio_model_context(provider_id, model_id, node_type, region="", operation=""):
+    context = _STUDIO_VALIDATED_MODEL_CONTEXT.get()
+    if not isinstance(context, dict) or context.get("validated") is not True:
+        return None
+    if str(context.get("connection_id") or "").strip().lower() != str(provider_id or "").strip().lower():
+        return None
+    if str(context.get("node_type") or "").strip() != str(node_type or "").strip():
+        return None
+    expected_model = str(context.get("catalog_model_id") or "").strip()
+    requested_model = str(model_id or "").strip()
+    if context.get("capability_provider_id") == "ai-money":
+        expected_model = normalize_laohu_model_id(expected_model)
+        requested_model = normalize_laohu_model_id(requested_model)
+    if expected_model != requested_model:
+        return None
+    if str(context.get("operation") or "").strip() != str(operation or context.get("operation") or "").strip():
+        return None
+    if str(provider_id or "").strip().lower() == "runninghub":
+        selected_region = runninghub_normalize_region(region or context.get("region_id"), "global")
+    else:
+        selected_region = ""
+    if selected_region != str(context.get("region_id") or "").strip().lower():
+        return None
+    return context
+
+
+def _provider_with_validated_model(providers, context):
+    """在本次执行的内存副本中恢复已预检模型，不写回用户启用清单。"""
+    copied = copy.deepcopy(list(providers or []))
+    provider = next((item for item in copied if isinstance(item, dict)
+                     and str(item.get("id") or "").strip().lower()
+                     == str(context.get("connection_id") or "").strip().lower()), None)
+    if not provider or provider.get("enabled", True) is False:
+        return copied
+    field_name = NODE_MODEL_FIELDS.get(str(context.get("node_type") or ""))
+    model_id = str(context.get("catalog_model_id") or "").strip()
+    if not field_name or not model_id:
+        return copied
+    values = model_list_from_values(provider.get(field_name) or [])
+    normalized_values = {
+        normalize_laohu_model_id(item) if MODEL_CAPABILITY_REGISTRY.capability_provider_id(provider) == "ai-money"
+        else str(item or "").strip()
+        for item in values
+    }
+    normalized_model = (
+        normalize_laohu_model_id(model_id)
+        if MODEL_CAPABILITY_REGISTRY.capability_provider_id(provider) == "ai-money" else model_id
+    )
+    if normalized_model not in normalized_values:
+        values.append(normalized_model)
+    provider[field_name] = values
+    return copied
+
+
+async def _canvas_preflight_impl(payload: CanvasPreflightRequest, *, verified_canvas=None, validated_manager_option=None):
+    manager_option = validated_manager_option or (
+        _canvas_settings_selected_option(payload, verified_canvas) if verified_canvas else None
+    )
+    graph_nodes = verified_canvas.get("nodes") if manager_option and isinstance(verified_canvas, dict) else payload.nodes
+    graph_connections = verified_canvas.get("connections") if manager_option and isinstance(verified_canvas, dict) else payload.connections
+    graph = validate_canvas_preflight_graph(graph_nodes, graph_connections)
     node_type = str(payload.node_type or "").strip()
     if node_type == "ai_application":
         if payload.provider_id != "runninghub":
@@ -15922,6 +17243,9 @@ async def canvas_preflight(payload: CanvasPreflightRequest):
         if node_type not in supported:
             raise HTTPException(status_code=400, detail=f"不支持的画布运行节点类型：{node_type or '(empty)'}")
         try:
+            providers = [get_api_provider(payload.provider_id, region=payload.region)]
+            if manager_option:
+                providers = _provider_for_canvas_settings_test(manager_option)
             profile = resolve_model_capability_request(
                 payload.provider_id,
                 payload.model_id,
@@ -15931,7 +17255,10 @@ async def canvas_preflight(payload: CanvasPreflightRequest):
                 input_roles=payload.input_roles,
                 parameters=payload.parameters,
                 operation=payload.operation,
-                providers=[get_api_provider(payload.provider_id, region=payload.region)],
+                providers=providers,
+                region=payload.region,
+                option_id=payload.option_id,
+                allow_disabled_option=bool(manager_option),
             )
             metadata = canvas_input_metadata(profile, payload.inputs, payload.input_metadata)
             MODEL_CAPABILITY_REGISTRY.validate_input_metadata(profile, metadata)
@@ -19301,16 +20628,47 @@ async def canvas_llm(payload: CanvasLLMRequest):
 from canvas_agent import create_agent_router
 from studio_projects import StudioProjectStore, create_studio_projects_router
 from studio_connection import create_connection_router
+from studio_articles import StudioArticleStore, create_studio_articles_router
+from studio_article_generation import StudioArticleGenerationBridge
 from studio_hypit import create_hypit_router
 from hypit_runtime import HypitRuntime
-from studio_execution import StudioExecution
-from studio_app_execution import StudioAppExecution
-from studio_hypit_models import create_hypit_models_router
+from studio_execution import StudioExecution, input_media as studio_input_media, recipe as studio_node_recipe, request_for as studio_request_for, stable as studio_stable
+from studio_app_execution import StudioAppExecution, _schema_fields as studio_app_schema_fields
+from studio_hypit_models import create_hypit_models_router, _reject_secrets
+from studio_hypit_flow import HypitFlowRunner
+from canvas_core.hypit_config import (
+    HYPIT_OUTPUT_KINDS,
+    HYPIT_OUTPUT_SLOTS,
+    HYPIT_SETTINGS_CANVAS_ID,
+    hypit_execution_recipe_fingerprint,
+    legacy_hypit_defaults_to_canvas,
+    plan_hypit_slot,
+    project_hypit_execution_statuses,
+    validate_hypit_settings_canvas,
+    upgrade_hypit_legacy_prompt_scaffold,
+)
+from studio_hypit_canvas import (
+    ARTICLE_SETTINGS_CANVAS_ID,
+    ARTICLE_SETTINGS_CANVAS_URL,
+    HypitSettingsCanvasService,
+    create_hypit_settings_canvas_router,
+    filter_settings_canvas_records,
+    is_settings_canvas,
+    is_hypit_settings_canvas,
+    reject_settings_canvas_mutation,
+)
+from studio_canvas_settings import (
+    CANVAS_SETTINGS_CANVAS_ID,
+    CANVAS_SETTINGS_CANVAS_URL,
+    CanvasSettingsService,
+    create_canvas_settings_router,
+)
 import studio_model_selection
 import studio_module_models
 
 
 def studio_canvas_rename(canvas_id, name, expected_revision=None):
+    reject_settings_canvas_mutation(canvas_id, "重命名")
     with CANVAS_LOCK:
         value = load_canvas(canvas_id)
         if expected_revision is not None and value.get('revision', 1) != expected_revision:
@@ -19321,6 +20679,7 @@ def studio_canvas_rename(canvas_id, name, expected_revision=None):
 
 
 def studio_canvas_delete(canvas_id, expected_revision=None):
+    reject_settings_canvas_mutation(canvas_id, "删除")
     with CANVAS_LOCK:
         value = load_canvas(canvas_id)
         if expected_revision is not None and value.get('revision', 1) != expected_revision:
@@ -19336,13 +20695,89 @@ STUDIO_PROJECTS = StudioProjectStore(BASE_DIR, STUDIO_CANVAS_ADAPTER)
 HYPIT_RUNTIME = HypitRuntime(BASE_DIR)
 
 
+def studio_article_resolve_media(asset_id, result_id):
+    """读取共享素材/结果的稳定引用信息，不读取媒体正文。"""
+    if bool(asset_id) == bool(result_id):
+        return None
+    if asset_id:
+        item = PROJECT_STORAGE.get_material(str(asset_id))
+        path = PROJECT_STORAGE.material_path(str(asset_id)) if item else None
+        if not item or path is None or not path.is_file() or path.stat().st_size <= 0:
+            return None
+        return {
+            "url": PROJECT_STORAGE.material_url(str(asset_id)),
+            "name": str(item.get("display_name") or item.get("original_name") or ""),
+            "mime": str(item.get("mime") or ""),
+            "kind": str(item.get("kind") or "").lower(),
+        }
+    item = PROJECT_STORAGE.get_result(str(result_id))
+    path = PROJECT_STORAGE.result_path(str(result_id)) if item else None
+    if not item or path is None or not path.is_file() or path.stat().st_size <= 0:
+        return None
+    return {
+        "url": PROJECT_STORAGE.result_url(str(result_id)),
+        "name": str(item.get("display_name") or item.get("original_name") or ""),
+        "mime": str(item.get("mime") or ""),
+        "kind": str(item.get("kind") or "").lower(),
+    }
+
+
+def studio_article_find_shared_media_by_hash(digest, kind):
+    """按确切内容哈希查共享素材/结果，复用文件而不复制媒体。"""
+    if not re.fullmatch(r"[a-f0-9]{64}", str(digest or "")) or kind not in {"image", "video", "audio", "text"}:
+        return None
+    sources = []
+    if kind == "image":
+        sources.append((PROJECT_STORAGE.list_materials(kind=kind), "asset"))
+    sources.append((PROJECT_STORAGE.list_results(kind=kind), "result"))
+    for records, reference_kind in sources:
+        for item in records:
+            if item.get("sha256") != digest or str(item.get("kind") or "").lower() != kind:
+                continue
+            item_id = str(item.get("id") or "")
+            path = (
+                PROJECT_STORAGE.material_path(item_id)
+                if reference_kind == "asset"
+                else PROJECT_STORAGE.result_path(item_id)
+            )
+            if path is None or not path.is_file() or path.stat().st_size <= 0:
+                continue
+            if storage_sha256_file(path) != digest:
+                continue
+            return {
+                "asset_id": item_id if reference_kind == "asset" else "",
+                "result_id": item_id if reference_kind == "result" else "",
+                "sha256": digest,
+                "kind": kind,
+                "url": item.get("url") or (
+                    PROJECT_STORAGE.material_url(item_id)
+                    if reference_kind == "asset"
+                    else PROJECT_STORAGE.result_url(item_id)
+                ),
+                "name": item.get("display_name") or item.get("original_name") or "",
+                "mime": item.get("mime") or "",
+                "path": str(path),
+            }
+    return None
+
+
+STUDIO_ARTICLES = StudioArticleStore(
+    BASE_DIR,
+    STUDIO_PROJECTS,
+    Path(BASE_DIR) / "static" / "article-templates" / "catalog.json",
+    resolve_media_reference=studio_article_resolve_media,
+    register_managed_result=PROJECT_STORAGE.register_managed_result,
+    find_shared_media_by_hash=studio_article_find_shared_media_by_hash,
+)
+
+
 @app.on_event('shutdown')
 async def studio_shutdown():
     # 仅关闭此服务创建的预览进程；原生 Build 由持久 Worker 管理，不按端口杀进程。
     await asyncio.to_thread(HYPIT_RUNTIME.close)
 
 
-app.include_router(create_studio_projects_router(BASE_DIR, STUDIO_CANVAS_ADAPTER))
+app.include_router(create_studio_projects_router(BASE_DIR, STUDIO_CANVAS_ADAPTER, store=STUDIO_PROJECTS))
 app.include_router(create_connection_router(STUDIO_PROJECTS.get))
 app.include_router(create_hypit_router(BASE_DIR, STUDIO_PROJECTS.get, HYPIT_RUNTIME, PROJECT_STORAGE.register_managed_result))
 
@@ -19356,16 +20791,185 @@ async def studio_notify(canvas):
         logging.getLogger(__name__).warning('画布通知失败：%s', exc)
 
 
-async def studio_preflight(canvas, node, request, request_id):
-    return await canvas_preflight(CanvasPreflightRequest(
-        canvas_id=canvas['id'], node_id=node['id'], client_operation_id=request_id,
+def studio_hypit_supported_output_slots(node, request):
+    """返回普通 Studio 执行节点在 Hypit 中有证据支持的用途槽。"""
+    node_type = str(node.get("type") or "")
+    if node_type in {"smart-ai-app", "smart-comfy-workflow"}:
+        # AI 应用与 Comfy 工作流的输出是动态契约，真实运行后再按托管结果类型验证。
+        return list(HYPIT_OUTPUT_SLOTS)
+    node_slots = {
+        "smart-text-generator": {"text"},
+        "smart-image-generator": {"image"},
+        "smart-video-generator": {"video"},
+        "smart-audio-generator": {"audio", "voice"},
+        "smart-music-generator": {"music"},
+    }.get(node_type, set())
+    if not node_slots:
+        return []
+    kind = str(request.get("kind") or "").strip().lower()
+    profile = studio_hypit_model_profile(node, request)
+    if not profile:
+        return []
+    return [slot for slot in HYPIT_OUTPUT_SLOTS
+            if slot in node_slots and not studio_module_models.hypit_profile_reasons(slot, profile)]
+
+
+def studio_hypit_model_profile(node, request):
+    """读取静态 Hypit 生成节点对应的精确模型能力档案。"""
+    kind = str(request.get("kind") or "").strip().lower()
+    expected_kind = {
+        "smart-text-generator": "text",
+        "smart-image-generator": "image",
+        "smart-video-generator": "video",
+        "smart-audio-generator": "audio",
+        "smart-music-generator": "music",
+    }.get(str(node.get("type") or ""))
+    if not expected_kind or kind != expected_kind:
+        return None
+    return MODEL_CAPABILITY_REGISTRY.find_model(
+        canvas_api_providers(),
+        str(request.get("provider_id") or ""),
+        str(request.get("model") or ""),
+        kind + "_generation",
+    )
+
+
+def studio_hypit_profile_rejection(node, request, slot=""):
+    """返回 Hypit 静态模型契约拒绝原因；文章模块不调用此规则。"""
+    profile = studio_hypit_model_profile(node, request)
+    if not profile:
+        return "模型能力档案不可用"
+    slots = [str(slot)] if slot else {
+        "smart-text-generator": ["text"],
+        "smart-image-generator": ["image"],
+        "smart-video-generator": ["video"],
+        "smart-audio-generator": ["audio", "voice"],
+        "smart-music-generator": ["music"],
+    }.get(str(node.get("type") or ""), [])
+    reasons = list(dict.fromkeys(
+        reason for candidate in slots
+        for reason in studio_module_models.hypit_profile_reasons(candidate, profile)
+    ))
+    return "当前模型不符合 Hypit 用途契约" if reasons else ""
+
+
+def studio_article_supported_output_slots(node, request):
+    """按文章模块真实执行节点类型返回可用输出槽，不套 Hypit 用途黑名单。"""
+    node_type = str(node.get("type") or "")
+    if node_type in {"smart-ai-app", "smart-comfy-workflow"}:
+        # 动态应用的真实输出用途只由运行后托管结果的 MIME/类型确定。
+        return list(HYPIT_OUTPUT_SLOTS)
+    expected_kind_by_type = {
+        "smart-text-generator": "text",
+        "smart-image-generator": "image",
+        "smart-video-generator": "video",
+        "smart-audio-generator": "audio",
+        "smart-music-generator": "music",
+    }
+    expected_kind = expected_kind_by_type.get(node_type)
+    kind = str(request.get("kind") or "").strip().lower()
+    if expected_kind is None or kind != expected_kind:
+        return []
+    profile = MODEL_CAPABILITY_REGISTRY.find_model(
+        canvas_api_providers(),
+        str(request.get("provider_id") or ""),
+        str(request.get("model") or ""),
+        kind + "_generation",
+    )
+    if not isinstance(profile, dict) or profile.get("runnable") is False:
+        return []
+    return {
+        "text": ["text"], "image": ["image"], "video": ["video"],
+        "audio": ["audio", "voice"], "music": ["music"],
+    }.get(kind, [])
+
+
+def studio_hypit_task_metadata(canvas, node, request):
+    """把模块配置图运行的配方指纹和槽位契约写入服务端任务记录。"""
+    canvas_id = str(canvas.get("id") or "")
+    if canvas_id not in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID}:
+        return {}
+    module_id = "hypit" if canvas_id == HYPIT_SETTINGS_CANVAS_ID else "article"
+    supported_slots = (studio_hypit_supported_output_slots(node, request)
+                       if module_id == "hypit" else studio_article_supported_output_slots(node, request))
+    if not supported_slots:
+        if module_id == "hypit":
+            rejection = studio_hypit_profile_rejection(node, request)
+            if rejection:
+                raise HTTPException(status_code=400, detail=rejection)
+        module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+        raise HTTPException(status_code=400, detail=f"当前生成节点不符合 {module_name} 输出契约，请检查模型设置")
+    return {
+        "hypit_source_node_id": str(node.get("id") or ""),
+        "hypit_source_recipe_fingerprint": hypit_execution_recipe_fingerprint(
+            canvas, str(node.get("id") or ""), canvas_id=canvas_id, module_id=module_id,
+        ),
+        "hypit_supported_output_slots": supported_slots,
+    }
+
+
+async def studio_preflight(canvas, node, request, request_id, *, record_run=True):
+    settings_canvas_id = str(canvas.get("id") or "")
+    if settings_canvas_id in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID}:
+        module_id = "hypit" if settings_canvas_id == HYPIT_SETTINGS_CANVAS_ID else "article"
+        supported_slots = (studio_hypit_supported_output_slots(node, request)
+                           if module_id == "hypit" else studio_article_supported_output_slots(node, request))
+        if not supported_slots:
+            module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+            raise HTTPException(status_code=400, detail=f"当前生成节点不符合 {module_name} 输出契约，请检查模型设置")
+        by_id = {str(item.get("id") or ""): item for item in canvas.get("nodes", []) if isinstance(item, dict)}
+        connected_slots = [
+            str(by_id.get(str(edge.get("to") or edge.get("target") or ""), {}).get("hypitSlot") or "").strip().lower()
+            for edge in canvas.get("connections", []) if isinstance(edge, dict)
+            and str(edge.get("from") or edge.get("source") or "") == str(node.get("id") or "")
+            and by_id.get(str(edge.get("to") or edge.get("target") or ""), {}).get("type") == "smart-hypit-output"
+            and str(edge.get("kind") or "input").strip().lower() in {"", "input", "flow"}
+        ]
+        unsupported = [slot for slot in connected_slots if slot not in supported_slots]
+        if unsupported:
+            module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+            raise HTTPException(status_code=400, detail=f"当前模型不适用于 {module_name} {unsupported[0]} 输出用途")
+    preflight_payload = CanvasPreflightRequest(
+        canvas_id=canvas['id'] if record_run else '',
+        node_id=node['id'] if record_run else '',
+        client_operation_id=request_id if record_run else '',
         provider_id=request['provider_id'], region=request.get('region', ''), model_id=request['model'],
+        operation=request.get('operation', ''), option_id=request.get('option_id', ''),
         node_type=request['kind'] + '_generation', inputs=request['inputs'],
         input_counts=request['input_counts'], input_roles=request['input_roles'],
-        parameters=request['parameters'], nodes=canvas['nodes'], connections=canvas.get('connections', [])))
+        parameters=request['parameters'], nodes=canvas['nodes'], connections=canvas.get('connections', []))
+    manager_authorization_payload = CanvasPreflightRequest(
+        canvas_id=str(canvas.get("id") or ""), node_id=str(node.get("id") or ""),
+        provider_id=request["provider_id"], region=request.get("region", ""), model_id=request["model"],
+        operation=request.get("operation", ""), option_id=request.get("option_id", ""),
+        node_type=request["kind"] + "_generation",
+    )
+    manager_option = (
+        _canvas_settings_selected_option(manager_authorization_payload, canvas)
+        if str(canvas.get("id") or "") == CANVAS_SETTINGS_CANVAS_ID else None
+    )
+    result = await _canvas_preflight_impl(
+        preflight_payload, verified_canvas=canvas, validated_manager_option=manager_option,
+    )
+    context = _studio_model_execution_context(canvas, node, request, manager_option, request_id=request_id)
+    if context:
+        # 只存在于本次服务端任务快照；客户端不能提交或伪造此资格。
+        request["_studio_validated_model_context"] = context
+    return result
 
 
 async def studio_generate(request):
+    execution_context = request.get("_studio_validated_model_context") if isinstance(request, dict) else None
+    if not isinstance(execution_context, dict) or execution_context.get("validated") is not True:
+        return await _studio_generate_request(request)
+    token = _STUDIO_VALIDATED_MODEL_CONTEXT.set(copy.deepcopy(execution_context))
+    try:
+        return await _studio_generate_request(request)
+    finally:
+        _STUDIO_VALIDATED_MODEL_CONTEXT.reset(token)
+
+
+async def _studio_generate_request(request):
     kind, inputs = request['kind'], request['inputs']
     common = dict(provider_id=request['provider_id'], model=request['model'],
                   region=request.get('region', ''), parameters=request['parameters'], input_roles=request['input_roles'])
@@ -19390,6 +20994,7 @@ async def studio_generate(request):
 async def studio_hypit_validate(request):
     return await canvas_preflight(CanvasPreflightRequest(
         provider_id=request['provider_id'], region=request.get('region', ''), model_id=request['model'],
+        operation=request.get('operation', ''), option_id=request.get('option_id', ''),
         node_type=request['kind'] + '_generation', inputs=request['inputs'],
         input_counts=request['input_counts'], input_roles=request['input_roles'],
         parameters=request['parameters']))
@@ -19400,8 +21005,600 @@ async def studio_hypit_generate(request):
     return await studio_generate(request)
 
 
+def _hypit_runninghub_region(region):
+    providers = load_api_providers(migrate_legacy_env=False)
+    saved = next((item for item in providers if item.get("id") == "runninghub"), None)
+    if not saved:
+        return None, None, False
+    provider = merge_runninghub_provider_with_static(saved)
+    selected = runninghub_provider_for_region(provider, region, require_enabled=False)
+    active = runninghub_region_config(provider, region)
+    enabled = active.get("enabled") is True and provider.get("enabled", True) is not False
+    selected = runninghub_provider_with_workflow_store(selected, region)
+    return provider, selected, enabled
+
+
+def studio_hypit_workflow_options():
+    """只从已保存的 RunningHub/Comfy 配置读取 Hypit 工作流候选，不访问网络或迁移凭据。"""
+    options = []
+    for region in ("global", "cn"):
+        _provider, selected, site_enabled = _hypit_runninghub_region(region)
+        if not selected:
+            continue
+        try:
+            runninghub_api_key(selected, region=region)
+            credentials_ready = True
+        except HTTPException:
+            credentials_ready = False
+        credentials_reason_code = "" if credentials_ready else "credentials_missing"
+        credentials_reason = "" if credentials_ready else f"RunningHub {region} 站点尚未配置 API Key。"
+        for entry in selected.get("rh_apps") or []:
+            item_id = runninghub_entry_id(entry, "app")
+            if not item_id or entry.get("hidden") is True:
+                continue
+            enabled = site_enabled and entry.get("enabled") is not False and credentials_ready
+            reason_code = "" if enabled else "source_disabled" if not site_enabled or entry.get("enabled") is False else credentials_reason_code
+            reason = "" if enabled else f"RunningHub {region} 站点或此应用当前已停用。" if reason_code == "source_disabled" else credentials_reason
+            options.append({
+                "source": "runninghub_app", "provider_id": "runninghub", "region": region,
+                "item_id": item_id, "name": str(entry.get("title") or item_id),
+                "enabled": enabled, "reason_code": reason_code,
+                "unavailable_reason": reason,
+                "fields": copy.deepcopy(entry.get("fields") or []),
+                "use_wallet": False, "instance_type": str(entry.get("instanceType") or ""),
+            })
+        for entry in selected.get("rh_workflows") or []:
+            item_id = runninghub_entry_id(entry, "workflow")
+            if not item_id or entry.get("hidden") is True:
+                continue
+            workflow_json = entry.get("workflowJson") if isinstance(entry.get("workflowJson"), dict) else {}
+            fields = copy.deepcopy(entry.get("fields") or [])
+            schema_status = "" if workflow_json else "missing"
+            reason_code, reason = "", ""
+            if not workflow_json:
+                reason_code, reason = "workflow_graph_missing", "此 RunningHub 工作流没有可运行的工作流快照。"
+            else:
+                try:
+                    _reject_secrets(workflow_json)
+                    _reject_secrets(fields)
+                except HTTPException:
+                    schema_status = "invalid"
+                    reason_code, reason = "workflow_credential_field", "工作流包含凭据字段或值，不能安全用于 Hypit。"
+            enabled = site_enabled and entry.get("enabled") is not False and credentials_ready
+            if not enabled and not reason_code and (not site_enabled or entry.get("enabled") is False):
+                reason_code, reason = "source_disabled", f"RunningHub {region} 站点或此工作流当前已停用。"
+            elif not enabled and not reason_code:
+                reason_code, reason = credentials_reason_code, credentials_reason
+            options.append({
+                "source": "runninghub_workflow", "provider_id": "runninghub", "region": region,
+                "item_id": item_id, "name": str(entry.get("title") or item_id),
+                "enabled": enabled, "reason_code": reason_code, "unavailable_reason": reason,
+                "schema_status": schema_status, "fields": fields, "workflow_json": workflow_json,
+                "optional_image_mode": str(entry.get("optionalImageMode") or "prune-workflow"),
+                "use_wallet": False,
+            })
+
+    comfy_enabled = bool(COMFYUI_INSTANCES)
+    for item in list_workflows().get("workflows", []):
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            stored = get_workflow(name)
+        except HTTPException:
+            continue
+        workflow_json = stored.get("workflow") if isinstance(stored.get("workflow"), dict) else {}
+        config = stored.get("config") if isinstance(stored.get("config"), dict) else {}
+        fields = copy.deepcopy(config.get("fields") or [])
+        schema_status = "" if workflow_json else "missing"
+        reason_code = "" if comfy_enabled else "comfy_instance_missing"
+        reason = "" if comfy_enabled else "请先配置本地 ComfyUI 服务。"
+        if not workflow_json:
+            reason_code, reason = "workflow_graph_missing", "此本地 ComfyUI 工作流没有可运行的图定义。"
+        else:
+            try:
+                _reject_secrets(workflow_json)
+                _reject_secrets(fields)
+            except HTTPException:
+                schema_status = "invalid"
+                reason_code, reason = "workflow_credential_field", "工作流包含凭据字段或值，不能安全用于 Hypit。"
+        options.append({
+            "source": "local_comfy_workflow", "provider_id": "local-comfyui", "region": "",
+            "item_id": name, "name": str(config.get("title") or item.get("title") or name),
+            "enabled": comfy_enabled, "reason_code": reason_code, "unavailable_reason": reason,
+            "schema_status": schema_status, "fields": fields, "workflow_json": workflow_json,
+        })
+    return options
+
+
+def studio_hypit_resolve_workflow(selection):
+    identity = {key: str(selection.get(key) or "") for key in ("source", "provider_id", "region", "item_id")}
+    for descriptor in studio_hypit_workflow_options():
+        if all(str(descriptor.get(key) or "") == value for key, value in identity.items()):
+            return descriptor
+    raise KeyError("工作流来源不存在")
+
+
+def _hypit_media_field_keys(request):
+    keys = set()
+    for role, targets in (request.get("input_bindings") or {}).items():
+        if role in {"reference", "source_video", "reference_audio", "first_frame", "last_frame"}:
+            values = [targets] if isinstance(targets, str) else targets
+            keys.update(str(value) for value in values if value)
+    return sorted(keys)
+
+
+async def studio_hypit_validate_workflow(request, snapshot):
+    if any(str(request.get(key) or "") != str(snapshot.get(key) or "")
+           for key in ("source", "provider_id", "region", "item_id")):
+        raise HTTPException(409, "工作流任务快照与所选来源不一致")
+    if request.get("source") in {"runninghub_app", "runninghub_workflow"}:
+        provider = runninghub_provider(request.get("region", ""), require_enabled=True)
+        runninghub_api_key(provider, use_wallet=bool(snapshot.get("use_wallet")), region=request.get("region", ""))
+        try:
+            validate_runninghub_node_info_list(request.get("node_info_list") or [], snapshot.get("fields") or [])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    elif request.get("source") == "local_comfy_workflow":
+        if not isinstance(snapshot.get("workflow_json"), dict) or not snapshot["workflow_json"]:
+            raise HTTPException(400, "本地 ComfyUI 工作流快照无效")
+        if not COMFYUI_INSTANCES:
+            raise HTTPException(400, "请先配置 ComfyUI 服务")
+    else:
+        raise HTTPException(400, "Hypit 工作流来源不受支持")
+    return {"valid": True, "selection_kind": "workflow", "source": request["source"],
+            "provider_id": request["provider_id"], "region": request.get("region", ""),
+            "item_id": request["item_id"], "schema_fingerprint": request.get("schema_fingerprint", "")}
+
+
+def _hypit_read_text_result(item):
+    if isinstance(item, dict):
+        value = item.get("text") or item.get("content")
+        if isinstance(value, str) and value.strip():
+            return value
+        url = str(item.get("url") or "")
+    else:
+        url = str(item or "")
+    result_id = url.split("/api/results/")[-1].split("?", 1)[0] if "/api/results/" in url else ""
+    path = PROJECT_STORAGE.result_path(result_id) if result_id else None
+    path = path or local_media_reference_path(url)
+    if not path:
+        return ""
+    try:
+        if Path(path).suffix.lower() in {".txt", ".md", ".markdown", ".json", ".csv", ".yaml", ".yml", ".srt", ".vtt", ".log"}:
+            return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    return ""
+
+
+def _hypit_managed_result(item, kind):
+    value = dict(item) if isinstance(item, dict) else {"url": item}
+    url = str(value.get("url") or "").strip()
+    if not url:
+        return None
+    value["kind"] = kind
+    value.setdefault("mime_type", mimetypes.guess_type(urllib.parse.urlsplit(url).path)[0] or "")
+    if "/api/results/" not in url:
+        path = local_media_reference_path(url)
+        if path:
+            try:
+                stored = PROJECT_STORAGE.register_managed_result(path, value.get("name") or Path(path).name,
+                    source_module="hypit")
+                value["url"] = stored["url"]
+                value["resultId"] = stored["id"]
+                value["name"] = stored["display_name"]
+            except (StorageError, OSError):
+                pass
+    elif not value.get("resultId"):
+        result_id = url.split("/api/results/")[-1].split("?", 1)[0]
+        stored = PROJECT_STORAGE.get_result(result_id)
+        if stored:
+            value["resultId"] = result_id
+            value["name"] = value.get("name") or stored.get("display_name")
+    return value
+
+
+async def studio_hypit_generate_workflow(request, snapshot):
+    source = request.get("source")
+    if source == "local_comfy_workflow":
+        adapter_request = {
+            "kind": "comfy", "workflow_json": str(snapshot.get("item_id") or ""),
+            "workflow_fields": copy.deepcopy(snapshot.get("fields") or []),
+            "workflow_values": copy.deepcopy(request.get("field_values") or {}),
+            "params": copy.deepcopy(request.get("comfy_params") or {}),
+            "references": copy.deepcopy(request.get("references") or []),
+            "media_field_keys": _hypit_media_field_keys(request),
+            "_hypit_execution_snapshot": copy.deepcopy(snapshot),
+            "platform_request": {
+                "prompt": "", "workflow_json": str(snapshot.get("item_id") or ""),
+                "params": copy.deepcopy(request.get("comfy_params") or {}),
+                "type": "hypit-" + str(request.get("expected_slot") or "workflow"),
+                "client_id": "hypit_" + uuid.uuid4().hex,
+            },
+        }
+        result = await STUDIO_APP_EXECUTION._generate(adapter_request)
+    elif source in {"runninghub_app", "runninghub_workflow"}:
+        is_workflow = source == "runninghub_workflow"
+        use_wallet = bool(snapshot.get("use_wallet"))
+        fields = copy.deepcopy(snapshot.get("fields") or [])
+        platform_request = {
+            "webappId": request.get("item_id", "") if not is_workflow else "",
+            "workflowId": request.get("item_id", "") if is_workflow else "",
+            "nodeInfoList": copy.deepcopy(request.get("node_info_list") or []),
+            "workflow": copy.deepcopy(snapshot.get("workflow_json")) if is_workflow else None,
+            "useWallet": use_wallet, "instanceType": str(snapshot.get("instance_type") or ""),
+            "region": request.get("region", ""),
+        }
+        adapter_request = {
+            "kind": "runninghub_workflow" if is_workflow else "ai_application",
+            "provider_id": "runninghub", "region": request.get("region", ""),
+            "use_wallet": use_wallet, "app_id": platform_request["webappId"],
+            "workflow_id": platform_request["workflowId"],
+            "fields": fields, "node_info_list": copy.deepcopy(request.get("node_info_list") or []),
+            "app_field_values": copy.deepcopy(request.get("field_values") or {}),
+            "references": copy.deepcopy(request.get("references") or []),
+            "media_field_keys": _hypit_media_field_keys(request),
+            "workflow": copy.deepcopy(snapshot.get("workflow_json")) if is_workflow else None,
+            "optional_image_mode": str(snapshot.get("optional_image_mode") or "prune-workflow"),
+            "platform_request": platform_request, "strict_result": True,
+            "_hypit_execution_snapshot": copy.deepcopy(snapshot),
+        }
+        result = await STUDIO_APP_EXECUTION._run_runninghub(adapter_request)
+    else:
+        raise HTTPException(400, "Hypit 工作流来源不受支持")
+
+    if not isinstance(result, dict):
+        raise HTTPException(502, "工作流没有返回有效结果")
+    if result.get("error"):
+        raise HTTPException(502, str(result["error"]))
+    if source == "local_comfy_workflow":
+        buckets = {"images": [], "videos": [], "audios": [], "texts": [], "files": []}
+        items = result.get("items") if isinstance(result.get("items"), list) else []
+        if items:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                kind = str(item.get("kind") or explicit_media_kind(item) or media_kind_from_reference(item.get("url")) or "file")
+                key = {"image": "images", "video": "videos", "audio": "audios", "text": "texts"}.get(kind, "files")
+                stored = _hypit_managed_result(item, kind)
+                if stored:
+                    buckets[key].append(stored)
+        else:
+            # 真实 generate_request 总会返回带 kind 的 items；若旧/异常适配器只返回
+            # 旧分桶，则仅用每项 MIME 或文件扩展名分类，不能把 images 桶名当类型证据。
+            for source_key in ("images", "videos", "audios", "texts", "files"):
+                for raw_item in result.get(source_key) or []:
+                    item = dict(raw_item) if isinstance(raw_item, dict) else {"url": raw_item}
+                    kind = explicit_media_kind(item) or media_kind_from_reference(item.get("url"))
+                    if not kind and source_key == "texts" and not urllib.parse.urlsplit(str(item.get("url") or "")).scheme:
+                        kind = "text"
+                        item["text"] = item.get("text") or item.get("content") or str(item.get("url") or "")
+                    kind = kind or "file"
+                    key = {"image": "images", "video": "videos", "audio": "audios", "text": "texts"}.get(kind, "files")
+                    stored = _hypit_managed_result(item, kind)
+                    if stored:
+                        buckets[key].append(stored)
+        result = {**buckets, "task_id": result.get("task_id"), "prompt_id": result.get("prompt_id")}
+
+    for kind, key in (("image", "images"), ("video", "videos"), ("audio", "audios"), ("text", "texts"), ("file", "files")):
+        values = result.get(key)
+        if values is None:
+            continue
+        if not isinstance(values, list):
+            values = [values]
+        result[key] = [stored for item in values if (stored := _hypit_managed_result(item, kind))]
+    if request.get("expected_kind") == "text" and not str(result.get("text") or "").strip():
+        result["text"] = next((_hypit_read_text_result(item) for item in result.get("texts") or []
+                                if _hypit_read_text_result(item).strip()), "")
+    return result
+
+
+HYPIT_FLOW_RUNNER = None
+
+
+async def studio_hypit_submit_settings_canvas_request(slot, output_node_id, request_id, payload, test=False):
+    """把原生 Hypit 请求绑定到共享配置图，并提交同一套画布任务编排。"""
+    runner = HYPIT_FLOW_RUNNER
+    if runner is None:
+        raise HTTPException(status_code=503, detail="Hypit 设置流程执行器尚未就绪")
+    try:
+        canvas = HYPIT_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+        plan = plan_hypit_slot(canvas, slot, output_node_id)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    resolved_output_id = str(plan.get("output_node", {}).get("id") or "")
+    if not resolved_output_id:
+        raise HTTPException(status_code=400, detail=f"Hypit {slot} 输出节点尚未配置")
+    try:
+        return await runner.submit(slot, resolved_output_id, request_id, payload, test=test)
+    except HTTPException:
+        raise
+    except (TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=f"Hypit 流程预检失败：{exc}") from exc
+
+
+def studio_hypit_get_settings_canvas_request(run_id):
+    """按持久任务 ID 查询共享配置图任务；不会重新提交上游调用。"""
+    if HYPIT_FLOW_RUNNER is None:
+        raise HTTPException(status_code=503, detail="Hypit 设置流程执行器尚未就绪")
+    flow = HYPIT_FLOW_RUNNER.get(run_id)
+    if flow is None:
+        raise HTTPException(status_code=404, detail="Hypit 设置流程任务不存在")
+    result = {"images": [], "videos": [], "audios": [], "texts": [], "files": []}
+    target_kind = str(flow.get("output_kind") or "").strip().lower()
+    for item in flow.get("media") or []:
+        value = copy.deepcopy(item) if isinstance(item, dict) else {"url": str(item)}
+        kind = _hypit_result_item_kind(value)
+        key = {"image": "images", "video": "videos", "audio": "audios", "text": "texts"}.get(kind, "files")
+        if kind:
+            value["kind"] = kind
+        result[key].append(value)
+    if target_kind == "text":
+        text = next((str(item.get("text") or item.get("content") or "").strip()
+                     for item in result["texts"] if isinstance(item, dict)
+                     and str(item.get("text") or item.get("content") or "").strip()), "")
+        if text:
+            result["text"] = text
+    return {**flow, "result": result}
+
+
+def studio_hypit_settings_projection():
+    """把六个用途的连接状态投影给旧 Agent 读取入口，不暴露画布或凭据。"""
+    canvas = HYPIT_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+    nodes = [node for node in canvas.get("nodes", []) if isinstance(node, dict)]
+    connections = [edge for edge in canvas.get("connections", []) if isinstance(edge, dict)]
+    by_id = {str(node.get("id") or ""): node for node in nodes}
+    defaults = {}
+    for slot in HYPIT_OUTPUT_SLOTS:
+        outputs = [node for node in nodes if node.get("type") == "smart-hypit-output"
+                   and str(node.get("hypitSlot") or "").strip().lower() == slot]
+        entry = {
+            "selection_kind": "settings_canvas", "status": "unconfigured", "connected": False,
+            "expected_kind": HYPIT_OUTPUT_KINDS[slot], "output_node_id": "", "source_node_id": "",
+            "source_node_type": "", "node_ids": [], "recipe_fingerprint": "", "node_source": {},
+        }
+        if len(outputs) != 1:
+            if len(outputs) > 1:
+                entry.update(status="invalid", reason_code="duplicate_output", unavailable_reason="该用途存在多个输出端口，请保留一个。")
+            defaults[slot] = entry
+            continue
+        output = outputs[0]
+        output_id = str(output.get("id") or "")
+        entry["output_node_id"] = output_id
+        incoming = [edge for edge in connections
+                    if str(edge.get("to", edge.get("target", "")) or "") == output_id
+                    and str(edge.get("kind") or "input").strip().lower() not in {"story", "history", "result"}]
+        if len(incoming) != 1:
+            if incoming:
+                entry.update(status="invalid", reason_code="invalid_output_edges", unavailable_reason="输出端口必须只连接一个来源。")
+            defaults[slot] = entry
+            continue
+        source_id = str(incoming[0].get("from", incoming[0].get("source", "")) or "")
+        source = by_id.get(source_id)
+        if source is None:
+            entry.update(status="invalid", reason_code="missing_source", unavailable_reason="输出来源节点不存在。")
+            defaults[slot] = entry
+            continue
+        entry["source_node_id"] = source_id
+        entry["source_node_type"] = str(source.get("type") or "")
+        try:
+            plan = plan_hypit_slot(canvas, slot, output_id)
+        except (KeyError, TypeError, ValueError):
+            entry.update(status="invalid", reason_code="invalid_flow", unavailable_reason="该用途流程尚未通过结构与输入检查。")
+            defaults[slot] = entry
+            continue
+        entry.update(status="connected", connected=True,
+                     node_ids=[str(node_id) for node_id in plan.get("node_ids") or []],
+                     recipe_fingerprint=str(plan.get("recipe_fingerprint") or ""))
+        run_settings = source.get("runSettings") if isinstance(source.get("runSettings"), dict) else {}
+        node_type = str(source.get("type") or "")
+        source_info = {"kind": "unknown"}
+        if node_type == "smart-text-generator":
+            source_info = {"kind": "api_model", "provider_id": str(run_settings.get("textProvider") or ""),
+                           "model_id": str(run_settings.get("textModel") or ""),
+                           "region": str(run_settings.get("region") or "")}
+        elif node_type == "smart-image-generator":
+            source_info = {"kind": "api_model", "provider_id": str(run_settings.get("provider_id") or ""),
+                           "model_id": str(run_settings.get("model") or ""),
+                           "region": str(run_settings.get("region") or "")}
+        elif node_type == "smart-video-generator":
+            source_info = {"kind": "api_model", "provider_id": str(run_settings.get("videoProvider") or ""),
+                           "model_id": str(run_settings.get("videoModel") or ""),
+                           "region": str(run_settings.get("region") or "")}
+        elif node_type in {"smart-audio-generator", "smart-music-generator"}:
+            provider_key = "musicProvider" if node_type == "smart-music-generator" else "audioProvider"
+            model_key = "musicModel" if node_type == "smart-music-generator" else "audioModel"
+            source_info = {"kind": "api_model", "provider_id": str(run_settings.get(provider_key) or ""),
+                           "model_id": str(run_settings.get(model_key) or ""),
+                           "region": str(run_settings.get("region") or "")}
+        elif node_type == "smart-ai-app":
+            workflow_mode = str(run_settings.get("rhMode") or "app").strip().lower() == "workflow"
+            source_info = {
+                "kind": "runninghub_workflow" if workflow_mode else "runninghub_app",
+                "source": "runninghub_workflow" if workflow_mode else "runninghub_app",
+                "provider_id": "runninghub", "region": str(run_settings.get("rhRegion") or ""),
+                "item_id": str((run_settings.get("rhWorkflowId") if workflow_mode else run_settings.get("rhAppId")) or ""),
+            }
+        elif node_type == "smart-comfy-workflow":
+            source_info = {"kind": "local_comfy_workflow", "source": "local_comfy_workflow",
+                           "provider_id": "local-comfyui", "region": "",
+                           "item_id": str(run_settings.get("comfyWorkflow") or "")}
+        entry["node_source"] = source_info
+        defaults[slot] = entry
+    return {
+        "canvas_id": HYPIT_SETTINGS_CANVAS_ID,
+        "revision": max(1, int(canvas.get("revision") or 1)),
+        "created_at": canvas.get("created_at"),
+        "updated_at": canvas.get("updated_at"),
+        "defaults": defaults,
+    }
+
+
 app.include_router(create_hypit_models_router(BASE_DIR, STUDIO_PROJECTS.get,
-    build_model_capability_catalog, studio_hypit_validate, studio_hypit_generate))
+    build_model_capability_catalog, studio_hypit_validate, studio_hypit_generate,
+    get_workflow_options=studio_hypit_workflow_options,
+    resolve_workflow=studio_hypit_resolve_workflow,
+    validate_workflow=studio_hypit_validate_workflow,
+    generate_workflow=studio_hypit_generate_workflow,
+    get_settings_canvas_projection=studio_hypit_settings_projection,
+    submit_settings_canvas_request=studio_hypit_submit_settings_canvas_request,
+    get_settings_canvas_request=studio_hypit_get_settings_canvas_request))
+
+
+def _load_legacy_hypit_settings():
+    return read_json_file(Path(DATA_DIR) / "hypit_settings.json", default=None)
+
+
+def _backup_legacy_hypit_settings(_record):
+    source = Path(DATA_DIR) / "hypit_settings.json"
+    if not source.is_file():
+        return
+    destination = Path(BASE_DIR) / "backups" / "hypit" / "hypit_settings.v1.json"
+    if destination.exists():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def studio_hypit_backup_legacy_prompt_scaffold(canvas):
+    """幂等保存旧自动空提示节点迁移前的配置图，不触碰素材或生成结果。"""
+    if not isinstance(canvas, dict) or canvas.get("id") != HYPIT_SETTINGS_CANVAS_ID:
+        raise ValueError("只能备份 Hypit 保留设置画布")
+    target = Path(PROJECT_STORAGE.backups_dir) / "hypit" / "hypit-settings-before-empty-prompt-scaffold-cleanup.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "kind": "hypit-settings-canvas-migration-backup",
+        "migration": "remove-proven-empty-legacy-prompt-scaffold",
+        "created_at": int(now_ms()),
+        "canvas": copy.deepcopy(canvas),
+    }
+    try:
+        # exclusive create 保证首次原件不会被后续 autosave 覆盖。
+        with target.open("xb") as stream:
+            stream.write(json.dumps(record, ensure_ascii=False, indent=2).encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError:
+        return
+    except OSError as exc:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RuntimeError("保存 Hypit 空提示脚手架迁移备份失败，配置图未修改") from exc
+
+
+def _project_hypit_test_statuses(canvas_id, canvas):
+    # labels 提供的只读投影只查询既有测试任务，不在 GET/PUT 时触发执行。
+    return studio_hypit_test_statuses(canvas_id, canvas, module_id="hypit")
+
+
+def _project_article_test_statuses(canvas_id, canvas):
+    # 文章设置图复用相同的可信状态投影，但由独立 article-settings 身份隔离任务。
+    return studio_hypit_test_statuses(canvas_id, canvas, module_id="article")
+
+
+HYPIT_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
+    load_canvas=load_canvas,
+    save_canvas=save_canvas,
+    lock=CANVAS_LOCK,
+    load_legacy_settings=_load_legacy_hypit_settings,
+    backup_legacy_settings=_backup_legacy_hypit_settings,
+    migrate_legacy_settings=legacy_hypit_defaults_to_canvas,
+    validate_canvas=validate_hypit_settings_canvas,
+    test_statuses=_project_hypit_test_statuses,
+    backup_scaffold=studio_hypit_backup_legacy_prompt_scaffold,
+    broadcast_canvas_updated=manager.broadcast_canvas_updated,
+    now_ms=now_ms,
+)
+ARTICLE_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
+    load_canvas=load_canvas,
+    save_canvas=save_canvas,
+    lock=CANVAS_LOCK,
+    load_legacy_settings=lambda: None,
+    backup_legacy_settings=lambda _record: None,
+    migrate_legacy_settings=legacy_hypit_defaults_to_canvas,
+    validate_canvas=validate_hypit_settings_canvas,
+    test_statuses=_project_article_test_statuses,
+    backup_scaffold=None,
+    broadcast_canvas_updated=manager.broadcast_canvas_updated,
+    now_ms=now_ms,
+    canvas_id=ARTICLE_SETTINGS_CANVAS_ID,
+    module_id="article",
+    canvas_url=ARTICLE_SETTINGS_CANVAS_URL,
+    title="文章生成配置",
+    migrate_legacy=False,
+)
+
+
+def validate_canvas_settings_canvas(canvas):
+    """验证模型管理画布的通用节点与连线结构，不读取用户模型白名单。"""
+    if not isinstance(canvas, dict) or canvas.get("id") != CANVAS_SETTINGS_CANVAS_ID:
+        raise HTTPException(status_code=400, detail="画布模型设置身份无效")
+    validate_canvas_preflight_graph(canvas.get("nodes") or [], canvas.get("connections") or [])
+
+
+CANVAS_SETTINGS_SERVICE = CanvasSettingsService(
+    load_canvas=load_canvas,
+    save_canvas=save_canvas,
+    lock=CANVAS_LOCK,
+    validate_canvas=validate_canvas_settings_canvas,
+    broadcast_canvas_updated=manager.broadcast_canvas_updated,
+    now_ms=now_ms,
+    reset_display_preferences=lambda: reset_smart_canvas_presentation_preferences(scope="all"),
+    canvas_id=CANVAS_SETTINGS_CANVAS_ID,
+    canvas_url=CANVAS_SETTINGS_CANVAS_URL,
+    title="画布模型设置",
+    project_id="__canvas_settings__",
+)
+SETTINGS_CANVAS_SERVICES = {
+    HYPIT_SETTINGS_CANVAS_ID: HYPIT_SETTINGS_CANVAS_SERVICE,
+    ARTICLE_SETTINGS_CANVAS_ID: ARTICLE_SETTINGS_CANVAS_SERVICE,
+    CANVAS_SETTINGS_CANVAS_ID: CANVAS_SETTINGS_SERVICE,
+}
+
+
+def studio_settings_canvas_service(canvas_id):
+    return SETTINGS_CANVAS_SERVICES.get(str(canvas_id or "").strip())
+
+
+def studio_load_canvas(canvas_id):
+    service = studio_settings_canvas_service(canvas_id)
+    return service.ensure_canvas() if service is not None else load_canvas(canvas_id)
+
+
+def studio_save_canvas(canvas, *, increment_revision=True, touch_updated_at=True):
+    service = studio_settings_canvas_service(canvas.get("id") if isinstance(canvas, dict) else "")
+    if service is not None:
+        return service.save_agent_canvas(
+            canvas,
+            increment_revision=increment_revision,
+            touch_updated_at=touch_updated_at,
+        )
+    return save_canvas(canvas, increment_revision=increment_revision, touch_updated_at=touch_updated_at)
+
+
+app.include_router(create_hypit_settings_canvas_router(
+    service=HYPIT_SETTINGS_CANVAS_SERVICE,
+    submit_test=studio_hypit_submit_settings_canvas_request,
+    get_test=studio_hypit_get_settings_canvas_request,
+))
+app.include_router(create_hypit_settings_canvas_router(
+    service=ARTICLE_SETTINGS_CANVAS_SERVICE,
+    base_path="/api/studio/articles/settings-canvas",
+    include_test_routes=False,
+))
+app.include_router(create_canvas_settings_router(
+    CANVAS_SETTINGS_SERVICE,
+    get_catalog=build_model_management_catalog,
+    patch_enabled=patch_canvas_model_option_enabled,
+))
 
 
 async def studio_collect(result, request, task):
@@ -19411,6 +21608,26 @@ async def studio_collect(result, request, task):
         stored = await create_canvas_text_result(CanvasTextResultRequest(text=text, name=(task.get('title') or '正文') + '.md'))
         media.append({'kind': 'text', 'text': text, 'content': text, 'url': stored['url'],
                       'resultId': stored['id'], 'name': stored['display_name']})
+        seen_text = {text.strip()} if text.strip() else set()
+        for kind, key in [('image', 'images'), ('video', 'videos'), ('audio', 'audios'), ('text', 'texts'), ('file', 'files')]:
+            for item in result.get(key, []):
+                value = dict(item) if isinstance(item, dict) else {'url': item}
+                item_text = str(value.get('text') or value.get('content') or '').strip() if kind == 'text' else ''
+                if item_text and item_text in seen_text:
+                    continue
+                if item_text:
+                    seen_text.add(item_text)
+                value['kind'] = kind
+                if value.get('url'):
+                    result_id = value['url'].split('/api/results/')[-1].split('?')[0] if '/api/results/' in value['url'] else ''
+                    saved = PROJECT_STORAGE.get_result(result_id) if result_id else None
+                    if saved:
+                        value.update(resultId=result_id, name=saved['display_name'])
+                        if kind == 'text':
+                            path = PROJECT_STORAGE.result_path(result_id)
+                            if path:
+                                value['text'] = value['content'] = await asyncio.to_thread(path.read_text, encoding='utf-8')
+                    media.append(value)
     else:
         for kind, key in [('image', 'images'), ('video', 'videos'), ('audio', 'audios'), ('text', 'texts'), ('file', 'files')]:
             for item in result.get(key, []):
@@ -19438,13 +21655,17 @@ async def studio_collect(result, request, task):
 
 STUDIO_EXECUTION = StudioExecution(load_canvas=load_canvas, save_canvas=save_canvas, lock=CANVAS_LOCK,
                                    storage=PROJECT_STORAGE, preflight=studio_preflight, generate=studio_generate,
-                                   collect=studio_collect, notify=studio_notify)
+                                   collect=studio_collect, notify=studio_notify,
+                                   task_metadata=studio_hypit_task_metadata)
 
 
-async def studio_app_preflight(canvas, node, request, request_id):
+async def studio_app_preflight(canvas, node, request, request_id, *, record_run=True):
     if request['kind'] == 'ai_application':
-        return await canvas_preflight(CanvasPreflightRequest(canvas_id=canvas['id'], node_id=node['id'],
-            client_operation_id=request_id, provider_id='runninghub', node_type='ai_application',
+        return await canvas_preflight(CanvasPreflightRequest(
+            client_operation_id=request_id if record_run else '',
+            canvas_id=canvas['id'] if record_run else '',
+            node_id=node['id'] if record_run else '',
+            provider_id='runninghub', node_type='ai_application',
             region=request.get('region', ''),
             ai_app_id=request['app_id'], app_field_values=request['app_field_values'],
             nodes=canvas['nodes'], connections=canvas.get('connections', [])))
@@ -19455,17 +21676,41 @@ async def studio_app_preflight(canvas, node, request, request_id):
             raise HTTPException(400, '请先配置 ComfyUI 服务')
     elif request['kind'] == 'runninghub_workflow':
         runninghub_api_key(runninghub_provider(request.get('region', '')), use_wallet=request.get('use_wallet', False), region=request.get('region', ''))
-    run = PROJECT_STORAGE.prepare_run(canvas_id=canvas['id'], node_id=node['id'], client_operation_id=request_id,
-        standard_request={'inputs': request['inputs'], 'parameters': request['parameters']},
-        platform_request=request['platform_request'], capability_snapshot={'graph': graph})
-    return {'run_id': run['run_id'], 'graph': graph, 'network_requested': False}
+    result = {'graph': graph, 'network_requested': False}
+    if record_run:
+        run = PROJECT_STORAGE.prepare_run(canvas_id=canvas['id'], node_id=node['id'], client_operation_id=request_id,
+            standard_request={'inputs': request['inputs'], 'parameters': request['parameters']},
+            platform_request=request['platform_request'], capability_snapshot={'graph': graph})
+        result['run_id'] = run['run_id']
+    return result
 
 
 async def studio_runninghub_submit(request):
     payload = request['platform_request']
+    snapshot = request.get('_hypit_execution_snapshot')
+    trusted_fields = snapshot.get('fields') if isinstance(snapshot, dict) else None
     if request['kind'] == 'runninghub_workflow':
-        return await runninghub_workflow_submit(RunningHubWorkflowSubmitRequest(**payload))
-    return await runninghub_submit(RunningHubSubmitRequest(**payload))
+        trusted_workflow = request.get('workflow') if isinstance(snapshot, dict) else None
+        return await _runninghub_workflow_submit(RunningHubWorkflowSubmitRequest(**payload),
+            trusted_fields=trusted_fields, trusted_workflow=trusted_workflow)
+    return await _runninghub_submit(RunningHubSubmitRequest(**payload), trusted_fields=trusted_fields)
+
+
+def studio_local_comfy_generate(request):
+    """内部适配器可携带经校验的快照；HTTP GenerateRequest 不暴露原始工作流入口。"""
+    payload = request['platform_request']
+    snapshot = request.get('_hypit_execution_snapshot')
+    if isinstance(snapshot, dict):
+        graph = snapshot.get('workflow_json')
+        if not isinstance(graph, dict) or not graph:
+            raise HTTPException(400, 'Hypit ComfyUI 工作流快照无效')
+        return generate_request(GenerateRequest(**payload), trusted_workflow_snapshot=copy.deepcopy(graph))
+    return generate(GenerateRequest(**payload))
+
+
+async def studio_runninghub_query(task_id, request):
+    return await _runninghub_query(task_id, request.get('use_wallet', False), request.get('region', ''),
+        strict=request.get('strict_result') is True)
 
 
 async def studio_runninghub_upload(ref, request):
@@ -19504,12 +21749,443 @@ async def studio_app_fields(app_id, node, canvas):
 STUDIO_APP_EXECUTION = StudioAppExecution(load_canvas=load_canvas, save_canvas=save_canvas,
     lock=CANVAS_LOCK, storage=PROJECT_STORAGE, preflight=studio_app_preflight,
     collect=studio_collect, notify=studio_notify,
-    local_comfy_generate=lambda request: generate(GenerateRequest(**request['platform_request'])),
+    task_metadata=studio_hypit_task_metadata,
+    local_comfy_generate=studio_local_comfy_generate,
     runninghub_submit=studio_runninghub_submit,
-    runninghub_query=lambda task_id, request: runninghub_query(task_id, request.get('use_wallet', False), request.get('region', '')),
+    runninghub_query=studio_runninghub_query,
     resolve_runninghub_fields=studio_app_fields,
     resolve_comfy_fields=lambda name, *_: get_workflow(name)['config']['fields'],
     upload_runninghub_asset=studio_runninghub_upload, upload_comfy_media=studio_comfy_upload)
+
+
+def _hypit_step_request_id(request_id, node_id):
+    value = hashlib.sha256(f"{request_id}\0{node_id}".encode("utf-8")).hexdigest()
+    return "hypit_step_" + value[:32]
+
+
+async def studio_hypit_prepare_node_request(canvas, node, request_id, upstream_results, user_request, *, preflight=False):
+    """复用普通画布请求投影；上游结果只注入本次私有图。"""
+    node_id = str(node.get("id") or "")
+    if not node_id:
+        raise ValueError("Hypit 执行节点缺少 ID")
+    by_id = {str(item.get("id") or ""): item for item in canvas.get("nodes", []) if isinstance(item, dict)}
+    for source_id, value in (upstream_results or {}).items():
+        source = by_id.get(str(source_id or ""))
+        if source is None:
+            raise ValueError(f"Hypit 上游节点不存在：{source_id}")
+        if isinstance(value, dict) and value.get("placeholder") is True:
+            source_type = str(source.get("type") or "")
+            kind = "dynamic" if source_type in {"smart-ai-app", "smart-comfy-workflow"} else str(value.get("kind") or "").strip().lower()
+            if kind not in {"image", "video", "audio", "text", "dynamic"}:
+                raise ValueError(f"Hypit 上游节点类型无法预检：{source_id}")
+            if kind == "dynamic":
+                # 动态工作流的 outputKind 可能是用户或上次执行留下的旧值，
+                # 预检时不把它当作本次真实输出，也不把旧结果送进下游。
+                source["images"] = []
+                continue
+            placeholder = {"kind": "text" if kind == "dynamic" else kind,
+                           "url": f"hypit-placeholder://{source_id}"}
+            if placeholder["kind"] == "text":
+                placeholder.update(text="Hypit 预检文本占位", content="Hypit 预检文本占位")
+            source["images"] = [placeholder]
+        elif isinstance(value, list):
+            source["images"] = copy.deepcopy([item for item in value if isinstance(item, dict)])
+        else:
+            raise ValueError(f"Hypit 上游节点结果格式无效：{source_id}")
+
+    run_settings = node.setdefault("runSettings", {})
+    requested_system_prompt = str((user_request or {}).get("system_prompt") or "").strip()
+    if requested_system_prompt and node.get("type") == "smart-text-generator":
+        run_settings["textSystemEnabled"] = True
+        run_settings["textSystemPrompt"] = requested_system_prompt
+
+    if preflight and node.get("type") in {"smart-ai-app", "smart-comfy-workflow"}:
+        if any(
+            isinstance(value, dict) and value.get("placeholder") is True
+            and (str(by_id.get(str(source_id), {}).get("type") or "") in {"smart-ai-app", "smart-comfy-workflow"}
+                 or str(value.get("kind") or "").strip().lower() == "dynamic")
+            for source_id, value in (upstream_results or {}).items()
+        ):
+            await studio_hypit_add_dynamic_field_placeholders(canvas, node)
+
+    step_request_id = _hypit_step_request_id(request_id, node_id)
+    if node.get("type") in {"smart-ai-app", "smart-comfy-workflow"}:
+        request = await STUDIO_APP_EXECUTION._prepare_request(canvas, node, step_request_id)
+        # 动态输出必须依赖供应商真实 MIME/类型或受管文件类型，不能沿用旧的
+        # 通用图片兜底分类。
+        request["strict_result"] = True
+    else:
+        request = studio_request_for(canvas, node)
+    requested_slot = str((user_request or {}).get("_hypit_requested_slot") or "").strip().lower()
+    requested_output_id = str((user_request or {}).get("_hypit_output_node_id") or "").strip()
+    if requested_slot in HYPIT_OUTPUT_KINDS and requested_output_id:
+        requested_output = by_id.get(requested_output_id)
+        is_target_source = any(
+            isinstance(edge, dict)
+            and str(edge.get("from", edge.get("source", "")) or "") == node_id
+            and str(edge.get("to", edge.get("target", "")) or "") == requested_output_id
+            and str(edge.get("kind") or "").strip().lower() in {"", "flow", "input"}
+            for edge in canvas.get("connections", [])
+        )
+        if (is_target_source and requested_output
+                and requested_output.get("type") == "smart-hypit-output"
+                and str(requested_output.get("hypitSlot") or "").strip().lower() == requested_slot):
+            request["_hypit_output_slot"] = requested_slot
+    request["request_id"] = step_request_id
+    request["_hypit_node_id"] = node_id
+    request["_hypit_node_title"] = str(node.get("title") or node_id)
+    return request
+
+
+async def studio_hypit_add_dynamic_field_placeholders(canvas, node):
+    """只在私有预检图中按已知字段类型补结构占位，真实类型仍由运行结果决定。"""
+    node_type = str(node.get("type") or "")
+    settings = node.setdefault("runSettings", {})
+    if node_type == "smart-ai-app":
+        config_key = str(settings.get("rhConfigKey") or "").strip()
+        entry_id = config_key.split(":", 1)[1] if ":" in config_key else str(
+            settings.get("rhWorkflowId") or settings.get("rhAppId") or config_key
+        )
+        resolver = STUDIO_APP_EXECUTION.resolve_runninghub_fields
+        resolved = resolver(entry_id, node, canvas) if resolver else (settings.get("rhFields") or settings.get("rhSchemaSnapshot") or [])
+        if hasattr(resolved, "__await__"):
+            resolved = await resolved
+        fields = studio_app_schema_fields(resolved)
+    elif node_type == "smart-comfy-workflow":
+        workflow_name = str(settings.get("comfyWorkflow") or "").strip()
+        resolver = STUDIO_APP_EXECUTION.resolve_comfy_fields
+        resolved = resolver(workflow_name, node, canvas) if resolver else (settings.get("comfyFields") or settings.get("workflowFields") or [])
+        if hasattr(resolved, "__await__"):
+            resolved = await resolved
+        fields = studio_app_schema_fields(resolved, comfy=True)
+    else:
+        return
+    enabled_fields = [field for field in fields if field.get("enabled") is True]
+    if enabled_fields:
+        fields = enabled_fields
+
+    secret_field_names = {
+        "api_key", "apikey", "secret", "password", "access_token", "refresh_token",
+        "auth_token", "bearer_token", "session_token", "token", "authorization",
+        "credential", "credentials",
+    }
+    supported_input_kinds = {
+        "image": "image", "video": "video", "audio": "audio",
+        "text": "text", "string": "text", "plain-text": "text", "textarea": "text",
+    }
+
+    def field_key(field):
+        if node_type == "smart-comfy-workflow":
+            return str(field.get("id") or field.get("paramid") or field.get("paramId") or field.get("key") or "").strip()
+        field_node = str(field.get("nodeId") or field.get("node_id") or "").strip()
+        field_name = str(field.get("fieldName") or field.get("field_name") or field.get("inputName") or "").strip()
+        if not field_node or not field_name:
+            param_id = str(field.get("paramid") or field.get("paramId") or field.get("key") or "").strip()
+            if "::" in param_id:
+                field_node, field_name = (part.strip() for part in param_id.split("::", 1))
+        return f"{field_node}::{field_name}" if field_node or field_name else str(
+            field.get("key") or field.get("paramid") or field.get("paramId") or ""
+        ).strip()
+
+    existing_refs = studio_input_media(canvas, node)
+    existing_kinds = {str(item.get("kind") or "").strip().lower() for item in existing_refs}
+    added_refs = []
+    seen_kinds = set()
+    for field in fields:
+        if not isinstance(field, dict) or field.get("required") is not True:
+            continue
+        identity_values = [str(field.get(key) or "") for key in (
+            "nodeId", "fieldName", "inputName", "name", "label", "id", "key", "paramid", "paramId",
+        )]
+        normalized_identities = {
+            re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+            for value in identity_values if value.strip()
+        }
+        raw_type = str(field.get("fieldType") or field.get("type") or field.get("kind") or "").strip().lower()
+        if raw_type in {"password", "secret", "credential", "token"} or normalized_identities & secret_field_names:
+            continue
+        kind = supported_input_kinds.get(raw_type)
+        if not kind:
+            continue
+        if kind in existing_kinds or kind in seen_kinds:
+            continue
+        key = field_key(field)
+        if not key:
+            continue
+        placeholder = {
+            "kind": kind,
+            "targetFieldKey": key,
+            "url": f"hypit-preflight://dynamic-upstream/{key}",
+            "hypitPreflightPlaceholder": True,
+        }
+        if kind == "text":
+            placeholder["text"] = placeholder["content"] = f"Hypit 预检字段占位：{key}"
+        added_refs.append(placeholder)
+        seen_kinds.add(kind)
+    if added_refs:
+        node["manualInputRefs"] = [
+            *copy.deepcopy(node.get("manualInputRefs") or []), *added_refs,
+        ]
+
+
+async def studio_hypit_preflight_node(canvas, node, request, request_id):
+    if node.get("type") in {"smart-ai-app", "smart-comfy-workflow"}:
+        return await studio_app_preflight(canvas, node, request, request_id, record_run=False)
+    resolved = await studio_preflight(canvas, node, request, request_id, record_run=False)
+    target_slot = str(request.get("_hypit_output_slot") or "").strip().lower()
+    if target_slot:
+        canvas_id = str(canvas.get("id") or "")
+        module_id = "hypit" if canvas_id == HYPIT_SETTINGS_CANVAS_ID else "article"
+        supported_slots = (studio_hypit_supported_output_slots(node, request)
+                           if module_id == "hypit" else studio_article_supported_output_slots(node, request))
+        if module_id == "hypit":
+            rejection = studio_hypit_profile_rejection(node, request, target_slot)
+            if rejection:
+                raise HTTPException(status_code=400, detail=rejection)
+        if target_slot not in supported_slots:
+            module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+            raise HTTPException(status_code=400, detail=f"当前模型不适用于 {module_name} {target_slot} 输出用途")
+    return resolved
+
+
+async def studio_hypit_execute_node(canvas, node, request, request_id, resolved, on_submitted):
+    del canvas, node, request_id, resolved
+    if request.get("kind") in {"ai_application", "runninghub_workflow", "comfy"}:
+        return await STUDIO_APP_EXECUTION._generate(request, on_submitted=on_submitted)
+    return await studio_generate(request)
+
+
+def _hypit_result_item_kind(item):
+    kind = explicit_media_kind(item)
+    if kind in {"image", "video", "audio", "text"}:
+        return kind
+    url = item.get("url") if isinstance(item, dict) else item
+    return media_kind_from_reference(url)
+
+
+async def studio_hypit_collect_results(result, request, task):
+    """把共享适配器结果送入同一个受管素材收集器，并保留动态类型证据。"""
+    if not isinstance(result, dict):
+        raise ValueError("Hypit 执行节点没有返回结果对象")
+    normalized = copy.deepcopy(result)
+    dynamic = request.get("kind") in {"ai_application", "runninghub_workflow", "comfy"}
+    if isinstance(normalized.get("items"), list):
+        buckets = {"images": [], "videos": [], "audios": [], "texts": [], "files": []}
+        for item in normalized.pop("items"):
+            value = copy.deepcopy(item) if isinstance(item, dict) else {"url": item}
+            kind = _hypit_result_item_kind(value)
+            key = {"image": "images", "video": "videos", "audio": "audios", "text": "texts"}.get(kind, "files")
+            buckets[key].append(value)
+        for key, values in buckets.items():
+            if values:
+                normalized[key] = [*(normalized.get(key) or []), *values]
+
+    if dynamic:
+        # 动态 AI 应用/Comfy 的分桶标签不单独构成类型证据；按返回 MIME、明确
+        # 类型或真实受管文件类型重新归档，未知输出仅保留为 file。
+        rebucketed = {"images": [], "videos": [], "audios": [], "texts": [], "files": []}
+        for source_key in ("images", "videos", "audios", "texts", "files"):
+            values = normalized.get(source_key) or []
+            values = values if isinstance(values, list) else [values]
+            for item in values:
+                value = copy.deepcopy(item) if isinstance(item, dict) else {"url": item}
+                kind = _hypit_result_item_kind(value)
+                key = {"image": "images", "video": "videos", "audio": "audios", "text": "texts"}.get(kind, "files")
+                if kind:
+                    value["kind"] = kind
+                rebucketed[key].append(value)
+        normalized.update(rebucketed)
+
+    text_value = normalized.get("text")
+    has_inline_text = isinstance(text_value, str) and bool(text_value.strip())
+    if dynamic and has_inline_text:
+        # studio_collect 的文本分支负责写入共享文本结果存储。
+        collector_request = {**request, "kind": "text"}
+    else:
+        collector_request = request
+    return await studio_collect(normalized, collector_request, task)
+
+
+async def studio_hypit_publish_node_result(canvas_snapshot, source_node, media, task):
+    """只在原配方仍存在时把结果回填到对应节点历史；任务结果始终独立保留。"""
+    if not isinstance(media, list) or not media:
+        return False
+    slot = str(task.get("slot") or "").strip().lower()
+    output_node_id = str(task.get("output_node_id") or "").strip()
+    expected_fingerprint = str(task.get("recipe_fingerprint") or "")
+    node_id = str(source_node.get("id") or "")
+    canvas_id = str(task.get("canvas_id") or (canvas_snapshot.get("id") if isinstance(canvas_snapshot, dict) else "") or "")
+    service = studio_settings_canvas_service(canvas_id)
+    if not slot or not output_node_id or not expected_fingerprint or not node_id or service is None:
+        return False
+    with CANVAS_LOCK:
+        latest = service.ensure_canvas()
+        try:
+            current_plan = plan_hypit_slot(
+                latest, slot, output_node_id, canvas_id=canvas_id, module_id=service.module_id,
+            )
+        except (TypeError, ValueError, KeyError):
+            return False
+        if current_plan.get("recipe_fingerprint") != expected_fingerprint:
+            return False
+        node = next((item for item in latest.get("nodes", [])
+                     if isinstance(item, dict) and str(item.get("id") or "") == node_id), None)
+        if not node or node.get("type") != source_node.get("type"):
+            return False
+        if not node.get("creationId"):
+            node["creationId"] = "creation_" + uuid.uuid4().hex
+        if node.get("creationOwnerNodeId", node_id) != node_id:
+            node["creationParentId"] = node["creationId"]
+            node["creationId"] = "creation_" + uuid.uuid4().hex
+        node["creationOwnerNodeId"] = node_id
+        node["creationRevision"] = int(node.get("creationRevision") or 0) + 1
+        signature = studio_stable(studio_node_recipe(node))
+        result_id = f"{task.get('run_id')}:{node_id}"
+        output_kind = str(media[0].get("kind") or "") if isinstance(media[0], dict) else ""
+        version = copy.deepcopy(node)
+        version.update({
+            "id": result_id,
+            "type": node.get("type"),
+            "creationType": node.get("type"),
+            "sourceExecutionNodeId": node_id,
+            "creationTask": True,
+            "runStatus": "succeeded",
+            "runFinishedAt": int(now_ms()),
+            "images": copy.deepcopy(media),
+            "outputKind": output_kind,
+            "sourceKind": "result",
+            "creationSignature": signature,
+        })
+        versions = node.setdefault("resultVersions", [copy.deepcopy(node)] if node.get("images") else [])
+        existing_index = next((index for index, item in enumerate(versions)
+                               if isinstance(item, dict) and str(item.get("id") or "") == result_id), None)
+        if existing_index is None:
+            versions.append(version)
+            existing_index = len(versions) - 1
+        else:
+            versions[existing_index] = version
+        task_summary = {key: version[key] for key in (
+            "id", "creationType", "sourceExecutionNodeId", "creationTask", "runStatus",
+            "runFinishedAt", "outputKind", "creationSignature", "images",
+        )}
+        tasks = node.setdefault("creationTasks", [])
+        task_index = next((index for index, item in enumerate(tasks)
+                           if isinstance(item, dict) and str(item.get("id") or "") == result_id), None)
+        if task_index is None:
+            tasks.append(task_summary)
+        else:
+            tasks[task_index] = task_summary
+        node.update(activeResultVersion=existing_index, images=copy.deepcopy(media),
+                    sourceKind="result", outputKind=output_kind,
+                    creationSignature=signature)
+        saved = service.save_agent_canvas(latest)
+    if isinstance(saved, dict):
+        await studio_notify(saved)
+    return True
+
+
+HYPIT_FLOW_RUNNER = HypitFlowRunner(
+    load_canvas=lambda canvas_id: HYPIT_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+        if canvas_id == HYPIT_SETTINGS_CANVAS_ID else load_canvas(canvas_id),
+    storage=PROJECT_STORAGE,
+    prepare_node_request=studio_hypit_prepare_node_request,
+    preflight_node=studio_hypit_preflight_node,
+    execute_node=studio_hypit_execute_node,
+    collect_results=studio_hypit_collect_results,
+    notify=lambda canvas_id, run_id, status: manager.broadcast_canvas_updated(
+        canvas_id, int(now_ms()), max(1, int(load_canvas(canvas_id).get("revision") or 1)), ""),
+    lock=CANVAS_LOCK,
+    now_ms=now_ms,
+    publish_node_result=studio_hypit_publish_node_result,
+)
+
+
+ARTICLE_FLOW_RUNNER = HypitFlowRunner(
+    load_canvas=lambda canvas_id: ARTICLE_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+        if canvas_id == ARTICLE_SETTINGS_CANVAS_ID else load_canvas(canvas_id),
+    storage=PROJECT_STORAGE,
+    prepare_node_request=studio_hypit_prepare_node_request,
+    preflight_node=studio_hypit_preflight_node,
+    execute_node=studio_hypit_execute_node,
+    collect_results=studio_hypit_collect_results,
+    notify=lambda canvas_id, run_id, status: manager.broadcast_canvas_updated(
+        canvas_id, int(now_ms()), max(1, int(studio_load_canvas(canvas_id).get("revision") or 1)), ""),
+    lock=CANVAS_LOCK,
+    now_ms=now_ms,
+    canvas_id=ARTICLE_SETTINGS_CANVAS_ID,
+    module_id="article",
+)
+
+ARTICLE_GENERATION_BRIDGE = StudioArticleGenerationBridge(
+    article_store=STUDIO_ARTICLES,
+    runner=ARTICLE_FLOW_RUNNER,
+    storage=PROJECT_STORAGE,
+    settings_service=ARTICLE_SETTINGS_CANVAS_SERVICE,
+    publish_node_result=studio_hypit_publish_node_result,
+)
+ARTICLE_FLOW_RUNNER.publish_node_result = ARTICLE_GENERATION_BRIDGE.publish_node_result
+
+
+async def studio_article_submit_generation(project_id, payload, accepted_context):
+    return await ARTICLE_GENERATION_BRIDGE.submit(project_id, payload, accepted_context)
+
+
+async def studio_article_get_generation(project_id, run_id):
+    return await ARTICLE_GENERATION_BRIDGE.get(project_id, run_id)
+
+
+# Article 的静态配置图路由已在上方先注册；随后才注册动态 /{project_id} 文章路由。
+app.include_router(create_studio_articles_router(
+    BASE_DIR,
+    STUDIO_PROJECTS,
+    catalog_path=Path(BASE_DIR) / "static" / "article-templates" / "catalog.json",
+    resolve_media_reference=studio_article_resolve_media,
+    store=STUDIO_ARTICLES,
+    submit_generation=studio_article_submit_generation,
+    get_generation=studio_article_get_generation,
+))
+
+
+def studio_hypit_test_statuses(canvas_id, canvas, *, module_id="hypit"):
+    """按模块身份投影可信执行状态，不启动任务或修改配置图。"""
+    service = studio_settings_canvas_service(canvas_id)
+    if (service is None or service.module_id != module_id or not isinstance(canvas, dict)
+            or canvas.get("id") != canvas_id):
+        module_name = "Hypit" if module_id == "hypit" else "文章"
+        raise ValueError(f"{module_name} 运行状态只能读取对应保留配置图")
+    return project_hypit_execution_statuses(
+        canvas,
+        PROJECT_STORAGE.get_canvas_task,
+        studio_hypit_verified_managed_result,
+        canvas_id=str(canvas_id),
+        module_id=module_id,
+    )
+
+
+def studio_hypit_verified_managed_result(result_id):
+    """确认结果索引对应的文件仍存在且有内容；不读取图片/视频/音频正文。"""
+    result_id = str(result_id or "").strip()
+    if not result_id:
+        return None
+    try:
+        record = PROJECT_STORAGE.get_result(result_id)
+        path = PROJECT_STORAGE.result_path(result_id)
+        if not isinstance(record, dict) or not path:
+            return None
+        path = Path(path)
+        if not path.is_file() or path.stat().st_size <= 0:
+            return None
+        if str(record.get("kind") or "").strip().lower() == "text":
+            with path.open("r", encoding="utf-8", errors="replace") as stream:
+                while True:
+                    chunk = stream.read(4096)
+                    if not chunk:
+                        return None
+                    if chunk.strip():
+                        break
+        return {**record, "_managed_verified": True}
+    except (OSError, ValueError):
+        return None
 
 
 @app.get('/api/studio/tasks/{task_id}')
@@ -19517,15 +22193,88 @@ async def studio_task_status(task_id: str):
     task = PROJECT_STORAGE.get_canvas_task(task_id)
     if not task:
         raise HTTPException(404, '任务不存在')
+    if task.get("kind") == "hypit_settings_flow":
+        flow = studio_hypit_get_settings_canvas_request(task_id)
+        if not isinstance(flow, dict):
+            raise HTTPException(404, 'Hypit 流程任务不存在')
+        return flow
+    if task.get("kind") == "article_settings_flow":
+        flow = ARTICLE_FLOW_RUNNER.get(task_id)
+        context = flow.get("trusted_context") if isinstance(flow, dict) else None
+        project_id = str(context.get("project_id") or "") if isinstance(context, dict) else ""
+        if not project_id:
+            raise HTTPException(404, '文章生成任务不存在')
+        projected = await ARTICLE_GENERATION_BRIDGE.get(project_id, task_id)
+        if not isinstance(projected, dict):
+            raise HTTPException(404, '文章生成任务不存在')
+        return projected
     return task
 
 from canvas_core.headless_canvas import HeadlessCanvas
 
 
-def studio_validate_model(kind, provider, model, parameters):
-    profile = MODEL_CAPABILITY_REGISTRY.find_model(canvas_api_providers(), provider, model, kind)
+def studio_validate_model(
+    kind, provider, model, parameters, *, canvas_id="", option_id="", operation="", region="",
+):
+    active_providers = canvas_api_providers()
+    selected_operation = str(operation or "").strip()
+    if str(canvas_id or "").strip() == CANVAS_SETTINGS_CANVAS_ID and option_id:
+        catalog = _build_model_management_catalog(active_providers)
+        exact = next((item for item in catalog.get("options") or []
+                      if str(item.get("option_id") or "") == str(option_id)), None)
+        if (
+            not exact
+            or str(exact.get("connection_id") or "").strip().lower() != str(provider or "").strip().lower()
+            or str(exact.get("catalog_model_id") or "").strip() != str(model or "").strip()
+            or str(exact.get("node_type") or "").strip() != str(kind or "").strip()
+            or (region and str(exact.get("region_id") or "").strip().lower() != str(region).strip().lower())
+            or (operation and str(exact.get("operation") or "").strip() != str(operation).strip())
+        ):
+            raise ValueError("模型目录选项与当前节点配置不一致")
+        profile = {
+            **exact,
+            "model_id": exact.get("catalog_model_id") or model,
+            "family_id": exact.get("canonical_family_id") or exact.get("legacy_family_id") or model,
+            "variant_id": exact.get("variant_id") or exact.get("operation") or "",
+            "validation_mode": exact.get("validation_mode") or "strict",
+            "runnable": bool(exact.get("runnable")),
+        }
+    else:
+        if option_id:
+            catalog = _build_model_management_catalog(active_providers)
+            exact = next((item for item in catalog.get("options") or []
+                          if str(item.get("option_id") or "") == str(option_id)), None)
+            if (
+                not exact
+                or exact.get("enabled") is not True
+                or str(exact.get("connection_id") or "").strip().lower() != str(provider or "").strip().lower()
+                or str(exact.get("catalog_model_id") or "").strip() != str(model or "").strip()
+                or str(exact.get("node_type") or "").strip() != str(kind or "").strip()
+                or (region and str(exact.get("region_id") or "").strip().lower() != str(region).strip().lower())
+                or (selected_operation and str(exact.get("operation") or "").strip() != selected_operation)
+            ):
+                raise ValueError("模型目录选项已停用或与当前节点配置不一致")
+            selected_operation = str(exact.get("operation") or "").strip()
+        try:
+            profile = MODEL_CAPABILITY_REGISTRY.validate_request(
+                active_providers, provider, model, kind, parameters=parameters,
+                operation=selected_operation,
+            )
+        except ModelCapabilityError as exc:
+            raise ValueError(str(exc)) from exc
     if not profile or not profile.get('runnable') or profile.get('validation_mode') != 'strict':
         raise ValueError('模型未启用或尚无可运行的能力档案')
+    if str(canvas_id or "").strip() != CANVAS_SETTINGS_CANVAS_ID:
+        try:
+            _guard_disabled_model_option(
+                provider, model, kind,
+                operation=profile.get("operation") or profile.get("variant_id") or operation,
+                region=region,
+                providers=active_providers, option_id=option_id,
+                endpoint_id=profile.get("endpoint_id") or "",
+            )
+        except ModelCapabilityError as exc:
+            raise ValueError(str(exc)) from exc
     unknown = set(parameters) - set(profile.get('parameters') or {})
     if unknown:
         raise ValueError('模型不支持参数：' + ', '.join(sorted(unknown)))
@@ -19536,7 +22285,7 @@ async def studio_submit_node(canvas, node, request_id):
     executor = STUDIO_APP_EXECUTION if node.get('type') in {'smart-ai-app', 'smart-comfy-workflow'} else STUDIO_EXECUTION
     result = await executor.submit(canvas, node, request_id)
     # 执行服务已经保存了真实任务；命令层继续写回时必须使用这份最新数据。
-    latest = load_canvas(canvas['id'])
+    latest = studio_load_canvas(canvas['id'])
     canvas.clear()
     canvas.update(latest)
     return result
@@ -19545,16 +22294,16 @@ async def studio_submit_node(canvas, node, request_id):
 async def studio_cancel_node(canvas, node, task_id):
     executor = STUDIO_APP_EXECUTION if str(task_id).startswith('studio_app_') else STUDIO_EXECUTION
     result = await executor.cancel(canvas, node, task_id)
-    latest = load_canvas(canvas['id'])
+    latest = studio_load_canvas(canvas['id'])
     canvas.clear()
     canvas.update(latest)
     return result
 
 
-STUDIO_CANVAS = HeadlessCanvas(load_canvas, save_canvas, CANVAS_LOCK, studio_submit_node,
+STUDIO_CANVAS = HeadlessCanvas(studio_load_canvas, studio_save_canvas, CANVAS_LOCK, studio_submit_node,
                               studio_cancel_node, studio_validate_model, studio_notify)
 app.include_router(studio_module_models.create_module_models_router(build_model_capability_catalog))
-app.include_router(create_agent_router(BASE_DIR, load_canvas, executor=STUDIO_CANVAS))
+app.include_router(create_agent_router(BASE_DIR, studio_load_canvas, executor=STUDIO_CANVAS))
 
 @app.get("/api/canvases")
 async def canvases():
@@ -19622,7 +22371,7 @@ async def create_canvas(payload: CanvasCreateRequest):
 
 @app.get("/api/canvases/{canvas_id}/meta")
 async def get_canvas_meta(canvas_id: str):
-    canvas = await asyncio.to_thread(load_canvas, canvas_id)
+    canvas = await asyncio.to_thread(studio_load_canvas, canvas_id)
     return {
         "id": canvas.get("id"),
         "updated_at": canvas.get("updated_at", 0),
@@ -19636,6 +22385,7 @@ async def get_canvas_meta(canvas_id: str):
 async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate):
     """更新画布的轻量元数据（标题/图标/负责人/颜色/置顶）。
     保留 updated_at，避免打标签/置顶改变最近编辑排序；revision 仍递增。"""
+    reject_settings_canvas_mutation(canvas_id, "修改身份")
     with CANVAS_LOCK:
         canvas = load_canvas(canvas_id)
         current_revision = max(1, int(canvas.get("revision") or 1))
@@ -19668,11 +22418,16 @@ async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate):
 
 @app.get("/api/canvases/{canvas_id}")
 async def get_canvas(canvas_id: str):
+    service = studio_settings_canvas_service(canvas_id)
+    if service is not None:
+        canvas = await asyncio.to_thread(service.ensure_canvas)
+        return {"canvas": await service.projected_canvas(canvas)}
     canvas = await asyncio.to_thread(load_canvas, canvas_id)
     return {"canvas": canvas}
 
 @app.post("/api/canvases/{canvas_id}/touch")
 async def touch_canvas(canvas_id: str):
+    reject_settings_canvas_mutation(canvas_id, "修改访问时间")
     canvas = load_canvas(canvas_id)
     save_canvas(canvas)
     return {"canvas": canvas_record(canvas), "updated_at": canvas.get("updated_at", 0)}
@@ -20320,6 +23075,10 @@ async def delete_asset_library_category(category_id: str, library_id: str = ""):
         raise HTTPException(status_code=404, detail="分类不存在")
     if cat.get("type") == "workflow" and category_id == "workflows" and (library.get("id") or "") == "default":
         raise HTTPException(status_code=400, detail="默认工作流分类不能删除")
+    ensure_no_studio_article_media_references(
+        "asset",
+        [item.get("material_id") for item in (cat.get("items") or []) if isinstance(item, dict)],
+    )
     for item in (cat.get("items") or []):
         remove_asset_library_file(item)
     library["categories"] = [c for c in library.get("categories", []) if c.get("id") != category_id]
@@ -20571,6 +23330,8 @@ async def delete_asset_library_item(item_id: str):
             cat["items"] = keep
     if not removed:
         raise HTTPException(status_code=404, detail="资产不存在")
+    if isinstance(removed, dict) and removed.get("material_id"):
+        ensure_no_studio_article_media_references("asset", [removed.get("material_id")])
     remove_asset_library_file(removed)  # 同时删除本地文件，避免磁盘上堆积
     save_asset_library(lib)
     return {"library": lib}
@@ -20595,6 +23356,10 @@ async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteReque
                 else:
                     keep.append(item)
             cat["items"] = keep
+    ensure_no_studio_article_media_references(
+        "asset",
+        [item.get("material_id") for item in removed_items if isinstance(item, dict)],
+    )
     for item in removed_items:  # 批量删除同时清理本地文件
         remove_asset_library_file(item)
     save_asset_library(lib)
@@ -20689,12 +23454,20 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
 
 @app.put("/api/canvases/{canvas_id}")
 async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
+    settings_service = studio_settings_canvas_service(canvas_id)
+    if settings_service is not None:
+        await asyncio.to_thread(settings_service.ensure_canvas)
     with CANVAS_LOCK:
         canvas = load_canvas(canvas_id)
         if normalize_canvas_kind(canvas.get("kind")) != "smart":
             raise HTTPException(status_code=410, detail="普通画布已停用，请使用智能画布")
         current_revision = max(1, int(canvas.get("revision") or 1))
         canvas["revision"] = current_revision
+        if settings_service is not None:
+            # 只加专用 revision/图契约校验，保存仍继续走下方标准媒体迁移与同步链。
+            candidate = settings_service.prepare_update_candidate(canvas, payload)
+            canvas.clear()
+            canvas.update(candidate)
         if payload.base_revision and int(payload.base_revision) != current_revision:
             raise HTTPException(status_code=409, detail={
                 "message": "画布已被其他页面更新，已拒绝旧版本覆盖。",
@@ -20713,8 +23486,12 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
         if payload.migration_version and int(canvas.get("node_schema_version") or 0) < int(payload.migration_version):
             save_canvas_migration_snapshot(canvas, payload.migration_version)
             canvas["node_schema_version"] = int(payload.migration_version)
-        canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
-        canvas["icon"] = (payload.icon or canvas.get("icon") or "layers")[:32]
+        if canvas_id == CANVAS_SETTINGS_CANVAS_ID:
+            canvas["title"] = CANVAS_SETTINGS_SERVICE.title
+            canvas["icon"] = "settings"
+        else:
+            canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
+            canvas["icon"] = (payload.icon or canvas.get("icon") or "layers")[:32]
         canvas["kind"] = normalize_canvas_kind(canvas.get("kind"))
         incoming_nodes = {"nodes": payload.nodes}
         migrate_canvas_media_references(incoming_nodes)
@@ -20739,10 +23516,13 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
         int(canvas.get("revision") or 1),
         payload.client_id,
     )
+    if settings_service is not None:
+        return {"canvas": await settings_service.projected_canvas(canvas)}
     return {"canvas": canvas}
 
 @app.delete("/api/canvases/{canvas_id}")
 async def delete_canvas(canvas_id: str):
+    reject_settings_canvas_mutation(canvas_id, "删除")
     canvas = load_canvas_any(canvas_id)
     if not canvas.get("deleted_at"):
         canvas["deleted_at"] = now_ms()
@@ -20751,6 +23531,7 @@ async def delete_canvas(canvas_id: str):
 
 @app.post("/api/canvases/{canvas_id}/restore")
 async def restore_canvas(canvas_id: str):
+    reject_settings_canvas_mutation(canvas_id, "恢复")
     canvas = load_canvas_any(canvas_id)
     if canvas.get("deleted_at"):
         canvas.pop("deleted_at", None)
@@ -20759,6 +23540,7 @@ async def restore_canvas(canvas_id: str):
 
 @app.delete("/api/canvases/{canvas_id}/purge")
 async def purge_canvas(canvas_id: str):
+    reject_settings_canvas_mutation(canvas_id, "清理")
     path = canvas_path(canvas_id)
     if os.path.exists(path):
         os.remove(path)
@@ -21201,8 +23983,56 @@ async def ms_generate(req: MsGenerateRequest):
 
 # --- 本地 ComfyUI 生图 ---
 
+def prepare_comfy_workflow_request(workflow, req, *, trusted_snapshot=False, seed=None):
+    """把已确认的请求参数应用到工作流；仅旧公开入口保留 Z-Image 固定节点兼容。"""
+    workflow = copy.deepcopy(workflow)
+    if trusted_snapshot:
+        seed = None
+    else:
+        seed = seed if seed is not None else random.randint(1, 4294967295)
+        if "23" in workflow and req.prompt:
+            workflow["23"]["inputs"]["text"] = req.prompt
+        if "144" in workflow:
+            workflow["144"]["inputs"]["width"] = req.width
+            workflow["144"]["inputs"]["height"] = req.height
+        if "22" in workflow:
+            workflow["22"]["inputs"]["seed"] = seed
+        if "158" in workflow:
+            workflow["158"]["inputs"]["noise_seed"] = seed
+        for node_id in ["146", "181"]:
+            if node_id in workflow and "inputs" in workflow[node_id] and "seed" in workflow[node_id]["inputs"]:
+                workflow[node_id]["inputs"]["seed"] = seed
+        if "184" in workflow and "inputs" in workflow["184"] and "seed" in workflow["184"]["inputs"]:
+            workflow["184"]["inputs"]["seed"] = seed
+        if "172" in workflow and "inputs" in workflow["172"] and "seed" in workflow["172"]["inputs"]:
+            workflow["172"]["inputs"]["seed"] = seed
+        if "14" in workflow and "inputs" in workflow["14"] and "seed" in workflow["14"]["inputs"]:
+            workflow["14"]["inputs"]["seed"] = seed
+
+    for node_id, node_inputs in req.params.items():
+        if node_id in workflow:
+            if "inputs" not in workflow[node_id]:
+                workflow[node_id]["inputs"] = {}
+            for input_name, value in node_inputs.items():
+                if value is None:
+                    workflow[node_id]["inputs"].pop(input_name, None)
+                    continue
+                workflow[node_id]["inputs"][input_name] = value
+        elif isinstance(node_inputs, dict) and node_inputs.get("class_type") and isinstance(node_inputs.get("inputs"), dict):
+            workflow[str(node_id)] = {
+                "class_type": str(node_inputs.get("class_type")),
+                "inputs": node_inputs.get("inputs") or {},
+                "_meta": node_inputs.get("_meta") if isinstance(node_inputs.get("_meta"), dict) else {"title": str(node_inputs.get("class_type"))},
+            }
+    return workflow, seed
+
+
 @app.post("/api/generate")
 def generate(req: GenerateRequest):
+    return generate_request(req)
+
+
+def generate_request(req: GenerateRequest, *, trusted_workflow_snapshot=None):
     global NEXT_TASK_ID
     current_task = None
     target_backend = None
@@ -21249,51 +24079,22 @@ def generate(req: GenerateRequest):
                     except Exception as e:
                         print(f"Sync upload failed: {e}")
 
-        workflow_path = os.path.join(WORKFLOW_DIR, req.workflow_json)
-        if not os.path.exists(workflow_path) and req.workflow_json == "Z-Image.json":
-            workflow_path = WORKFLOW_PATH
-        if not os.path.exists(workflow_path):
-            raise Exception(f"Workflow file not found: {req.workflow_json}")
+        if trusted_workflow_snapshot is not None:
+            if not isinstance(trusted_workflow_snapshot, dict) or not trusted_workflow_snapshot:
+                raise Exception("Hypit 工作流快照无效")
+            workflow_source = trusted_workflow_snapshot
+        else:
+            workflow_path = os.path.join(WORKFLOW_DIR, req.workflow_json)
+            if not os.path.exists(workflow_path) and req.workflow_json == "Z-Image.json":
+                workflow_path = WORKFLOW_PATH
+            if not os.path.exists(workflow_path):
+                raise Exception(f"Workflow file not found: {req.workflow_json}")
+            with open(workflow_path, 'r', encoding='utf-8') as f:
+                workflow_source = json.load(f)
 
-        with open(workflow_path, 'r', encoding='utf-8') as f:
-            workflow = json.load(f)
-
-        seed = random.randint(1, 4294967295)
-
-        if "23" in workflow and req.prompt:
-            workflow["23"]["inputs"]["text"] = req.prompt
-        if "144" in workflow:
-            workflow["144"]["inputs"]["width"] = req.width
-            workflow["144"]["inputs"]["height"] = req.height
-        if "22" in workflow:
-            workflow["22"]["inputs"]["seed"] = seed
-        if "158" in workflow:
-            workflow["158"]["inputs"]["noise_seed"] = seed
-        for node_id in ["146", "181"]:
-            if node_id in workflow and "inputs" in workflow[node_id] and "seed" in workflow[node_id]["inputs"]:
-                workflow[node_id]["inputs"]["seed"] = seed
-        if "184" in workflow and "inputs" in workflow["184"] and "seed" in workflow["184"]["inputs"]:
-            workflow["184"]["inputs"]["seed"] = seed
-        if "172" in workflow and "inputs" in workflow["172"] and "seed" in workflow["172"]["inputs"]:
-            workflow["172"]["inputs"]["seed"] = seed
-        if "14" in workflow and "inputs" in workflow["14"] and "seed" in workflow["14"]["inputs"]:
-            workflow["14"]["inputs"]["seed"] = seed
-
-        for node_id, node_inputs in req.params.items():
-            if node_id in workflow:
-                if "inputs" not in workflow[node_id]:
-                    workflow[node_id]["inputs"] = {}
-                for input_name, value in node_inputs.items():
-                    if value is None:
-                        workflow[node_id]["inputs"].pop(input_name, None)
-                        continue
-                    workflow[node_id]["inputs"][input_name] = value
-            elif isinstance(node_inputs, dict) and node_inputs.get("class_type") and isinstance(node_inputs.get("inputs"), dict):
-                workflow[str(node_id)] = {
-                    "class_type": str(node_inputs.get("class_type")),
-                    "inputs": node_inputs.get("inputs") or {},
-                    "_meta": node_inputs.get("_meta") if isinstance(node_inputs.get("_meta"), dict) else {"title": str(node_inputs.get("class_type"))},
-                }
+        workflow, seed = prepare_comfy_workflow_request(
+            workflow_source, req, trusted_snapshot=trusted_workflow_snapshot is not None,
+        )
 
         p = {"prompt": workflow, "client_id": CLIENT_ID}
         data = json.dumps(p).encode('utf-8')

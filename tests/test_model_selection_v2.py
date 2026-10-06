@@ -83,6 +83,204 @@ class OptionIdentityTests(unittest.TestCase):
         self.assertEqual(option["catalog_model_id"], "Seedance2.0 Fast Image to Video")
 
 
+class ImageModeDisplayLabelTests(unittest.TestCase):
+    """展示标签复用经审阅的模式差异，并以真实 ID 兜底消歧。"""
+
+    @staticmethod
+    def project(models: list[dict], provider_id: str = "ai-money") -> list[dict]:
+        return sms.compile_catalog_options({
+            "providers": [{
+                "id": provider_id,
+                "capability_provider_id": provider_id,
+                "name": "laohu",
+                "models": models,
+            }]
+        })
+
+    @staticmethod
+    def model(
+        model_id: str,
+        operation: str,
+        variant_name: str = "",
+        family_id: str = "ai-money-grok-image",
+    ) -> dict:
+        return {
+            "model_id": model_id,
+            "family_id": family_id,
+            "family_name": model_id,
+            "family_name_en": model_id,
+            "variant_name": variant_name or model_id,
+            "variant_name_en": variant_name or model_id,
+            "node_type": "image_generation",
+            "operation": operation,
+            "runnable": True,
+            "inputs": {
+                "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+                "reference": {"media_type": "image", "min": 0, "max": 16, "role": "reference"},
+            },
+            "output": {"media_type": "image", "min": 1, "max": 1},
+        }
+
+    def test_reviewed_laohu_image_g_modes_keep_version_purpose_and_channel(self):
+        options = self.project([
+            self.model("laohu-image-g-v2.5-flare", "text_or_reference_to_image"),
+            self.model("laohu-image-g-v2.5-sunburst", "text_or_reference_to_image"),
+            self.model("laohu-image-g-v2.5-lowprice", "text_or_reference_to_image", "低价渠道版"),
+            self.model("laohu-image-g-v2-lowprice", "text_to_image", "低价渠道版"),
+        ])
+        by_id = {item["catalog_model_id"]: item for item in options}
+
+        flare = by_id["laohu-image-g-v2.5-flare"]
+        for option in options:
+            self.assertEqual(option["canonical_family_id"], "series-image-gpt-image")
+        self.assertEqual(flare["display_label"]["zh"], "2.5 · 文生图 / 图生图 · Flare")
+        self.assertEqual(flare["display_label"]["en"], "2.5 · Text or Image to Image · Flare")
+        self.assertEqual(
+            by_id["laohu-image-g-v2.5-sunburst"]["display_label"]["zh"],
+            "2.5 · 文生图 / 图生图 · Sunburst",
+        )
+        self.assertEqual(
+            by_id["laohu-image-g-v2.5-lowprice"]["display_label"]["zh"],
+            "2.5 · 文生图 / 图生图 · 低价渠道版",
+        )
+        self.assertEqual(
+            by_id["laohu-image-g-v2-lowprice"]["display_label"]["zh"],
+            "2 · 文生图 · 低价渠道版",
+        )
+        self.assertEqual(flare["variant_name"], flare["display_label"]["zh"])
+        self.assertEqual(flare["variant_name_en"], flare["display_label"]["en"])
+        self.assertNotEqual(flare["display_label"]["zh"], flare["catalog_model_id"])
+        # 显示层从 ID 补足版本，不改身份档案中的 machine field。
+        self.assertEqual(flare["model_version"], "")
+        self.assertEqual(flare["catalog_model_id"], "laohu-image-g-v2.5-flare")
+        self.assertEqual(flare["operation"], "text_or_reference_to_image")
+        self.assertEqual(flare["option_id"], sms.compute_option_id(
+            connection_id="ai-money", region_id="", deployment_id="", node_type="image_generation",
+            catalog_model_id="laohu-image-g-v2.5-flare", endpoint_id="", operation="text_or_reference_to_image",
+        ))
+
+    def test_reviewed_image_edit_labels_replace_duplicate_input_wording(self):
+        options = self.project([
+            self.model("laohu-image-gk-v2-edit", "image_to_image", "2 · 图生图 · 图片输入"),
+            self.model("laohu-image-gk-v2-region-edit", "image_to_image", "2 · 图生图 · 图片输入"),
+        ])
+        by_id = {item["catalog_model_id"]: item for item in options}
+
+        self.assertEqual(by_id["laohu-image-gk-v2-edit"]["display_label"], {
+            "zh": "V2 · 图像编辑", "en": "V2 · Image Editing",
+        })
+        self.assertEqual(by_id["laohu-image-gk-v2-region-edit"]["display_label"], {
+            "zh": "V2 · 局部编辑", "en": "V2 · Regional Editing",
+        })
+        self.assertNotIn("图片输入", by_id["laohu-image-gk-v2-edit"]["display_label"]["zh"])
+        self.assertNotEqual(
+            by_id["laohu-image-gk-v2-edit"]["option_id"],
+            by_id["laohu-image-gk-v2-region-edit"]["option_id"],
+        )
+        self.assertEqual(by_id["laohu-image-gk-v2-edit"]["canonical_family_id"], "series-image-grok-image")
+
+    def test_confirmed_laohu_image_g_ids_map_to_gpt_without_reclassifying_gk(self):
+        model_ids = [
+            "laohu-image-g-v2-lowprice",
+            "laohu-image-g-v2.5-flare",
+            "laohu-image-g-v2.5-lowprice",
+            "laohu-image-g-v2.5-sunburst",
+            "laohu-image-g2-i2i",
+            "laohu-image-g2-t2i",
+            "laohu-image-gk-v2-edit",
+        ]
+        options = self.project([
+            self.model(model_id, "image_to_image" if model_id.endswith("i2i") else "text_to_image_or_image_to_image")
+            for model_id in model_ids
+        ])
+        by_id = {item["catalog_model_id"]: item for item in options}
+
+        for model_id in model_ids[:-1]:
+            self.assertEqual(by_id[model_id]["canonical_family_id"], "series-image-gpt-image")
+            self.assertEqual(by_id[model_id]["catalog_model_id"], model_id)
+        self.assertEqual(by_id[model_ids[-1]]["canonical_family_id"], "series-image-grok-image")
+
+    def test_unreviewed_duplicate_modes_use_exact_model_id_as_secondary_label(self):
+        options = self.project([
+            self.model("laohu-image-g-v9-alpha", "text_or_reference_to_image", family_id="unreviewed-image-family"),
+            self.model("laohu-image-g-v9-beta", "text_or_reference_to_image", family_id="unreviewed-image-family"),
+        ])
+
+        self.assertEqual(len({item["display_label"]["zh"] for item in options}), 2)
+        for option in options:
+            self.assertTrue(option["canonical_family_id"].startswith("provider-local:"))
+            self.assertTrue(option["display_label"]["zh"].startswith("9 · 文生图 / 图生图 · "))
+            self.assertTrue(option["display_label"]["zh"].endswith(option["catalog_model_id"]))
+            self.assertTrue(option["display_label"]["en"].endswith(option["catalog_model_id"]))
+
+    def test_unmapped_quality_label_is_preserved_in_both_languages(self):
+        option = self.project([
+            self.model("laohu-image-g-v9-ultra", "text_or_reference_to_image", "Ultra · Premium Quality", family_id="unreviewed-image-family"),
+        ])[0]
+
+        self.assertIn("Ultra", option["display_label"]["zh"])
+        self.assertIn("Premium Quality", option["display_label"]["en"])
+
+    def test_seedream_duplicate_modes_use_reviewed_version_and_purpose(self):
+        options = self.project([
+            self.model("dola-seedream-5.0-pro-i2i", "image_to_image"),
+            self.model("seedream-v5-pro-i2i", "image_to_image"),
+        ])
+        by_id = {item["catalog_model_id"]: item for item in options}
+
+        dola = by_id["dola-seedream-5.0-pro-i2i"]
+        seedream = by_id["seedream-v5-pro-i2i"]
+        self.assertIn("5.0", dola["display_label"]["zh"])
+        self.assertIn("图生图", dola["display_label"]["zh"])
+        self.assertIn("5.0", seedream["display_label"]["zh"])
+        self.assertIn("图生图", seedream["display_label"]["zh"])
+        self.assertNotEqual(dola["display_label"]["zh"], seedream["display_label"]["zh"])
+        self.assertNotIn("dola-seedream-5.0-pro-i2i", dola["display_label"]["zh"])
+        self.assertEqual(dola["option_id"], sms.compute_option_id(
+            connection_id="ai-money", region_id="", deployment_id="", node_type="image_generation",
+            catalog_model_id="dola-seedream-5.0-pro-i2i", endpoint_id="", operation="image_to_image",
+        ))
+
+    def test_remaining_image_mode_collisions_get_real_id_fallback(self):
+        models = [
+            self.model("unknown-image-alpha", "text_to_image", "文生图"),
+            self.model("unknown-image-beta", "text_to_image", "文生图"),
+        ]
+        for model in models:
+            model["family_id"] = "provider-local-family"
+        options = self.project(models)
+
+        self.assertEqual(len({item["display_label"]["zh"] for item in options}), 2)
+        for option in options:
+            self.assertTrue(option["display_label"]["zh"].endswith(option["catalog_model_id"]))
+
+    def test_non_grok_image_and_video_labels_keep_existing_projection(self):
+        options = sms.compile_catalog_options({
+            "providers": [{
+                "id": "fixture-provider",
+                "capability_provider_id": "fixture-provider",
+                "models": [{
+                    "model_id": "seedance2.5-fast",
+                    "family_id": "seedance",
+                    "family_name": "Seedance",
+                    "variant_name": "2.5 · 快速版 · 多模态视频",
+                    "variant_name_en": "2.5 · Fast · Multimodal Video",
+                    "node_type": "video_generation",
+                    "operation": "text_to_video",
+                    "runnable": True,
+                    "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1}},
+                    "output": {"media_type": "video", "min": 1, "max": 1},
+                }],
+            }]
+        })
+
+        self.assertEqual(options[0]["display_label"], {
+            "zh": "2.5 · 快速版 · 多模态视频",
+            "en": "2.5 · Fast · Multimodal Video",
+        })
+        self.assertEqual(options[0]["model_version"], "2.5")
+
+
 class SameIdIsNotMergedTests(unittest.TestCase):
     """E01 / §8.3.1：同 ID 跨站、同 ID 跨操作都不能被合并丢失。"""
 

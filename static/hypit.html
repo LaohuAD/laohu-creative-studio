@@ -3,6 +3,31 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Hypit | 老胡画梦枋</title>
+  <script>
+        (function(){
+            try {
+                var preferenceKey='studio_theme_preference_v1';
+                var knownThemeIds=['studio-violet','sunlit','vermilion','forest','classic'];
+                var saved=localStorage.getItem(preferenceKey), preference=null;
+                try { preference=saved?JSON.parse(saved):null; } catch(e) {}
+                var valid=preference && preference.version===1 && ['light','dark','system'].includes(preference.appearance);
+                if(!valid) {
+                    var old=localStorage.getItem('studio_theme'), legacy=localStorage.getItem('canvas_theme');
+                    var appearance=old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light';
+                    preference={version:1,themeId:'studio-violet',appearance:appearance};
+                    if(saved===null) { try { localStorage.setItem(preferenceKey,JSON.stringify(preference)); } catch(e) {} }
+                }
+                var themeId=knownThemeIds.includes(preference.themeId)?preference.themeId:'studio-violet';
+                var mode=['light','dark','system'].includes(preference.appearance)?preference.appearance:'light';
+                var theme=mode==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):mode;
+                var root=document.documentElement;
+                root.dataset.studioTheme=themeId; root.dataset.studioAppearance=theme; root.dataset.studioAppearanceMode=mode;
+                root.style.colorScheme=theme;
+                root.classList.toggle('studio-theme-dark',theme==='dark'); root.classList.toggle('theme-dark',theme==='dark');
+
+            } catch(e) {}
+        })();
+    </script>
   <script src="/static/js/theme.js"></script><script src="/static/js/i18n.js"></script>
   <link rel="stylesheet" href="/static/css/theme.css"><link rel="stylesheet" href="/static/css/studio-projects.css">
   <style>
@@ -16,6 +41,7 @@
     #empty h1{font-size:24px;margin:0}#empty p{max-width:560px;color:var(--sp-muted);line-height:1.8;margin:0}#status{font-size:13px;color:var(--sp-muted)}
     @media(max-width:650px){.hypit-header{gap:8px;padding:12px}.hypit-heading{width:100%}.hypit-header select{max-width:150px}}
   </style>
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css?v=2026.10.04.theme-1">
 </head>
 <body>
   <header class="hypit-header">
