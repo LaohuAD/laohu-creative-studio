@@ -200,8 +200,9 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
 
         browser.evaluate("""(() => {
           localStorage.setItem('studio_theme_preference_v1', JSON.stringify({version:1,themeId:'forest',appearance:'system'}));
-          location.reload();
+          return true;
         })()""")
+        browser.cdp("Page.reload", {"ignoreCache": True})
         self.assertTrue(browser.evaluate("(async()=>{for(let i=0;i<120;i++){if(document.readyState==='complete'&&document.querySelectorAll('.side-pill').length>=4&&StudioTheme?.getPreference?.().appearance==='system')return true;await new Promise(r=>setTimeout(r,25));}return false;})()"), "重载后没有保留 system 旧偏好")
         browser.evaluate("document.getElementById('theme-toggle-btn').click()")
         state = browser.evaluate("""(() => {

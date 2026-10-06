@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -36,6 +37,11 @@ NODE = shutil.which("node")
 class CanvasSettingsManagementBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        contract_source = (ROOT / "static" / "js" / "smart-node-contract.js").read_text(encoding="utf-8")
+        schema_match = re.search(r"\bconst\s+SCHEMA_VERSION\s*=\s*(\d+)\s*;", contract_source)
+        if not schema_match:
+            raise AssertionError("无法从 SmartNodeContract 读取当前画布 schema 版本")
+        cls.canvas_schema_version = int(schema_match.group(1))
         cls.reset_state()
 
         class Handler(SimpleHTTPRequestHandler):
@@ -251,7 +257,7 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
         cls.state = {
             "canvas": {
                 "id": "canvas-settings", "title": "画布模型设置", "project": "__canvas_settings__",
-                "revision": 1, "updated_at": 1791158400000, "node_schema_version": 6,
+                "revision": 1, "updated_at": 1791158400000, "node_schema_version": cls.canvas_schema_version,
                 "nodes": [], "connections": [],
                 "viewport": {"x": 0, "y": 0, "scale": 1}, "logs": [], "settings": {},
             },
@@ -601,17 +607,61 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                       "普通画布页没有加载")
         self.wait_for("document.documentElement.dataset.canvasSettings!=='true'",
                       "正式画布不能进入设置管理模式")
+        self.wait_for("canvas?.id==='canvas-settings'&&Number(canvas.node_schema_version)===SmartNodeContract.SCHEMA_VERSION&&"
+                      "!smartNodeMigrationPending&&!canvasSyncInFlight&&!canvasSyncSaveQueued",
+                      "正式画布测试夹具未按当前 schema 完成加载")
         self.evaluate("document.getElementById('shell').dispatchEvent(new MouseEvent('dblclick',{bubbles:true,clientX:760,clientY:320}));true")
         self.wait_for("!!document.querySelector('.create-menu.open')", "空白画布双击没有打开添加菜单")
         self.evaluate("document.querySelector('[data-create-type=\\\"image-generator\\\"]').click();true")
         self.wait_for("!!document.querySelector('.image-node')", "添加菜单没有创建图片节点")
         self.wait_for("!!document.querySelector('[data-capability-model-picker] .capability-model-picker-pill')",
                       lambda: "正式图片节点选择器未挂载：" + str(self.evaluate("JSON.stringify({node:document.querySelector('.image-node')?.outerHTML?.slice(0,1200),body:document.body.innerText.slice(0,300)})")))
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            page_state = json.loads(self.evaluate(
+                "JSON.stringify({revision:canvas?.revision,nodes:canvas?.nodes?.length,inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued,blocked:canvasSyncSaveBlocked})"
+            ))
+            if type(self).state["canvas"]["nodes"] and not page_state["inFlight"] and not page_state["queued"]:
+                break
+            time.sleep(0.03)
+        self.assertTrue(type(self).state["canvas"]["nodes"], "新增节点应先按正常画布链路持久化")
+        self.assertFalse(page_state["inFlight"] or page_state["queued"],
+                         f"新增节点请求尚未完成：页面={page_state}，服务端 revision={type(self).state['canvas']['revision']}")
+        quiet_since = time.time()
+        settle_deadline = quiet_since + 12
+        last_write_count = len(type(self).state["writes"])
+        while time.time() - quiet_since < 0.6 and time.time() < settle_deadline:
+            page_state = json.loads(self.evaluate(
+                "JSON.stringify({inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued})"
+            ))
+            if page_state["inFlight"] or page_state["queued"]:
+                quiet_since = time.time()
+            if len(type(self).state["writes"]) != last_write_count:
+                last_write_count = len(type(self).state["writes"])
+                quiet_since = time.time()
+            time.sleep(0.03)
+        self.assertGreaterEqual(time.time() - quiet_since, 0.6,
+                                f"新增节点保存未能稳定：页面={page_state}，服务端revision={type(self).state['canvas']['revision']}，writes={len(type(self).state['writes'])}")
+        self.assertFalse(page_state["inFlight"] or page_state["queued"],
+                         f"建立只读基线前仍有保存请求：{page_state}")
+        # 建立只读检查基线：schema 初始化和新增节点保存属于测试准备，不属于候选浏览。
+        type(self).state["writes"].clear()
         self.evaluate("document.querySelector('[data-capability-model-picker] .capability-model-picker-pill').click();true")
         self.wait_for("!!document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option]')",
                       "正式候选模式没有渲染")
         self.assertEqual(self.evaluate("JSON.stringify({canvasSettings:document.documentElement.dataset.canvasSettings||'',handles:document.querySelectorAll('[data-preference-sort-handle],[data-capability-option-sort-handle],[data-parameter-presentation-order-handle]').length,stages:[...new Set([...document.querySelectorAll('[data-capability-picker-stage]')].map(item=>item.dataset.capabilityPickerStage))]})"),
                          '{"canvasSettings":"","handles":0,"stages":["family","platform","variant"]}')
+        quiet_since = time.time()
+        last_write_count = 0
+        deadline = quiet_since + 2
+        while time.time() < deadline:
+            write_count = len(type(self).state["writes"])
+            if write_count != last_write_count:
+                last_write_count = write_count
+                quiet_since = time.time()
+            elif time.time() - quiet_since >= 0.6:
+                break
+            time.sleep(0.03)
         self.assertFalse(type(self).state["writes"], "正式候选只读展示不应保存展示排序偏好")
 
     def test_display_order_and_parameter_presentation_do_not_toggle_global_enablement(self):

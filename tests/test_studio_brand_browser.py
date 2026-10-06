@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -44,6 +45,12 @@ THEME_IDENTITIES = ("studio-violet", "sunlit", "vermilion", "forest", "classic")
 class StudioBrandBrowserTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        contract_source = (ROOT / "static" / "js" / "smart-node-contract.js").read_text(encoding="utf-8")
+        schema_match = re.search(r"\bconst\s+SCHEMA_VERSION\s*=\s*(\d+)\s*;", contract_source)
+        if not schema_match:
+            raise AssertionError("无法从 SmartNodeContract 读取当前画布 schema 版本")
+        cls.canvas_schema_version = int(schema_match.group(1))
+
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -135,7 +142,7 @@ class StudioBrandBrowserTests(unittest.TestCase):
                 if path == "/api/canvases/brand-fixture":
                     self._json(200, {"canvas": {
                         "id": "brand-fixture", "title": "安全画布样例", "project": "safe-canvas",
-                        "node_schema_version": 9999, "nodes": [], "connections": [], "settings": {},
+                        "node_schema_version": cls.canvas_schema_version, "nodes": [], "connections": [], "settings": {},
                     }})
                     return
                 if path == "/api/canvas-runs":
@@ -336,10 +343,26 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
             "assets": "document.getElementById('assetStatus')?.textContent === '准备就绪' && !!document.querySelector('.asset-nav .nav-tree') && !!document.querySelector('[data-asset-card=\"safe-image\"]')",
             "hypit": "(() => { const frame = document.getElementById('nativeStudio'); const target = frame?.contentDocument; return frame?.hidden === false && target?.readyState === 'complete' && target.documentElement?.dataset?.fixtureReady === 'true' && frame.contentWindow?.location?.pathname === '/fixture/hypit-studio.html'; })()",
         }
-        self.assertEqual(self.evaluate(f"""(async()=>{{
+        canvas_ready = self.evaluate(f"""(async()=>{{
           for(let i=0;i<120;i++){{if({ready_checks[page]})return true;await new Promise(r=>setTimeout(r,50));}}
           return false;
-        }})()"""), True, f"{page} 页面未完成隔离真实数据路径的业务初始化")
+        }})()""")
+        if not canvas_ready:
+            diagnostics = self.evaluate("""(() => ({
+              url: location.href,
+              readyState: document.readyState,
+              title: document.title,
+              smartTitle: document.getElementById('smartTitle')?.textContent?.trim() || null,
+              canvasId: document.documentElement.dataset.canvasId || null,
+              canvasMode: document.documentElement.dataset.canvasMode || null,
+              canvasRoot: !!document.getElementById('world'),
+              nodeCount: document.querySelectorAll('.smart-node').length,
+              startupText: document.querySelector('.canvas-status,.canvas-empty-state,[role="alert"]')?.textContent?.trim() || null,
+              canvasRequest: performance.getEntriesByType('resource')
+                .filter(item => item.name.includes('/api/canvases/brand-fixture'))
+                .map(item => ({name:item.name,responseStatus:item.responseStatus,duration:Math.round(item.duration)}))
+            }))()""")
+            self.fail(f"{page} 页面未完成隔离真实数据路径的业务初始化：{diagnostics}")
         preference = json.dumps({"themeId": theme_id, "appearance": theme}, ensure_ascii=False)
         self.assertEqual(self.evaluate(f"""(() => {{
           if(typeof StudioTheme?.setPreference !== 'function') return false;

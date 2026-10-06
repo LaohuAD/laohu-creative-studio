@@ -67,12 +67,14 @@ class HypitApiState:
         self.condition = threading.Condition()
         self.reset()
 
-    def reset(self, *, hold_capabilities=False, hold_settings=False, fail_first_capabilities=False):
+    def reset(self, *, hold_capabilities=False, hold_settings=False, fail_first_capabilities=False,
+              hold_first_canvas_bootstrap=False):
         with getattr(self, "condition", threading.Condition()):
             self.capability_calls = 0
             self.settings_calls = 0
             self.settings_canvas_calls = 0
             self.canvas_get_calls = 0
+            self.canvas_get_responses = 0
             self.canvas_put_calls = 0
             self.canvas_reset_calls = 0
             self.provider_get_calls = 0
@@ -90,13 +92,17 @@ class HypitApiState:
             self.hold_settings = hold_settings
             self.fail_first_capabilities = fail_first_capabilities
             self.fail_next_canvas_bootstrap = 0
+            self.hold_first_canvas_bootstrap = hold_first_canvas_bootstrap
             self.fail_next_capabilities = 0
             self.capability_release = threading.Event()
             self.settings_release = threading.Event()
+            self.canvas_bootstrap_release = threading.Event()
             if not hold_capabilities:
                 self.capability_release.set()
             if not hold_settings:
                 self.settings_release.set()
+            if not hold_first_canvas_bootstrap:
+                self.canvas_bootstrap_release.set()
             self.condition.notify_all()
 
     def wait_for(self, name, target=1, timeout=5):
@@ -179,7 +185,11 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
                         fail = cls.state.fail_next_canvas_bootstrap > 0
                         if fail:
                             cls.state.fail_next_canvas_bootstrap -= 1
+                        held = cls.state.hold_first_canvas_bootstrap and call == 1
+                        release = cls.state.canvas_bootstrap_release
                         cls.state.condition.notify_all()
+                    if held:
+                        release.wait(10)
                     if fail:
                         self._json(503, {"detail": "isolated Hypit canvas bootstrap failure"})
                         return
@@ -198,6 +208,9 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
                         "nodes": [], "connections": [], "logs": [], "settings": {},
                         "viewport": {"x": 0, "y": 0, "scale": 1}, "test_statuses": {},
                     }})
+                    with cls.state.condition:
+                        cls.state.canvas_get_responses += 1
+                        cls.state.condition.notify_all()
                     return
                 if path == "/api/studio/hypit/models/capabilities":
                     with cls.state.condition:
@@ -376,11 +389,12 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
         return result.get("result", {}).get("value")
 
     def open_page(self, *, hold_capabilities=False, hold_settings=False, fail_first_capabilities=False,
-                  fail_first_canvas_bootstrap=False):
+                  fail_first_canvas_bootstrap=False, hold_first_canvas_bootstrap=False):
         self.state.reset(
             hold_capabilities=hold_capabilities,
             hold_settings=hold_settings,
             fail_first_capabilities=fail_first_capabilities,
+            hold_first_canvas_bootstrap=hold_first_canvas_bootstrap,
         )
         if fail_first_canvas_bootstrap:
             with self.state.condition:
@@ -441,17 +455,25 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
         self.assertEqual(self.state.settings_put_calls, 0, "预取和进入都不能 PUT 旧 defaults")
 
     def test_failed_canvas_bootstrap_can_retry_without_legacy_defaults(self):
-        self.open_page(fail_first_canvas_bootstrap=True)
+        self.open_page(fail_first_canvas_bootstrap=True, hold_first_canvas_bootstrap=True)
         self.assertTrue(self.state.wait_for("settings_canvas_calls", timeout=3), "API 启动应尝试读取专用画布 bootstrap")
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            status = self.evaluate("document.getElementById('hypitSettingsStatus')?.textContent || ''")
-            if "isolated Hypit canvas bootstrap failure" in status:
-                break
-            time.sleep(0.05)
+        # 等待网络响应前先挂接同一预取 Promise，避免测试因启动快慢而
+        # 把显式预取误当成新的第二次请求。
+        self.assertTrue(self.evaluate("window.__hypitPrefetchForTest = window.prefetchHypitSettings(); true"))
+        with self.state.condition:
+            self.state.canvas_bootstrap_release.set()
+            self.state.condition.notify_all()
+        prefetch_result = self.evaluate("window.__hypitPrefetchForTest")
+        self.assertFalse(prefetch_result, "首次后台预取失败应返回 false，不写入旧 defaults")
+        self.assertEqual(self.state.settings_canvas_calls, 1, "显式等待应复用启动中的预取请求")
+        self.assertEqual(self.state.canvas_get_calls, 0, "失败的后台预取不应挂载标准画布")
         self.evaluate("window.openHypitSettings(); true")
         self.assertTrue(self.wait_for_canvas(), "bootstrap 失败后点击 Hypit 应重试并打开共享画布")
         self.assertTrue(self.state.wait_for("settings_canvas_calls", target=2, timeout=3), "失败 bootstrap 必须允许新请求重试")
+        self.assertTrue(self.state.wait_for("canvas_get_responses", target=1, timeout=3),
+                        "重试后的共享画布 GET 必须完整返回后再检查读取次数")
+        self.assertTrue(self.evaluate("!document.getElementById('hypitSettingsCanvasFrame')?.hidden"),
+                        "成功重试后应显示共享画布")
         self.assertEqual(self.state.canvas_get_calls, 1)
         self.assertEqual(self.state.capability_calls, 0)
         self.assertEqual(self.state.settings_calls, 0)

@@ -812,8 +812,16 @@ class HypitDynamicInputChainTests(unittest.IsolatedAsyncioTestCase):
             )
             fake_service = mock.Mock()
             fake_service.ensure_canvas.return_value = copy.deepcopy(canvas)
+            # 预检经由 get_api_provider() 读取 API 设置。用明确启用的
+            # 内存平台隔离它，避免 CI 回退到默认 RunningHub 站点状态。
+            fixture_provider = {
+                "id": "fixture-provider", "name": "隔离测试平台", "protocol": "openai",
+                "enabled": True, "base_url": "https://fixture.invalid/v1",
+                "image_models": ["image-model"], "chat_models": ["text-model"],
+                "video_models": [], "audio_models": [], "disabled_model_options": [],
+            }
             profile = {
-                "model_id": "image-model", "operation": "text_to_image", "runnable": True,
+                "provider_id": "fixture-provider", "model_id": "image-model", "operation": "text_to_image", "runnable": True,
                 "readiness": "ready", "selectable": True, "validation_mode": "strict",
                 "parameters": {},
                 "inputs": {"prompt": {"media_type": "text", "role": "prompt", "min": 1}},
@@ -823,7 +831,8 @@ class HypitDynamicInputChainTests(unittest.IsolatedAsyncioTestCase):
                  mock.patch.object(main, "HYPIT_SETTINGS_CANVAS_SERVICE", fake_service), \
                  mock.patch.object(main, "HYPIT_FLOW_RUNNER", runner), \
                  mock.patch.object(main, "_canvas_preflight_impl", side_effect=observe_canvas_preflight_impl), \
-                 mock.patch.object(main, "canvas_api_providers", return_value=[]), \
+                 mock.patch.object(main, "load_api_providers", return_value=[fixture_provider]), \
+                 mock.patch.object(main, "canvas_api_providers", return_value=[fixture_provider]), \
                  mock.patch.object(main.MODEL_CAPABILITY_REGISTRY, "find_model", return_value=profile), \
                  mock.patch.object(main.studio_module_models, "hypit_profile_reasons", return_value=[]), \
                  mock.patch.object(main, "studio_generate", side_effect=fake_generate):
@@ -844,6 +853,8 @@ class HypitDynamicInputChainTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([call.node_type for call in preflight_calls], [
                 "text_generation", "image_generation", "text_generation", "image_generation",
             ])
+            self.assertTrue(all(call.provider_id == "fixture-provider" for call in preflight_calls),
+                            [call.provider_id for call in preflight_calls])
             self.assertTrue(all(not call.canvas_id and not call.node_id and not call.client_operation_id
                                 for call in preflight_calls))
             self.assertEqual(len(storage.list_runs(canvas_id="hypit-settings")), 1)

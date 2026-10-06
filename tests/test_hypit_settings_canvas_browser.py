@@ -1145,8 +1145,17 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.frame_evaluate("document.querySelector('.image-node[data-id=image-run]').click(); true")
         self.wait_for(lambda: ("hypit", "image") in self.model_option_requests,
                       "Hypit 图片模型选择没有向槽位契约读取过滤后的候选")
+        diagnostic_expression = """JSON.stringify({
+          text:document.getElementById('dynamicParams')?.innerText,
+          cache:[...hypitSlotModelOptions.entries()],
+          active:activeSettingsSubject()?.id,
+          context:hypitModelSlotContext(activeSettingsSubject()),
+          engine:settings.engine,
+          pendingNode:hypitModelOptionPendingNodeId,
+          pendingKey:hypitModelOptionPendingContextKey
+        })"""
         self.wait_for(lambda: self.frame_evaluate("!!document.querySelector('[data-capability-model-picker] [data-capability-picker-stage=family]')"),
-                      f"图片模型选择器未在契约候选返回后恢复：{self.frame_evaluate('JSON.stringify({text:document.getElementById(\"dynamicParams\")?.innerText,cache:[...hypitSlotModelOptions.entries()],active:activeSettingsSubject()?.id,context:hypitModelSlotContext(activeSettingsSubject()),engine:settings.engine,pendingNode:hypitModelOptionPendingNodeId,pendingKey:hypitModelOptionPendingContextKey})')}")
+                      lambda: "图片模型选择器未在契约候选返回后恢复：" + self.frame_evaluate(diagnostic_expression))
         state = json.loads(self.frame_evaluate("JSON.stringify({families:[...document.querySelectorAll('[data-capability-picker-stage=family] [data-capability-picker-option]')].map(el=>el.dataset.capabilityPickerFamily),model:settings.model,nodeModel:nodes.find(node=>node.id==='image-run')?.runSettings?.model})"))
         self.assertEqual(state["families"], ["series-image-allowed-family"], "Hypit 生成节点只能展示后端为当前用途放行的家族")
         self.assertEqual(state["model"], "fixture-image-excluded", "已保存但当前用途不允许的旧模型必须保留，不能偷偷替换")

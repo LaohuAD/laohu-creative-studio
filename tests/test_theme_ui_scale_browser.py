@@ -207,7 +207,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 
     def open_api_page(self, width, mode="auto"):
         self.set_viewport(width)
-        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}/"})
+        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}/static/index.html"})
         prepared = self.evaluate(f"""(async()=>{{
           for(let i=0;i<100;i++){{
             if(location.origin==='http://127.0.0.1:{self.http_port}'){{
@@ -258,20 +258,29 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
                 self.assertLessEqual(result["bodyScrollWidth"], expected_width + 1, result)
 
     def test_manual_scale_preference_and_canvas_viewport_coordinates_remain_independent(self):
-        self.open_api_page(1280)
+        self.set_viewport(1280)
+        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}/static/index.html"})
+        shell_ready = self.evaluate("(async()=>{for(let i=0;i<120;i++){if(document.querySelector('.app-shell .sidebar')&&window.StudioScale)return true;await new Promise(r=>setTimeout(r,25));}return false;})()")
+        if not shell_ready:
+            diagnostics = self.evaluate("JSON.stringify({url:location.href,title:document.title,readyState:document.readyState,body:document.body?.innerText?.slice(0,300),shell:!!document.querySelector('.app-shell'),sidebar:!!document.querySelector('.sidebar'),scale:typeof window.StudioScale})")
+            self.fail("主工作台缩放宿主未就绪：" + str(diagnostics))
         self.evaluate("window.StudioScale.set('75'); true")
         manual = self.evaluate("""(() => ({
           mode: window.StudioScale.getMode(),
           stored: localStorage.getItem('studio_ui_scale_mode'),
           scale: window.StudioScale.getScale(),
           scaledClass: document.documentElement.classList.contains('studio-ui-scaled'),
-          bodyTransform: getComputedStyle(document.body).transform
+          cssScale: getComputedStyle(document.documentElement).getPropertyValue('--studio-ui-scale').trim(),
+          sidebarZoom: getComputedStyle(document.querySelector('.app-shell .sidebar')).zoom,
+          sidebarRect: document.querySelector('.app-shell .sidebar').getBoundingClientRect().width
         }))()""")
         self.assertEqual(manual["mode"], "75", manual)
         self.assertEqual(manual["stored"], "75", manual)
         self.assertAlmostEqual(manual["scale"], 0.75, places=3, msg=str(manual))
         self.assertTrue(manual["scaledClass"], manual)
-        self.assertIn("matrix(0.75", manual["bodyTransform"], manual)
+        self.assertAlmostEqual(float(manual["cssScale"]), 0.75, places=3, msg=str(manual))
+        self.assertAlmostEqual(float(manual["sidebarZoom"]), 0.75, places=3, msg=str(manual))
+        self.assertAlmostEqual(manual["sidebarRect"], 60, delta=1, msg=str(manual))
 
         self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}/static/smart-canvas.html?scale-test=1"})
         canvas = self.evaluate("""(async()=>{
@@ -288,6 +297,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
             mode: window.StudioScale.getMode(),
             stored: localStorage.getItem('studio_ui_scale_mode'),
             scale: window.StudioScale.getScale(),
+            cssScale: getComputedStyle(document.documentElement).getPropertyValue('--studio-ui-scale').trim(),
             coordinate,
             canvasScaleOptOut: document.documentElement.dataset.studioScale==='off',
             scaledClass: document.documentElement.classList.contains('studio-ui-scaled')
@@ -296,6 +306,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         self.assertEqual(canvas["mode"], "75", canvas)
         self.assertEqual(canvas["stored"], "75", canvas)
         self.assertAlmostEqual(canvas["scale"], 0.75, places=3, msg=str(canvas))
+        self.assertAlmostEqual(float(canvas["cssScale"]), 0.75, places=3, msg=str(canvas))
         self.assertTrue(canvas["canvasScaleOptOut"], canvas)
         self.assertFalse(canvas["scaledClass"], canvas)
         self.assertAlmostEqual(canvas["coordinate"]["x"], 100, places=3, msg=str(canvas))
