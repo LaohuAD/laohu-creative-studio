@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-studio-scale="off">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="/static/images/logo.png" type="image/png">
+    <title>文章</title>
+    <script>
+        (function(){try{
+            var key='studio_theme_preference_v1', ids=['studio-violet','sunlit','vermilion','forest','classic'];
+            var raw=localStorage.getItem(key), pref=null; try{pref=raw?JSON.parse(raw):null;}catch(e){}
+            if(!pref||pref.version!==1||!['light','dark','system'].includes(pref.appearance)){
+                var old=localStorage.getItem('studio_theme'), legacy=localStorage.getItem('canvas_theme');
+                pref={version:1,themeId:'studio-violet',appearance:old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light'};
+                if(raw===null)localStorage.setItem(key,JSON.stringify(pref));
+            }
+            var theme=ids.includes(pref.themeId)?pref.themeId:'studio-violet';
+            var mode=['light','dark','system'].includes(pref.appearance)?pref.appearance:'light';
+            var appearance=mode==='system'&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':mode==='system'?'light':mode;
+            document.documentElement.dataset.studioTheme=theme;document.documentElement.dataset.studioAppearance=appearance;document.documentElement.dataset.studioAppearanceMode=mode;
+            document.documentElement.style.colorScheme=appearance;document.documentElement.classList.toggle('studio-theme-dark',appearance==='dark');document.documentElement.classList.toggle('theme-dark',appearance==='dark');
+        }catch(e){}})();
+    </script>
+    <script src="/static/vendor/js/lucide.js"></script>
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/i18n.js"></script>
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css">
+    <link rel="stylesheet" href="/static/css/studio-article.css">
+</head>
+<body>
+    <div class="article-app">
+        <header class="article-toolbar">
+            <a class="article-back" href="/static/article-list.html" id="articleBackLink"><i data-lucide="arrow-left" aria-hidden="true"></i><span>文章项目</span></a>
+            <div class="article-title-block"><span class="article-kicker">公众号文章</span><h1 id="articleTitle">正在读取文章…</h1></div>
+            <div class="article-toolbar-actions">
+                <button id="articleRefreshButton" class="article-icon-button" type="button" title="重新读取文章" aria-label="重新读取文章"><i data-lucide="refresh-cw" aria-hidden="true"></i></button>
+                <button id="articleLanguageButton" class="article-icon-button" type="button" title="切换语言" aria-label="切换语言">中</button>
+                <button id="articleThemeButton" class="article-icon-button" type="button" title="切换主题" aria-label="切换主题"><i data-lucide="sun-moon" aria-hidden="true"></i></button>
+            </div>
+        </header>
+
+        <main class="article-main">
+            <section class="article-status" data-article-status role="status" aria-live="polite">正在读取文章…</section>
+            <section class="article-content-block article-title-section" aria-labelledby="articleTitleSectionHeading">
+                <div class="article-block-heading"><div><span>01 · TITLE</span><h2 id="articleTitleSectionHeading">标题</h2></div><div class="article-title-actions"><button id="articleCopyTitleButton" class="article-secondary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制标题</span></button><span id="articleTitleFeedback" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span></div></div>
+                <h3 id="articleSelectedTitle" class="article-selected-title">—</h3>
+                <div id="articleTitleChoices" class="article-title-choices" aria-label="标题版本"></div>
+            </section>
+
+            <section class="article-content-block article-cover-section" aria-labelledby="articleCoverSectionHeading">
+                <div class="article-block-heading"><div><span>02 · COVER</span><h2 id="articleCoverSectionHeading">封面</h2></div><div class="article-cover-actions"><button id="articleCopyCoverButton" class="article-secondary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制图片</span></button><button id="articleDownloadCoverButton" class="article-secondary-button" type="button" disabled><i data-lucide="download" aria-hidden="true"></i><span>下载图片</span></button><span id="articleCoverStatus" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span></div></div>
+                <p id="articleCoverHint" class="article-block-hint">选择本次要采用的封面，可复制或下载原图。</p>
+                <div id="articleCoverHistory" class="article-cover-history"></div>
+            </section>
+
+            <section class="article-content-block article-body-section" aria-labelledby="articleBodySectionHeading">
+                <div class="article-block-heading"><div><span>03 · BODY</span><h2 id="articleBodySectionHeading">正文</h2></div><div class="article-body-actions"><button id="articleCopyButton" class="article-primary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制正文</span></button><button id="articleFullPreviewButton" class="article-secondary-button" type="button" aria-pressed="false"><i data-lucide="maximize-2" aria-hidden="true"></i><span>完整预览</span></button><button id="articleExportButton" class="article-secondary-button" type="button" disabled><i data-lucide="download" aria-hidden="true"></i><span>导出 HTML</span></button><span id="articleCopyFeedback" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span></div></div>
+                <div class="article-workspace">
+                <aside class="article-layout-rail" aria-labelledby="articleLayoutsTitle">
+                    <div class="article-section-heading"><span>LAYOUTS</span><h2 id="articleLayoutsTitle">已有排版</h2></div>
+                    <p id="articleLayoutHint" class="article-layout-hint">选择已保存的排版。历史版本可预览；只有与当前原文匹配的排版可以复制或导出。</p>
+                    <div id="articleThemeChoices" class="article-theme-choices"></div>
+                </aside>
+
+                <section class="article-preview-region" aria-label="文章预览">
+                    <div class="article-preview-toolbar"><div><span id="articlePreviewThemeName">—</span><small id="articlePreviewMeta"></small></div><span id="articlePreviewBadge" class="article-preview-badge">正在读取</span><button id="articleFullPreviewClose" class="article-icon-button" type="button" hidden aria-label="关闭完整预览"><i data-lucide="x" aria-hidden="true"></i></button></div>
+                    <p id="articlePreviewHistoryNote" class="article-preview-history-note" hidden>当前显示的是基于旧原文保存的历史排版；可查看，但不能复制或导出为当前版本。</p>
+                    <div id="articlePreviewEmpty" class="article-preview-empty" hidden></div>
+                    <iframe id="articlePreviewFrame" title="文章正文预览" sandbox="allow-same-origin" hidden></iframe>
+                    <details class="article-source-details" id="articleSourceDetails"><summary>查看 Agent 提供的 Markdown 原文</summary><pre id="articleSourceMarkdown"></pre></details>
+                    <div class="article-image-note" id="articleImageNote">复制后请在公众号编辑器中检查图片显示与样式。</div>
+                </section>
+                </div>
+            </section>
+        </main>
+    </div>
+    <dialog id="articleCoverLightbox" class="article-cover-lightbox" aria-labelledby="articleCoverLightboxTitle">
+        <div class="article-cover-lightbox-toolbar"><div><h2 id="articleCoverLightboxTitle">封面预览</h2><p id="articleCoverLightboxCaption"></p></div><button id="articleCoverLightboxClose" class="article-icon-button" type="button" aria-label="关闭图片预览"><i data-lucide="x" aria-hidden="true"></i></button></div>
+        <img id="articleCoverLightboxImage" alt="封面预览">
+        <p id="articleCoverLightboxHint" class="article-cover-lightbox-hint">点击空白处或按 Esc 关闭。</p>
+    </dialog>
+    <script src="/static/js/studio-article.js"></script>
+</body>
+</html>

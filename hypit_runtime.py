@@ -242,12 +242,13 @@ class HypitRuntime:
     def _ensure_native_theme(self):
         """把工作台主题以可重复的受管补丁注入原生 Studio，不改制作流程。"""
         theme_path = self.root / 'static' / 'css' / 'hypit-native-theme.css'
+        palette_path = self.root / 'static' / 'css' / 'studio-theme-palettes.css'
         distribution = self.distribution
         style_path = distribution / 'packages' / 'studio' / 'src' / 'style.css'
         index_path = distribution / 'packages' / 'studio' / 'index.html'
-        if not theme_path.is_file() or not style_path.is_file() or not index_path.is_file():
+        if not theme_path.is_file() or not palette_path.is_file() or not style_path.is_file() or not index_path.is_file():
             raise RuntimeError('Hypit 原生 Studio 主题资源不完整，未启动 Studio')
-        if any(path.is_symlink() for path in (theme_path, style_path, index_path)):
+        if any(path.is_symlink() for path in (theme_path, palette_path, style_path, index_path)):
             raise RuntimeError('Hypit 原生 Studio 主题资源不允许使用符号链接')
 
         backup_dir = self.root / 'backups' / 'hypit' / 'native-studio' / HYPIT_VERSION
@@ -259,7 +260,7 @@ class HypitRuntime:
         if not backup_index.exists():
             shutil.copyfile(index_path, backup_index)
 
-        theme = theme_path.read_text(encoding='utf-8').strip()
+        theme = '\n\n'.join(path.read_text(encoding='utf-8').strip() for path in (palette_path, theme_path))
         original_style = style_path.read_text(encoding='utf-8')
         base_style = self._without_native_theme(original_style, NATIVE_THEME_START, NATIVE_THEME_END).rstrip()
         patched_style = f'{base_style}\n\n{NATIVE_THEME_START}\n{theme}\n{NATIVE_THEME_END}\n'
@@ -268,19 +269,47 @@ class HypitRuntime:
 
         theme_script = '''<script>
 (() => {
-  const validTheme = value => value === 'dark' || value === 'light' ? value : '';
-  const setTheme = value => {
-    const theme = validTheme(value);
-    if (!theme) return;
-    document.documentElement.dataset.laohuTheme = theme;
-    document.documentElement.style.colorScheme = theme;
+  const ids = new Set(['studio-violet', 'sunlit', 'vermilion', 'forest', 'classic']);
+  const appearances = new Set(['light', 'dark', 'system']);
+  const isResolved = value => value === 'dark' || value === 'light' ? value : '';
+  const params = new URLSearchParams(location.search);
+  const root = document.documentElement;
+  const systemScheme = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  let parentOrigin = '';
+  try {
+    const origin = new URL(params.get('laohu_parent_origin') || '').origin;
+    if (origin !== 'null') parentOrigin = origin;
+  } catch(e) {}
+  let preference = {
+    themeId: ids.has(params.get('laohu_theme_id')) ? params.get('laohu_theme_id') : 'studio-violet',
+    appearance: appearances.has(params.get('laohu_appearance')) ? params.get('laohu_appearance') : (isResolved(params.get('laohu_theme')) || 'system')
   };
-  const queryTheme = validTheme(new URLSearchParams(window.location.search).get('laohu_theme'));
-  const systemTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  setTheme(queryTheme || systemTheme);
+  const resolve = mode => mode === 'system' ? (systemScheme && systemScheme.matches ? 'dark' : 'light') : mode;
+  const apply = value => {
+    const themeId = ids.has(value && value.themeId) ? value.themeId : preference.themeId;
+    const appearance = appearances.has(value && value.appearance) ? value.appearance : preference.appearance;
+    const theme = isResolved(value && value.resolvedAppearance) || isResolved(value && value.theme) || resolve(appearance);
+    preference = {themeId, appearance};
+    root.dataset.laohuTheme = theme;
+    root.dataset.laohuThemeId = themeId;
+    root.dataset.laohuAppearanceMode = appearance;
+    root.style.colorScheme = theme;
+  };
+  const queryResolved = isResolved(params.get('laohu_resolved_appearance')) || isResolved(params.get('laohu_theme'));
+  apply({...preference, resolvedAppearance:queryResolved});
+  if (systemScheme && systemScheme.addEventListener) systemScheme.addEventListener('change', () => {
+    if (preference.appearance === 'system') apply(preference);
+  });
   window.addEventListener('message', event => {
     if (event.source !== window.parent || !event.data || event.data.type !== 'laohu-theme') return;
-    setTheme(event.data.theme);
+    if (parentOrigin && event.origin !== parentOrigin) return;
+    const incoming = event.data;
+    const saved = incoming.preference && typeof incoming.preference === 'object' ? incoming.preference : {};
+    apply({
+      themeId: incoming.themeId || saved.themeId,
+      appearance: incoming.appearance || saved.appearance,
+      resolvedAppearance: incoming.resolvedAppearance || incoming.theme || saved.resolvedAppearance
+    });
   });
 })();
 </script>'''

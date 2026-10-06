@@ -26,7 +26,8 @@ from canvas_agent import is_local_client
 from canvas_core.json_store import DataFileError, read_json, write_json
 
 
-PROJECT_MODULES = frozenset({"canvas", "hypit"})
+PROJECT_MODULES = frozenset({"canvas", "hypit", "article"})
+RESERVED_SETTINGS_CANVAS_IDS = frozenset({"hypit-settings", "article-settings", "canvas-settings"})
 PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 PROJECT_RECORD_VERSION = 1
 MAX_PROJECT_NAME_LENGTH = 120
@@ -91,7 +92,7 @@ def _clean_module(value: Any, *, allow_none: bool = False) -> Optional[str]:
         return None
     module = str(value or "").strip().lower()
     if module not in PROJECT_MODULES:
-        raise StudioProjectError("项目模块必须是 canvas 或 hypit")
+        raise StudioProjectError("项目模块必须是 canvas、hypit 或 article")
     return module
 
 
@@ -219,11 +220,17 @@ class StudioProjectStore:
         if isinstance(result, (str, bytes, Mapping)):
             raise StudioProjectStoreError("canvas_adapter.list 返回格式不正确")
         try:
-            return list(result)
+            return [
+                item for item in result
+                if _clean_project_id(_value(_unwrap(item), "id", _value(_unwrap(item), "canvas_id", "")))
+                not in RESERVED_SETTINGS_CANVAS_IDS
+            ]
         except TypeError as exc:
             raise StudioProjectStoreError("canvas_adapter.list 返回格式不正确") from exc
 
     def _canvas_item(self, project_id: str) -> Any:
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            return None
         method = self._adapter_method("get")
         try:
             result = self._call(method, project_id)
@@ -259,7 +266,14 @@ class StudioProjectStore:
         project_id = _clean_project_id(project_id)
         return self.studio_dir / f"{project_id}.json"
 
+    def article_record_path(self, project_id: str) -> Path:
+        return self._hypit_record_path(project_id)
+
     def _read_hypit_record(self, project_id: str, *, missing_ok: bool = False) -> Optional[dict[str, Any]]:
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            if missing_ok:
+                return None
+            raise StudioProjectNotFound("该 ID 保留给模块设置画布")
         path = self._hypit_record_path(project_id)
         if not path.exists():
             if missing_ok:
@@ -286,6 +300,58 @@ class StudioProjectStore:
             raise DataFileError(f"项目记录 {path.name} 的修订号不合法，原文件已保留，请从备份恢复。")
         return raw
 
+    def _read_article_record(self, project_id: str, *, missing_ok: bool = False) -> Optional[dict[str, Any]]:
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            if missing_ok:
+                return None
+            raise StudioProjectNotFound("该 ID 保留给模块设置画布")
+        path = self._hypit_record_path(project_id)
+        if not path.exists():
+            if missing_ok:
+                return None
+            raise StudioProjectNotFound("文章项目不存在")
+        try:
+            raw = read_json(path)
+        except DataFileError:
+            raise
+        if not isinstance(raw, dict):
+            raise DataFileError(f"项目记录 {path.name} 格式损坏，原文件已保留，请从备份恢复。")
+        if raw.get("id") != project_id or raw.get("module") != "article":
+            raise DataFileError(f"项目记录 {path.name} 与文章模块或文件名不匹配，原文件已保留，请从备份恢复。")
+        version = raw.get("version", 1)
+        if not isinstance(version, int) or version > PROJECT_RECORD_VERSION:
+            raise DataFileError(f"项目记录 {path.name} 版本不受支持，原文件已保留，请从备份恢复。")
+        if not PROJECT_ID_PATTERN.fullmatch(str(raw.get("id") or "")):
+            raise DataFileError(f"项目记录 {path.name} 的 ID 不合法，原文件已保留，请从备份恢复。")
+        if not isinstance(raw.get("name"), str):
+            raise DataFileError(f"项目记录 {path.name} 的名称不合法，原文件已保留，请从备份恢复。")
+        revision = raw.get("revision", 1)
+        if not isinstance(revision, int) or revision < 1:
+            raise DataFileError(f"项目记录 {path.name} 的修订号不合法，原文件已保留，请从备份恢复。")
+        article = raw.get("article")
+        if not isinstance(article, dict):
+            raise DataFileError(f"文章记录 {path.name} 内容损坏，原文件已保留，请从备份恢复。")
+        return raw
+
+    def read_article_record(self, project_id: str) -> dict[str, Any]:
+        """在共享项目锁内读取文章主记录，损坏数据不会被空文章覆盖。"""
+        project_id = _clean_project_id(project_id)
+        with self.lock:
+            record = self._read_article_record(project_id)
+            assert record is not None
+            return record
+
+    def write_article_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """原子替换文章主记录；调用方须已持有本实例的共享项目锁。"""
+        project_id = _clean_project_id(record.get("id"))
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            raise StudioProjectStoreError("保留设置画布 ID 不能作为文章项目 ID")
+        value = dict(record)
+        if value.get("module") != "article":
+            raise StudioProjectStoreError("文章记录模块不匹配")
+        write_json(self._hypit_record_path(project_id), value)
+        return value
+
     @staticmethod
     def _hypit_public(record: Mapping[str, Any]) -> dict[str, Any]:
         project_id = _clean_project_id(record.get("id"))
@@ -295,6 +361,18 @@ class StudioProjectStore:
             name=record.get("name", "未命名项目"),
             updated_at=_timestamp(record),
             url=f"/static/hypit.html?id={quote(project_id, safe='')}",
+            revision=_revision(record),
+        )
+
+    @staticmethod
+    def _article_public(record: Mapping[str, Any]) -> dict[str, Any]:
+        project_id = _clean_project_id(record.get("id"))
+        return _public_project(
+            module="article",
+            project_id=project_id,
+            name=record.get("name", "未命名文章"),
+            updated_at=_timestamp(record),
+            url=f"/static/article.html?id={quote(project_id, safe='')}",
             revision=_revision(record),
         )
 
@@ -329,7 +407,7 @@ class StudioProjectStore:
         items = list(index.get("items") or [])
         items.append({
             "id": str(record.get("id")),
-            "module": "hypit",
+            "module": str(record.get("module") or "hypit"),
             "name": str(record.get("name") or "未命名项目"),
             "deleted_at": now_ms(),
             "backup_path": str(backup_path.relative_to(self.root)).replace(os.sep, "/"),
@@ -345,13 +423,24 @@ class StudioProjectStore:
             return normalized
         canvas_item = self._canvas_item(project_id)
         hypit_exists = self._hypit_record_path(project_id).exists()
-        if canvas_item is not None and hypit_exists:
-            raise StudioProjectConflict("项目 ID 在 canvas 和 hypit 中都存在，请附带 module 参数")
-        if canvas_item is not None:
-            return "canvas"
-        if hypit_exists:
-            return "hypit"
+        article_exists = hypit_exists and self._record_module(self._hypit_record_path(project_id)) == "article"
+        hypit_exists = hypit_exists and not article_exists
+        matches = [name for name, exists in (("canvas", canvas_item is not None), ("hypit", hypit_exists), ("article", article_exists)) if exists]
+        if len(matches) > 1:
+            raise StudioProjectConflict("项目 ID 在多个模块中都存在，请附带 module 参数")
+        if matches:
+            return matches[0]
         raise StudioProjectNotFound("项目不存在")
+
+    @staticmethod
+    def _record_module(path: Path) -> str:
+        try:
+            raw = read_json(path)
+        except DataFileError:
+            raise
+        if not isinstance(raw, dict):
+            raise DataFileError(f"项目记录 {path.name} 格式损坏，原文件已保留，请从备份恢复。")
+        return str(raw.get("module") or "")
 
     def list(self, module: Optional[str] = None) -> list[dict[str, Any]]:
         normalized = _clean_module(module, allow_none=True)
@@ -360,10 +449,16 @@ class StudioProjectStore:
             if normalized in (None, "canvas"):
                 for item in self._canvas_items():
                     output.append(self._canvas_public(item))
-            if normalized in (None, "hypit"):
+            if normalized in (None, "hypit", "article"):
                 if self.studio_dir.exists():
                     for path in sorted(self.studio_dir.glob("*.json")):
-                        output.append(self._hypit_public(self._read_hypit_record(path.stem) or {}))
+                        record = self._record_module(path)
+                        if record == "hypit" and normalized in (None, "hypit"):
+                            output.append(self._hypit_public(self._read_hypit_record(path.stem) or {}))
+                        elif record == "article" and normalized in (None, "article"):
+                            output.append(self._article_public(self._read_article_record(path.stem) or {}))
+                        elif record not in {"hypit", "article"}:
+                            raise DataFileError(f"项目记录 {path.name} 模块不受支持，原文件已保留。")
             return sorted(output, key=lambda item: (-int(item.get("updated_at") or 0), item["name"], item["id"]))
 
     def get(self, project_id: str, module: Optional[str] = None) -> dict[str, Any]:
@@ -375,8 +470,11 @@ class StudioProjectStore:
                 if item is None:
                     raise StudioProjectNotFound("项目不存在")
                 return self._canvas_public(item)
-            record = self._read_hypit_record(project_id)
-            return self._hypit_public(record or {})
+            if normalized == "hypit":
+                record = self._read_hypit_record(project_id)
+                return self._hypit_public(record or {})
+            article = self._read_article_record(project_id)
+            return self._article_public(article or {})
 
     def create(self, module: str, name: str) -> dict[str, Any]:
         normalized = _clean_module(module)
@@ -389,31 +487,49 @@ class StudioProjectStore:
                 return self._canvas_public(created)
 
             self.studio_dir.mkdir(parents=True, exist_ok=True)
-            self.hypit_dir.mkdir(parents=True, exist_ok=True)
             project_id = uuid.uuid4().hex
-            workflow_path = self.hypit_dir / project_id
             record_path = self._hypit_record_path(project_id)
             timestamp = now_ms()
+            if normalized == "hypit":
+                self.hypit_dir.mkdir(parents=True, exist_ok=True)
+                workflow_path = self.hypit_dir / project_id
+            else:
+                workflow_path = None
             record = {
                 "version": PROJECT_RECORD_VERSION,
                 "id": project_id,
-                "module": "hypit",
+                "module": normalized,
                 "name": clean_name,
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "revision": 1,
             }
-            workflow_path.mkdir(parents=True, exist_ok=False)
+            if normalized == "article":
+                record["article"] = {
+                    "title": "",
+                    "source_markdown": "",
+                    "source_sha256": "",
+                    "selected_theme_id": "moyu-green",
+                    "variants": {},
+                    "title_variants": {},
+                    "selected_title_variant_id": None,
+                    "cover_variants": [],
+                    "selected_cover_variant_id": None,
+                    "media_refs": [],
+                }
+            if workflow_path is not None:
+                workflow_path.mkdir(parents=True, exist_ok=False)
             try:
                 write_json(record_path, record)
             except Exception:
                 # 只清理本次刚创建的空工程目录，不触碰 assets 或既有工程。
-                try:
-                    workflow_path.rmdir()
-                except OSError:
-                    pass
+                if workflow_path is not None:
+                    try:
+                        workflow_path.rmdir()
+                    except OSError:
+                        pass
                 raise
-            return self._hypit_public(record)
+            return self._hypit_public(record) if normalized == "hypit" else self._article_public(record)
 
     def rename(
         self,
@@ -442,14 +558,14 @@ class StudioProjectStore:
                     raise StudioProjectStoreError("画布重命名后无法重新读取画布")
                 return self._canvas_public(updated)
 
-            record = self._read_hypit_record(project_id)
+            record = self._read_hypit_record(project_id) if normalized == "hypit" else self._read_article_record(project_id)
             self._check_revision(record or {}, expected_revision)
             assert record is not None
             record["name"] = clean_name
             record["updated_at"] = now_ms()
             record["revision"] = _revision(record) + 1
             write_json(self._hypit_record_path(project_id), record)
-            return self._hypit_public(record)
+            return self._hypit_public(record) if normalized == "hypit" else self._article_public(record)
 
     def delete(
         self,
@@ -472,21 +588,21 @@ class StudioProjectStore:
                 )
                 return self._canvas_public(current)
 
-            record = self._read_hypit_record(project_id)
+            record = self._read_hypit_record(project_id) if normalized == "hypit" else self._read_article_record(project_id)
             self._check_revision(record or {}, expected_revision)
             assert record is not None
             # 先读回收索引，索引损坏时在任何移动动作前拒绝操作。
             self._load_recycle_index()
             stamp = f"{now_ms()}-{uuid.uuid4().hex[:8]}"
-            archive = self.backup_dir / "hypit" / f"{project_id}-{stamp}"
+            archive = self.backup_dir / normalized / f"{project_id}-{stamp}"
             archive.mkdir(parents=True, exist_ok=False)
-            workflow_path = self.hypit_dir / project_id
-            if workflow_path.exists():
+            workflow_path = self.hypit_dir / project_id if normalized == "hypit" else None
+            if workflow_path is not None and workflow_path.exists():
                 shutil.move(str(workflow_path), str(archive / "workflow"))
             # 移动记录而非 unlink，方便从备份恢复，也避免删除用户资产。
             shutil.move(str(self._hypit_record_path(project_id)), str(archive / "project.json"))
             self._append_recycle_item(record, archive)
-            return self._hypit_public(record)
+            return self._hypit_public(record) if normalized == "hypit" else self._article_public(record)
 
 
 def _revision_from_request(
@@ -537,7 +653,12 @@ def _raise_store_error(exc: Exception) -> None:
     raise exc
 
 
-def create_studio_projects_router(root: str | os.PathLike[str], canvas_adapter: Any) -> APIRouter:
+def create_studio_projects_router(
+    root: str | os.PathLike[str],
+    canvas_adapter: Any,
+    *,
+    store: Optional[StudioProjectStore] = None,
+) -> APIRouter:
     """创建共用项目 API 路由。
 
     主控应在装配阶段传入画布适配器，例如把 ``list_canvases``、
@@ -545,7 +666,7 @@ def create_studio_projects_router(root: str | os.PathLike[str], canvas_adapter: 
     也不会创建或运行 Hypit 代码。
     """
 
-    store = StudioProjectStore(root, canvas_adapter)
+    store = store or StudioProjectStore(root, canvas_adapter)
     router = APIRouter(prefix="/api/studio", tags=["Studio Projects"])
 
     @router.get("/projects")
@@ -611,7 +732,7 @@ def create_studio_projects_router(root: str | os.PathLike[str], canvas_adapter: 
         try:
             expected = _revision_from_request(query_revision=revision, headers=request.headers if request else None)
             project = await run_in_threadpool(store.delete, project_id, module, expected)
-            return {"ok": True, "project": project, "recycled": project.get("module") == "hypit"}
+            return {"ok": True, "project": project, "recycled": project.get("module") in {"hypit", "article"}}
         except Exception as exc:
             _raise_store_error(exc)
 

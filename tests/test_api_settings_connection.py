@@ -927,7 +927,7 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
     def test_runninghub_uses_official_registry_and_region_catalog_urls(self):
         self.assertEqual(
             main.RUNNINGHUB_MODEL_REGISTRY_URL,
-            "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/developer-kit/model-registry.public.json",
+            "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json",
         )
         self.assertEqual(
             main.runninghub_public_catalog_url("cn"),
@@ -951,8 +951,15 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         llm_only = main.runninghub_official_registry_items({
             "data": [{"id": "gpt-test"}],
         })
+        source_list = main.runninghub_official_registry_items([{
+            "name_en": "Demo Image Source",
+            "endpoint": "demo/image-to-image",
+            "output_type": "image",
+            "params": [{"fieldKey": "prompt", "type": "STRING"}],
+        }])
 
         self.assertEqual([item["endpoint"] for item in official], ["demo/text-to-image"])
+        self.assertEqual([item["endpoint"] for item in source_list], ["demo/image-to-image"])
         self.assertEqual(llm_only, [])
 
     def test_runninghub_public_catalog_parser_reads_only_official_ssr_records(self):
@@ -1045,9 +1052,12 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
                 include_meta=True,
             )
 
+        snapshot_path = Path(main.RUNNINGHUB_OFFICIAL_REGISTRY_SNAPSHOT_FILE)
+        verified_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+
         self.assertGreaterEqual(meta["registry_count"], 300)
         self.assertEqual(meta["source"], "official-snapshot")
-        self.assertEqual(meta["registry_version"], "public-2026-04-29")
+        self.assertEqual(meta["registry_version"], verified_snapshot["version"])
         self.assertTrue(any(item.get("params") for item in items))
 
     async def test_runninghub_llm_only_response_never_replaces_standard_registry(self):

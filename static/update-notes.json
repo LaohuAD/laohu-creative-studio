@@ -1,26 +1,26 @@
 {
-  "version": "2026.10.04",
-  "updated_at": "2026-10-04T12:00:00+08:00",
+  "version": "2026.10.06",
+  "updated_at": "2026-10-06T09:45:00+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "模型选择统一为家族、运行模式与支持平台，按精确模型契约展示和校验参数。",
-      "text_en": "Model selection groups families, run modes and supported providers, with parameters displayed and validated against exact model contracts."
+      "text": "新增公众号文章项目，集中管理原稿、标题与封面历史，并支持六种真实排版主题的预览、复制和下载。",
+      "text_en": "Add article projects to manage source text, title and cover history, with preview, copy and download across six distinct layouts."
     },
     {
       "type": "feature",
-      "text": "画布创作输入支持 Enter 运行或保存、Shift+Enter 换行，并保护输入法确认与忙碌状态。",
-      "text_en": "Canvas creation inputs support Enter to run or save and Shift+Enter for new lines, with IME and busy-state protection."
+      "text": "画布模型管理支持按精确运行选项启停候选，并为画布、Hypit 和文章流程提供共享配置画布。",
+      "text_en": "Canvas model management can enable or disable exact run options and provides shared configuration canvases for Canvas, Hypit and articles."
     },
     {
       "type": "improvement",
-      "text": "Hypit 按生成用途选择模型，任务参数按请求校验，候选过滤区分语音、音效与音乐。",
-      "text_en": "Hypit selects models by generation purpose, validates task parameters per request and distinguishes speech, sound effects and music."
+      "text": "新增五套完整主题，并将主题身份与浅色、深色及系统外观偏好分开保存。",
+      "text_en": "Add five complete themes and store theme identity separately from light, dark and system appearance preferences."
     },
     {
       "type": "fix",
-      "text": "完善模型身份归类、候选投影、请求幂等和参数契约回归，保留用户配置与模型真实 ID。",
-      "text_en": "Improve model identity classification, candidate projection, request idempotency and parameter contract regression while preserving user settings and real model IDs."
+      "text": "改进候选目录、配置画布状态同步、页面首屏加载及窄屏滚动，避免筛选或刷新中断当前选择。",
+      "text_en": "Improve candidate catalogs, configuration-canvas state sync, startup loading and narrow-screen scrolling so filtering or refresh does not interrupt current selections."
     }
   ]
 }

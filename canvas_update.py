@@ -12,6 +12,55 @@ PUBLIC_ROOT = 'https://infinitecanvas.lao-hu.com'
 LATEST_URL = PUBLIC_ROOT + '/canvas-releases/latest.json'
 MAX_PACKAGE_BYTES = 100 * 1024 * 1024
 MAX_EXPANDED_BYTES = 500 * 1024 * 1024
+PYTHON_VERSION_FILE = '.python-version'
+WINDOWS_PYTHON_RELEASES = {
+    '3.14.5': {
+        'url': 'https://www.python.org/ftp/python/3.14.5/python-3.14.5-amd64.zip',
+        'bytes': 35_999_773,
+        'sha256': 'c66c6e75aba5cc0434541089127557010da2af9f6ef653abc14bdb694fdf3594',
+    },
+}
+
+
+def parse_python_version(value):
+    if not isinstance(value, str):
+        raise ValueError('Python 版本文件格式无效')
+    version = value.strip()
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('Python 版本文件必须包含完整版本号，例如 3.14.5')
+    return version
+
+
+def required_python_version(root):
+    path = Path(root) / PYTHON_VERSION_FILE
+    try:
+        return parse_python_version(path.read_text(encoding='utf-8-sig'))
+    except OSError as exc:
+        raise ValueError(f'缺少 Python 版本文件 {path.name}，请重新运行软件更新器') from exc
+
+
+def interpreter_version(python):
+    """读取真实解释器版本；文件名和路径不能作为版本证据。"""
+    try:
+        result = subprocess.run(
+            [str(python), '-c', 'import platform; print(platform.python_version())'],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode:
+        return None
+    output = (result.stdout or '').strip().splitlines()
+    return output[-1].strip() if output else None
+
+
+def _python_matches(python, target_version):
+    return Path(python).is_file() and interpreter_version(python) == target_version
+
+
+def venv_python(env_root, platform=None):
+    platform = platform or os.name
+    return Path(env_root) / ('Scripts/python.exe' if platform == 'nt' else 'bin/python')
 
 
 def package_url(manifest):
@@ -33,7 +82,7 @@ def allowed_file(path):
         return PurePosixPath(path).suffix == '.py'
     if path.startswith(('static/', 'data/model_capabilities/')):
         return True
-    return len(parts) == 1 and (PurePosixPath(path).suffix in {'.py', '.sh', '.bat', '.command'} or path in {'VERSION', 'requirements.txt'}) and path != 'get-pip.py'
+    return len(parts) == 1 and (PurePosixPath(path).suffix in {'.py', '.sh', '.bat', '.command'} or path in {'VERSION', '.python-version', 'requirements.txt'}) and path != 'get-pip.py'
 
 
 def validate_package(body, manifest):
@@ -56,7 +105,7 @@ def validate_package(body, manifest):
             raise ValueError(f'不允许或重复的更新路径：{name}')
         folded.add(name.casefold())
         expected[name] = record
-    required = {'VERSION', 'main.py', 'requirements.txt', 'model_capabilities.py', 'project_storage.py', 'static/release_update.py', 'static/update-notes.json'}
+    required = {PYTHON_VERSION_FILE, 'VERSION', 'main.py', 'requirements.txt', 'model_capabilities.py', 'project_storage.py', 'static/release_update.py', 'static/update-notes.json'}
     if not required.issubset(expected):
         raise ValueError('更新包缺少必要程序文件')
     result = {}
@@ -77,6 +126,7 @@ def validate_package(body, manifest):
             result[name] = data
     if result['VERSION'].decode('utf-8').strip() != version or json.loads(result['static/update-notes.json']).get('version') != version:
         raise ValueError('更新包版本与清单不一致')
+    parse_python_version(result[PYTHON_VERSION_FILE].decode('utf-8-sig'))
     return result
 
 
@@ -101,17 +151,124 @@ def write_state(path, value):
     os.replace(temp, path)
 
 
-def runtime_python(root):
+def _runtime_candidates(root, platform=None):
     root = Path(root).resolve()
+    platform = platform or os.name
+    candidates = []
     pointer = root / 'cache/runtime/active-environment.json'
     if pointer.exists():
-        env = Path(json.loads(pointer.read_text(encoding='utf-8'))['python']).absolute()
-        if not env.parent.resolve().is_relative_to(root / 'cache/update-environments') or not env.is_file():
+        try:
+            env = Path(json.loads(pointer.read_text(encoding='utf-8'))['python']).absolute()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError('升级运行环境记录损坏，请运行 canvas_update.py --recover') from exc
+        if not env.parent.resolve().is_relative_to((root / 'cache/update-environments').resolve()):
             raise ValueError('升级运行环境无效，请运行 canvas_update.py --recover 或恢复安装')
-        return str(env)
-    choices = [root / 'python/python.exe'] if os.name == 'nt' else []
-    choices += [root / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')]
-    return str(next((p for p in choices if p.is_file()), Path(sys.executable)))
+        candidates.append(env)
+    candidates.append(venv_python(root / '.venv', platform))
+    return candidates
+
+
+def find_runtime_python(root, target_version, platform=None):
+    """只返回已安装到受管环境且与目标版本完全一致的解释器。"""
+    return next((str(path) for path in _runtime_candidates(root, platform)
+                 if _python_matches(path, target_version)), None)
+
+
+def runtime_python(root, target_version=None, platform=None):
+    root = Path(root).resolve()
+    target_version = parse_python_version(target_version) if target_version else required_python_version(root)
+    python = find_runtime_python(root, target_version, platform)
+    if python:
+        return python
+    raise RuntimeError(
+        f'当前未安装 Python {target_version} 的画布运行环境。请运行“安装依赖”完成安全迁移；'
+        '原有 Python 环境和作品数据会保留。'
+    )
+
+
+def _bootstrap_candidates(root, platform=None):
+    root = Path(root).resolve()
+    platform = platform or os.name
+    candidates = []
+    if platform == 'nt':
+        candidates.append(root / 'python/python.exe')
+    candidates.append(venv_python(root / '.venv', platform))
+    candidates.append(Path(sys.executable))
+    names = ('python3.14', 'python3', 'python') if platform != 'nt' else ('python3.14.exe', 'python.exe')
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            candidates.append(Path(found))
+    return list(dict.fromkeys(candidates))
+
+
+def ensure_windows_python(root, target_version):
+    """下载并验证官方完整 Windows Python，仅作为创建标准 venv 的引导解释器。"""
+    root = Path(root).resolve()
+    target_version = parse_python_version(target_version)
+    release = WINDOWS_PYTHON_RELEASES.get(target_version)
+    if release is None:
+        raise RuntimeError(f'尚无经过校验的 Windows Python {target_version} 安装包，未更改现有环境。')
+    base = root / 'cache/runtime/python-bootstrap'
+    base.mkdir(parents=True, exist_ok=True)
+    folder = base / f"{target_version}-{release['sha256'][:12]}"
+    candidate = folder / 'python.exe'
+    if _python_matches(candidate, target_version):
+        return str(candidate)
+
+    archive_path = base / f"python-{target_version}-amd64-{release['sha256'][:12]}.zip"
+    data = archive_path.read_bytes() if archive_path.is_file() else b''
+    if len(data) != release['bytes'] or hashlib.sha256(data).hexdigest() != release['sha256']:
+        archive_path.unlink(missing_ok=True)
+        data = fetch_bytes(release['url'], release['bytes'])
+        if len(data) != release['bytes'] or hashlib.sha256(data).hexdigest() != release['sha256']:
+            raise ValueError('官方 Python 安装包大小或 SHA-256 校验失败，未安装或切换环境。')
+        temporary_archive = archive_path.with_suffix('.download')
+        temporary_archive.write_bytes(data)
+        os.replace(temporary_archive, archive_path)
+    if len(data) != release['bytes'] or hashlib.sha256(data).hexdigest() != release['sha256']:
+        raise ValueError('缓存的官方 Python 安装包校验失败，未安装或切换环境。')
+
+    temporary_root = base / ('.extract-' + uuid.uuid4().hex)
+    temporary_root.mkdir()
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            infos = archive.infolist()
+            if not infos or len(infos) > 20000 or sum(item.file_size for item in infos) > 400 * 1024 * 1024:
+                raise ValueError('官方 Python 安装包展开大小异常')
+            for item in infos:
+                name = item.filename.replace('\\', '/')
+                parts = PurePosixPath(name).parts
+                if (not name or name.startswith('/') or ':' in name or '..' in parts
+                        or stat.S_ISLNK(item.external_attr >> 16)):
+                    raise ValueError('官方 Python 安装包包含不安全路径')
+            archive.extractall(temporary_root)
+        extracted_python = temporary_root / 'python.exe'
+        if not extracted_python.is_file() or interpreter_version(extracted_python) != target_version:
+            raise ValueError('官方 Python 安装包缺少目标解释器或版本不符')
+        if folder.exists():
+            # 保留可能仍被其他任务使用的目录，不覆盖；使用校验值隔离的新路径。
+            folder = base / f"{target_version}-{release['sha256'][:12]}-{uuid.uuid4().hex[:8]}"
+            candidate = folder / 'python.exe'
+        os.replace(temporary_root, folder)
+        return str(candidate)
+    finally:
+        if temporary_root.exists():
+            shutil.rmtree(temporary_root, ignore_errors=True)
+
+
+def bootstrap_python(root, target_version):
+    root = Path(root).resolve()
+    target_version = parse_python_version(target_version)
+    for candidate in _bootstrap_candidates(root):
+        if _python_matches(candidate, target_version):
+            return str(candidate)
+    if os.name == 'nt':
+        return ensure_windows_python(root, target_version)
+    raise RuntimeError(
+        f'需要 Python {target_version} 才能运行此版本。请从 https://www.python.org/downloads/ '
+        '安装该版本后重新运行安装依赖；现有环境不会被覆盖。'
+    )
 
 
 def environment(root):
@@ -235,13 +392,20 @@ def prepare_job(root, job):
     stage = job / 'program'
     manifest = json.loads((job / 'release.json').read_text(encoding='utf-8'))
     log = job / 'prepare.log'
-    python = runtime_python(root)
-    changed = not (root / 'requirements.txt').exists() or requirements_key(root / 'requirements.txt') != requirements_key(stage / 'requirements.txt')
+    target_version = required_python_version(stage)
+    python = find_runtime_python(root, target_version)
+    changed = (python is None or not (root / 'requirements.txt').exists()
+               or requirements_key(root / 'requirements.txt') != requirements_key(stage / 'requirements.txt'))
     if changed:
-        # 不对正在使用的 Python 环境执行 pip；失败不会破坏原环境。
+        # 版本或依赖有变化时新建 side-by-side venv，不改当前运行环境。
+        bootstrap = bootstrap_python(root, target_version)
         env_root = root / 'cache/update-environments' / job.name
-        run_checked([python, '-m', 'venv', str(env_root)], root, log)
-        python = str(env_root / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python'))
+        if env_root.exists():
+            raise RuntimeError('此更新任务已有未完成的运行环境，未覆盖；请恢复或重新下载更新。')
+        run_checked([bootstrap, '-m', 'venv', str(env_root)], root, log)
+        python = str(venv_python(env_root))
+        if interpreter_version(python) != target_version:
+            raise RuntimeError(f'新建运行环境版本不是 Python {target_version}，旧环境保持不变。')
         run_checked([python, '-m', 'pip', 'install', '-r', str(stage / 'requirements.txt')], root, log)
     run_checked([python, '-m', 'pip', 'check'], root, log, 60)
     for record in manifest['files']:
@@ -249,7 +413,7 @@ def prepare_job(root, job):
         if path.suffix == '.py':
             compile(path.read_bytes(), str(path), 'exec')
     probe_program(stage, python, log)
-    write_state(job / 'prepared.json', {'python':python, 'new_environment':changed})
+    write_state(job / 'prepared.json', {'python':python, 'python_version':target_version, 'new_environment':changed})
     return manifest
 
 
@@ -321,6 +485,13 @@ def apply_job(root, job):
     manifest = json.loads((job / 'release.json').read_text(encoding='utf-8'))
     prepared = json.loads((job / 'prepared.json').read_text(encoding='utf-8'))
     stage = job / 'program'
+    target_version = required_python_version(stage)
+    prepared_python = Path(prepared.get('python', '')).absolute()
+    if prepared.get('python_version') != target_version or interpreter_version(prepared_python) != target_version:
+        raise ValueError('准备好的运行环境与更新包声明版本不一致，取消切换。')
+    if prepared.get('new_environment'):
+        if not prepared_python.parent.resolve().is_relative_to((root / 'cache/update-environments').resolve()):
+            raise ValueError('新运行环境路径不在项目缓存中，取消切换。')
     for record in manifest['files']:
         path = safe_target(stage, record['path'])
         if hashlib.sha256(path.read_bytes()).hexdigest() != record['sha256']:

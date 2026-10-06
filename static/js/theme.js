@@ -1,6 +1,17 @@
 (function(){
     const KEY = 'studio_theme';
     const LEGACY_KEY = 'canvas_theme';
+    const PREFERENCE_KEY = 'studio_theme_preference_v1';
+    const DEFAULT_THEME_ID = 'studio-violet';
+    const APPEARANCES = ['light', 'dark', 'system'];
+    const THEMES = [
+        { id:'studio-violet', name:{zh:'紫色画室', en:'Violet Atelier'}, palette:{zh:'薰衣草紫 · 暖纸白 · 明黄', en:'Lavender · warm paper · marigold'} },
+        { id:'sunlit', name:{zh:'日光画坊', en:'Sunlit Atelier'}, palette:{zh:'燕麦米 · 莳萝绿 · 奶油黄', en:'Oat · dill green · butter'} },
+        { id:'vermilion', name:{zh:'朱砂创作', en:'Vermilion Studio'}, palette:{zh:'陶土红 · 玫瑰纸 · 麦芽金', en:'Terracotta · rose paper · malt gold'} },
+        { id:'forest', name:{zh:'森林工坊', en:'Forest Workshop'}, palette:{zh:'鼠尾草 · 深林绿 · 麦穗金', en:'Sage · forest green · wheat'} },
+        { id:'classic', name:{zh:'经典暖白', en:'Classic Warm'}, palette:{zh:'矿物灰 · 蓝绿石色 · 羊皮纸', en:'Mineral gray · blue teal · parchment'} }
+    ];
+    const THEME_IDS = new Set(THEMES.map(theme => theme.id));
     const SCALE_KEY = 'studio_ui_scale_mode';
     const SCALE_OPTIONS = ['auto', '60', '65', '70', '75', '80', '85', '90', '95', '100', '115', '125', '140'];
     const studioDialogQueue = [];
@@ -303,20 +314,145 @@
         }
     };
 
-    function currentTheme(){
-        return localStorage.getItem(KEY) || localStorage.getItem(LEGACY_KEY) || 'light';
+    let remotePreference = null;
+    let systemColorScheme = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    let systemSchemeListener = null;
+    let systemWindowListenersAttached = false;
+
+    function safeStorageGet(key){
+        try { return localStorage.getItem(key); } catch(e) { return null; }
     }
 
-    function applyTheme(theme){
-        const next = theme === 'dark' ? 'dark' : 'light';
-        const dark = next === 'dark';
-        document.documentElement.classList.toggle('studio-theme-dark', dark);
-        document.documentElement.classList.toggle('theme-dark', dark);
+    function safeStorageSet(key, value){
+        try { localStorage.setItem(key, value); return true; } catch(e) { return false; }
+    }
+
+    function validAppearance(value){
+        return APPEARANCES.includes(value) ? value : null;
+    }
+
+    function legacyAppearance(){
+        for(const key of [KEY, LEGACY_KEY]){
+            const value = safeStorageGet(key);
+            if(value === 'dark' || value === 'light') return value;
+        }
+        return 'light';
+    }
+
+    function normalizeStoredPreference(value){
+        if(!value || typeof value !== 'object' || value.version !== 1) return null;
+        const appearance = validAppearance(value.appearance);
+        if(!appearance) return null;
+        return {
+            version: 1,
+            themeId: THEME_IDS.has(value.themeId) ? value.themeId : DEFAULT_THEME_ID,
+            appearance
+        };
+    }
+
+    function readPreference(){
+        const saved = safeStorageGet(PREFERENCE_KEY);
+        if(saved !== null){
+            try {
+                const normalized = normalizeStoredPreference(JSON.parse(saved));
+                if(normalized) return normalized;
+            } catch(e) {}
+            return { version:1, themeId:DEFAULT_THEME_ID, appearance:legacyAppearance() };
+        }
+        const migrated = { version:1, themeId:DEFAULT_THEME_ID, appearance:legacyAppearance() };
+        safeStorageSet(PREFERENCE_KEY, JSON.stringify(migrated));
+        return migrated;
+    }
+
+    function currentPreference(){
+        return {...(remotePreference || readPreference())};
+    }
+
+    function resolvedAppearance(preference){
+        if(preference.appearance !== 'system') return preference.appearance;
+        return systemColorScheme?.matches ? 'dark' : 'light';
+    }
+
+    function currentTheme(){
+        return resolvedAppearance(currentPreference());
+    }
+
+    function emitThemeChange(preference){
+        const resolved = resolvedAppearance(preference);
+        window.dispatchEvent(new CustomEvent('studio-theme-change', {
+            detail:{ theme:resolved, themeId:preference.themeId, appearance:preference.appearance, resolvedAppearance:resolved }
+        }));
+    }
+
+    function applyPreferenceToDocument(preference, emit=true){
+        const resolved = resolvedAppearance(preference);
+        const dark = resolved === 'dark';
+        const root = document.documentElement;
+        root.dataset.studioTheme = preference.themeId;
+        root.dataset.studioAppearance = resolved;
+        root.dataset.studioAppearanceMode = preference.appearance;
+        root.style.colorScheme = resolved;
+        root.classList.toggle('studio-theme-dark', dark);
+        root.classList.toggle('theme-dark', dark);
         if(document.body){
+            document.body.dataset.studioTheme = preference.themeId;
+            document.body.dataset.studioAppearance = resolved;
+            document.body.dataset.studioAppearanceMode = preference.appearance;
             document.body.classList.toggle('studio-theme-dark', dark);
             document.body.classList.toggle('theme-dark', dark);
         }
-        window.dispatchEvent(new CustomEvent('studio-theme-change', { detail: { theme: next } }));
+        if(emit) emitThemeChange(preference);
+        return resolved;
+    }
+
+    function applyTheme(theme){
+        if(theme !== 'dark' && theme !== 'light') return false;
+        const preference = {...currentPreference(), appearance:theme};
+        remotePreference = preference;
+        applyPreferenceToDocument(preference);
+        return true;
+    }
+
+    function applyPreference(preference){
+        const normalized = normalizeStoredPreference({...preference, version:1});
+        if(!normalized || !THEME_IDS.has(preference?.themeId) || !validAppearance(preference?.appearance)) return false;
+        if(normalized.appearance === 'system') ensureSystemSchemeListener(true);
+        remotePreference = normalized;
+        applyPreferenceToDocument(normalized);
+        return true;
+    }
+
+    function persistPreference(preference){
+        const serialized = JSON.stringify(preference);
+        const stored = safeStorageSet(PREFERENCE_KEY, serialized);
+        const resolved = resolvedAppearance(preference);
+        safeStorageSet(KEY, resolved);
+        safeStorageSet(LEGACY_KEY, resolved);
+        return stored;
+    }
+
+    function setPreference(preference){
+        const normalized = normalizeStoredPreference({...preference, version:1});
+        if(!normalized || !THEME_IDS.has(preference?.themeId) || !validAppearance(preference?.appearance)){
+            throw new TypeError('无效的工作台主题偏好');
+        }
+        if(normalized.appearance === 'system') ensureSystemSchemeListener(true);
+        remotePreference = null;
+        if(!persistPreference(normalized)) remotePreference = normalized;
+        applyPreferenceToDocument(normalized);
+        return {...normalized};
+    }
+
+    function receiveThemeMessage(event){
+        if(!event || event.origin !== window.location.origin) return false;
+        const fromParent = window.parent !== window && event.source === window.parent;
+        const fromOpener = window.opener && event.source === window.opener;
+        if(!fromParent && !fromOpener) return false;
+        const data = event.data;
+        if(data?.type !== 'studio-theme') return false;
+        if(data.preference) return applyPreference(data.preference);
+        if(data.themeId && data.appearance) return applyPreference(data);
+        return applyTheme(data.theme);
     }
 
     function ensureScaleStyle(){
@@ -384,20 +520,8 @@
     }
 
     function autoScale(){
-        const dpr = Math.max(1, Number(window.devicePixelRatio || 1));
-        const viewportWidth = Math.max(320, Number(window.innerWidth || 0));
-        const viewportHeight = Math.max(320, Number(window.innerHeight || 0));
-        const compactRatio = Math.min(viewportWidth / 1500, viewportHeight / 940);
-        if(compactRatio < 1) {
-            return Math.max(0.68, Math.min(1, compactRatio));
-        }
-        const screenLong = Math.max(window.screen?.width || 0, window.screen?.height || 0);
-        const viewportLong = Math.max(viewportWidth, viewportHeight);
-        const longEdge = Math.max(screenLong, viewportLong);
-        if(dpr >= 1.35) return 1;
-        if(longEdge >= 3600) return 1.22;
-        if(longEdge >= 3000) return 1.16;
-        if(longEdge >= 2500 && dpr <= 1.15) return 1.1;
+        // auto 只表示跟随当前 CSS 视口，不再用整页 transform 缩小内容。
+        // 小屏断点由各页面响应式布局处理；显式百分比模式仍由 scaleForMode 单独应用。
         return 1;
     }
 
@@ -530,14 +654,21 @@
 
     window.StudioTheme = {
         key: KEY,
+        preferenceKey: PREFERENCE_KEY,
+        appearances: APPEARANCES.slice(),
         get: currentTheme,
-        apply: applyTheme,
+        getPreference: currentPreference,
+        listThemes(){ return THEMES.map(theme => ({id:theme.id, name:{...theme.name}, palette:{...theme.palette}})); },
+        apply(theme){
+            if(theme && typeof theme === 'object') return applyPreference(theme);
+            return applyTheme(theme);
+        },
+        applyPreference,
         set(theme){
-            const next = theme === 'dark' ? 'dark' : 'light';
-            localStorage.setItem(KEY, next);
-            localStorage.setItem(LEGACY_KEY, next);
-            applyTheme(next);
-        }
+            if(theme !== 'dark' && theme !== 'light') return false;
+            return setPreference({...currentPreference(), appearance:theme});
+        },
+        setPreference
     };
 
     window.StudioScale = {
@@ -549,15 +680,15 @@
         set: setScaleMode
     };
 
-    applyTheme(currentTheme());
+    applyPreferenceToDocument(currentPreference());
     applyScale(currentScaleMode());
 
     document.addEventListener('DOMContentLoaded', () => {
-        applyTheme(currentTheme());
+        applyPreferenceToDocument(currentPreference());
         applyScale(currentScaleMode());
     });
     window.addEventListener('message', event => {
-        if(event.data?.type === 'studio-theme') applyTheme(event.data.theme);
+        receiveThemeMessage(event);
         if(event.data?.type === 'studio-ui-scale') {
             const incomingScale = normalizeExternalScale(event.data.scale);
             if(incomingScale !== null) externalScaleValue = incomingScale;
@@ -566,9 +697,49 @@
         if(event.data?.type === 'studio-ui-scale-pause') pauseAutoScale(event.data.duration);
     });
     window.addEventListener('storage', event => {
-        if(event.key === KEY || event.key === LEGACY_KEY) applyTheme(currentTheme());
+        if(event.key === PREFERENCE_KEY){
+            remotePreference = null;
+            applyPreferenceToDocument(currentPreference());
+        } else if((event.key === KEY || event.key === LEGACY_KEY) && !safeStorageGet(PREFERENCE_KEY)){
+            remotePreference = null;
+            applyPreferenceToDocument(currentPreference());
+        }
         if(event.key === SCALE_KEY) applyScale(currentScaleMode());
     });
+    function refreshSystemAppearance(){
+        const preference = currentPreference();
+        if(preference.appearance !== 'system') return;
+        const resolved = resolvedAppearance(preference);
+        if(document.documentElement.dataset.studioAppearance !== resolved) applyPreferenceToDocument(preference);
+    }
+    function ensureSystemSchemeListener(force=false){
+        if(!window.matchMedia) return;
+        if(force && systemColorScheme && systemSchemeListener){
+            if(typeof systemColorScheme.removeEventListener === 'function'){
+                systemColorScheme.removeEventListener('change', systemSchemeListener);
+            } else if(typeof systemColorScheme.removeListener === 'function'){
+                systemColorScheme.removeListener(systemSchemeListener);
+            } else if(systemColorScheme.onchange === systemSchemeListener){
+                systemColorScheme.onchange = null;
+            }
+        }
+        if(force || !systemColorScheme) systemColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
+        if(!systemColorScheme || systemSchemeListener && !force) return;
+        systemSchemeListener = refreshSystemAppearance;
+        if(typeof systemColorScheme.addEventListener === 'function'){
+            systemColorScheme.addEventListener('change', systemSchemeListener);
+        } else if(typeof systemColorScheme.addListener === 'function'){
+            systemColorScheme.addListener(systemSchemeListener);
+        } else {
+            systemColorScheme.onchange = systemSchemeListener;
+        }
+        if(!systemWindowListenersAttached){
+            window.addEventListener('focus', refreshSystemAppearance);
+            document.addEventListener('visibilitychange', refreshSystemAppearance);
+            systemWindowListenersAttached = true;
+        }
+    }
+    ensureSystemSchemeListener();
     window.addEventListener('resize', scheduleAutoScaleRefresh);
     window.addEventListener('scroll', lockScaledHorizontalScroll, { passive: true });
 })();

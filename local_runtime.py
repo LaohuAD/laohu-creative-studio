@@ -12,8 +12,8 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.request
 import uuid
+import urllib.request
 import webbrowser
 
 ROOT = Path(__file__).resolve().parent
@@ -53,14 +53,8 @@ def resolve_media_tool(name: str) -> str | None:
 
 def environment_python(root: Path, platform: str | None = None) -> Path:
     platform = platform or os.name
-    if (root / 'cache/runtime/active-environment.json').exists():
-        from canvas_update import runtime_python
-        return Path(runtime_python(root))
-    bundled = root / 'python' / 'python.exe'
-    if platform == 'nt' and bundled.is_file():
-        return bundled
-    venv = root / '.venv' / ('Scripts/python.exe' if platform == 'nt' else 'bin/python')
-    return venv if venv.is_file() else Path(sys.executable)
+    from canvas_update import runtime_python
+    return Path(runtime_python(root, platform=platform))
 
 
 def runtime_environment(root: Path) -> dict:
@@ -155,7 +149,14 @@ def launch(root: Path = ROOT, open_browser: bool = True) -> int:
     try:
         while True:
             try:
-                child = subprocess.Popen([str(environment_python(root)), str(root / 'main.py')], cwd=root, env=env, **kwargs)
+                app_python = environment_python(root)
+                child = subprocess.Popen([str(app_python), str(root / 'main.py')], cwd=root, env=env, **kwargs)
+            except (RuntimeError, ValueError) as exc:
+                if upgrading:
+                    canvas_update.recover(root)
+                    upgrading = False
+                print(str(exc), flush=True)
+                return 1
             except OSError:
                 if upgrading:
                     canvas_update.recover(root)
@@ -222,31 +223,50 @@ def launch(root: Path = ROOT, open_browser: bool = True) -> int:
 
 def install(root: Path = ROOT) -> int:
     env = runtime_environment(root)
-    bundled = os.name == 'nt' and (root / 'python/python.exe').is_file()
-    venv = root / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-    if not bundled and not venv.is_file():
-        code = subprocess.call([sys.executable, '-m', 'venv', str(root / '.venv')], env=env)
+    import canvas_update
+    try:
+        target_version = canvas_update.required_python_version(root)
+    except (OSError, ValueError) as exc:
+        print(str(exc), flush=True)
+        return 1
+    created_environment = False
+    try:
+        python = str(environment_python(root))
+    except RuntimeError:
+        try:
+            bootstrap = canvas_update.bootstrap_python(root, target_version)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(str(exc), flush=True)
+            return 1
+        env_root = root / 'cache' / 'update-environments' / ('install-' + target_version + '-' + uuid.uuid4().hex)
+        code = subprocess.call([bootstrap, '-m', 'venv', str(env_root)], cwd=root, env=env)
         if code:
             return code
-    python = str(environment_python(root))
+        python = str(canvas_update.venv_python(env_root))
+        if canvas_update.interpreter_version(python) != target_version:
+            print(f'新建运行环境版本不符合 Python {target_version}，旧环境保持不变。', flush=True)
+            return 1
+        created_environment = True
+    except ValueError as exc:
+        print(str(exc), flush=True)
+        return 1
     def run(*args):
         return subprocess.call([python, *args], cwd=root, env=env)
     if run('-m', 'pip', '--version'):
         if run('-m', 'ensurepip', '--upgrade'):
-            # Windows 官方嵌入版可能没有 ensurepip，保留安装引导能力。
-            bootstrap = Path(env['TMPDIR']) / 'get-pip.py'
-            try:
-                urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', bootstrap)
-                code = run(str(bootstrap))
-            finally:
-                bootstrap.unlink(missing_ok=True)
-            if code:
-                return code
+            print('当前 Python 环境缺少 pip；未安装依赖，也未切换运行环境。', flush=True)
+            return 1
     code = run('-m', 'pip', 'install', '--no-index', '--find-links', str(root / 'packages'), '-r', str(root / 'requirements.txt'))
     if code:
         print('离线包不完整或不适合当前 Python，转为在线安装。', flush=True)
         code = run('-m', 'pip', 'install', '-r', str(root / 'requirements.txt'))
     if code == 0:
+        code = run('-m', 'pip', 'check')
+    if code == 0:
+        code = run('-c', 'import fastapi, uvicorn, requests, pydantic, multipart, httpx, httpcore, socksio, PIL, qrcode, websockets, watchfiles')
+    if code == 0:
+        if created_environment:
+            canvas_update.write_state(root / 'cache/runtime/active-environment.json', {'python': python})
         print('依赖安装完成。Mac 请运行 mac-启动服务.command；Windows 请运行 run.bat。', flush=True)
     else:
         print('依赖安装失败，请处理上方错误后重试。', flush=True)
@@ -260,7 +280,7 @@ def main() -> int:
     parser.add_argument('--check', action='store_true', help='只检查现有服务，不启动、不停止服务')
     args = parser.parse_args()
     if sys.version_info < (3, 10):
-        print('需要 Python 3.10 或更新版本。')
+        print('此安装入口至少需要 Python 3.10；画布服务仍必须使用根目录 .python-version 指定的精确版本。')
         return 1
     if args.check:
         ready = canvas_ready()
@@ -272,6 +292,6 @@ def main() -> int:
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
-    except OSError as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         print('启动/安装失败：' + str(exc), file=sys.stderr)
         raise SystemExit(1)

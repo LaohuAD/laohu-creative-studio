@@ -505,6 +505,11 @@ def normalize_model_classifications(models: List[Dict[str, Any]], provider_id: s
 
 def _profile_parameter(parameter_type: str, field: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     normalized = str(parameter_type or "").strip().upper()
+    if normalized == "SIZE" and isinstance(field.get("options"), list) and field.get("options"):
+        # RunningHub's newer Qwen schemas expose SIZE as a fixed list plus a
+        # possible `custom` entry. Preserve the exact list rather than silently
+        # rendering it as a free-form string.
+        normalized = "LIST"
     if normalized in {"STRING", "TEXT", "SIZE"}:
         result: Dict[str, Any] = {"level": "optional", "type": "text"}
         if field.get("defaultValue") not in (None, ""):
@@ -2239,16 +2244,17 @@ class ModelCapabilityRegistry:
     def runninghub_snapshot_profiles(self, region: str = "global") -> Dict[str, Dict[str, Any]]:
         safe_region = "cn" if str(region or "").strip().lower() == "cn" else "global"
         path = self.root / "data" / "model_capabilities" / "snapshots" / f"runninghub-{safe_region}.json"
-        profiles: Dict[str, Dict[str, Any]] = self.runninghub_official_snapshot_profiles()
+        official_profiles = self.runninghub_official_snapshot_profiles()
+        profiles: Dict[str, Dict[str, Any]] = {}
         if not path.is_file():
-            return profiles
+            return official_profiles
         try:
             raw = _read_json(path)
         except (OSError, ValueError, TypeError):
-            return profiles
+            return official_profiles
         items = raw.get("items") if isinstance(raw, dict) else raw
         if not isinstance(items, list):
-            return profiles
+            return official_profiles
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -2257,6 +2263,11 @@ class ModelCapabilityRegistry:
             except ModelCapabilityError:
                 continue
             profiles[profile["model_id"]] = profile
+        # Regional snapshots identify which endpoints are present on each
+        # RunningHub site, while the official source registry carries the
+        # current shared parameter contract. Prefer its newer exact schema for
+        # duplicate IDs; keep regional-only IDs for backwards compatibility.
+        profiles.update(official_profiles)
         for alias, official_id in RUNNINGHUB_PROFILE_ALIASES.items():
             source = profiles.get(official_id)
             if not source:
@@ -2520,58 +2531,65 @@ class ModelCapabilityRegistry:
         return scopes
 
     def _catalog_models_for_provider(self, provider, capability_id, profile_set, region=""):
-        indexed_profiles = {
-            (str(item.get("model_id") or "").strip(), str(item.get("node_type") or "").strip()): item
-            for item in profile_set.get("models") or []
-            if str(item.get("model_id") or "").strip()
-        }
+        indexed_profiles = {}
+        for item in profile_set.get("models") or []:
+            model_id = str(item.get("model_id") or "").strip()
+            node_type = str(item.get("node_type") or "").strip()
+            if model_id and node_type:
+                indexed_profiles.setdefault((model_id, node_type), []).append(item)
         if capability_id == "runninghub":
             for model_id, profile in self.runninghub_snapshot_profiles(region or provider.get("rh_region") or "global").items():
-                indexed_profiles[(model_id, str(profile.get("node_type") or "").strip())] = profile
+                # 站点快照沿用原有优先级：同模型与节点的静态条目由当前站点快照替代。
+                indexed_profiles[(model_id, str(profile.get("node_type") or "").strip())] = [profile]
         models = []
         for node_type, field_name in NODE_MODEL_FIELDS.items():
             configured_model_ids = _unique_strings(provider.get(field_name) or [])
             if capability_id == "ai-money":
                 configured_model_ids = _unique_strings(normalize_laohu_model_id(model_id) for model_id in configured_model_ids)
             for model_id in configured_model_ids:
-                source = indexed_profiles.get((model_id, node_type))
-                if self.readiness(source) != "ready":
-                    source = dynamic_profile_for_model(capability_id, model_id, node_type) or source
-                if node_type == "music_generation" and not source:
+                sources = indexed_profiles.get((model_id, node_type)) or []
+                if not sources or not any(self.readiness(item) == "ready" for item in sources):
+                    dynamic = dynamic_profile_for_model(capability_id, model_id, node_type)
+                    if dynamic:
+                        sources = [dynamic]
+                if not sources:
+                    sources = [None]
+                if node_type == "music_generation" and not any(sources):
                     continue
-                if node_type == "audio_generation" and not source:
+                if node_type == "audio_generation" and not any(sources):
                     music_source = indexed_profiles.get((model_id, "music_generation"))
-                    if self.readiness(music_source) == "ready":
+                    if any(self.readiness(item) == "ready" for item in (music_source or [])):
                         continue
                     if dynamic_profile_for_model(capability_id, model_id, "music_generation"):
                         continue
-                item = deepcopy(source) if source else {
-                    "model_id": model_id,
-                    "node_type": node_type,
-                    "operation": "compatible",
-                    "status": "pending",
-                    "version": 0,
-                    "evidence_level": "unknown",
-                    "inputs": {},
-                    "parameters": {},
-                    "note": "该模型来自用户配置，尚未绑定经过核实的能力档案。",
-                }
-                item["node_type"] = node_type
-                item["validation_mode"] = self.validation_mode(source)
-                item["readiness"] = self.readiness(source)
-                item["runnable"] = item["validation_mode"] == "strict" and item["readiness"] == "ready"
-                item["provider_id"] = str(provider.get("id") or "").strip()
-                item["capability_provider_id"] = capability_id
-                item["family_id"] = str(item.get("family_id") or item["model_id"]).strip()
-                item["family_name"] = item.get("family_name") or item.get("display_name") or item["family_id"]
-                item["variant_id"] = str(item.get("variant_id") or item.get("operation") or item["model_id"]).strip()
-                item["inputs"] = deepcopy(item.get("inputs") or {})
-                item["parameters"] = deepcopy(item.get("parameters") or {})
-                item["selection_unavailable_reason"] = generation_visibility_issue(item)
-                item["selectable"] = item["runnable"] and not item["selection_unavailable_reason"]
-                if capability_id == "runninghub":
-                    item["regions"] = [region or str(provider.get("rh_region") or "global").strip().lower()]
-                models.append(item)
+                for source in sources:
+                    item = deepcopy(source) if source else {
+                        "model_id": model_id,
+                        "node_type": node_type,
+                        "operation": "compatible",
+                        "status": "pending",
+                        "version": 0,
+                        "evidence_level": "unknown",
+                        "inputs": {},
+                        "parameters": {},
+                        "note": "该模型来自用户配置，尚未绑定经过核实的能力档案。",
+                    }
+                    item["node_type"] = node_type
+                    item["validation_mode"] = self.validation_mode(source)
+                    item["readiness"] = self.readiness(source)
+                    item["runnable"] = item["validation_mode"] == "strict" and item["readiness"] == "ready"
+                    item["provider_id"] = str(provider.get("id") or "").strip()
+                    item["capability_provider_id"] = capability_id
+                    item["family_id"] = str(item.get("family_id") or item["model_id"]).strip()
+                    item["family_name"] = item.get("family_name") or item.get("display_name") or item["family_id"]
+                    item["variant_id"] = str(item.get("variant_id") or item.get("operation") or item["model_id"]).strip()
+                    item["inputs"] = deepcopy(item.get("inputs") or {})
+                    item["parameters"] = deepcopy(item.get("parameters") or {})
+                    item["selection_unavailable_reason"] = generation_visibility_issue(item)
+                    item["selectable"] = item["runnable"] and not item["selection_unavailable_reason"]
+                    if capability_id == "runninghub":
+                        item["regions"] = [region or str(provider.get("rh_region") or "global").strip().lower()]
+                    models.append(item)
             models = normalize_model_classifications(models, capability_id)
         return models
 
@@ -2593,6 +2611,8 @@ class ModelCapabilityRegistry:
                         str(model.get("model_id") or ""),
                         str(model.get("node_type") or ""),
                         str(model.get("variant_id") or model.get("operation") or ""),
+                        str(model.get("operation") or ""),
+                        str(model.get("endpoint_id") or ""),
                     )
                     existing = models_by_key.get(key)
                     if existing is None:
@@ -2686,6 +2706,9 @@ class ModelCapabilityRegistry:
         provider_id: str,
         model_id: str,
         node_type: str,
+        operation: str = "",
+        endpoint_id: str = "",
+        region: str = "",
     ) -> Optional[Dict[str, Any]]:
         # 单模型预检无需重建所有平台目录，仍从用户启用白名单筛选。
         selected_providers = []
@@ -2699,14 +2722,49 @@ class ModelCapabilityRegistry:
                 selected[key] = [value for value in (provider.get(key) or []) if key == field and (normalize_laohu_model_id(value) if self.capability_provider_id(provider) == "ai-money" else value) == requested]
             selected_providers.append(selected)
         catalog = self.build_catalog(selected_providers)
+        matches = []
         for provider in catalog["providers"]:
             if provider["id"] != provider_id:
                 continue
             requested_model_id = normalize_laohu_model_id(model_id) if provider.get("capability_provider_id") == "ai-money" else model_id
             for model in provider["models"]:
-                if model["model_id"] == requested_model_id and model["node_type"] == node_type:
-                    return model
-        return None
+                if model["model_id"] != requested_model_id or model["node_type"] != node_type:
+                    continue
+                model_regions = [str(item).strip().lower() for item in (model.get("regions") or [])]
+                region_profiles = model.get("region_profiles") if isinstance(model.get("region_profiles"), dict) else {}
+                entries = []
+                if model_regions and region_profiles:
+                    for model_region in model_regions:
+                        scoped = region_profiles.get(model_region)
+                        if isinstance(scoped, dict):
+                            entries.append((model_region, {**model, **scoped}))
+                        else:
+                            entries.append((model_region, model))
+                else:
+                    entries.append(("", model))
+                for model_region, profile in entries:
+                    if region and model_region != str(region).strip().lower():
+                        continue
+                    if operation and operation not in {
+                        str(profile.get("operation") or ""),
+                        str(profile.get("variant_id") or ""),
+                    }:
+                        continue
+                    if endpoint_id and str(profile.get("endpoint_id") or "") != str(endpoint_id):
+                        continue
+                    matches.append((model_region, profile))
+        # 同一个 model ID 可能有多个 operation 或 endpoint。未给足身份时不按目录顺序猜。
+        unique = {}
+        for model_region, profile in matches:
+            identity = (
+                str(profile.get("operation") or profile.get("variant_id") or ""),
+                str(profile.get("endpoint_id") or ""),
+                model_region,
+            )
+            unique.setdefault(identity, profile)
+        if len(unique) > 1:
+            raise ModelCapabilityError(f"模型 {model_id} 对应多个精确运行选项，请重新选择运行模式")
+        return next(iter(unique.values()), None)
 
     def resolve_family_variant(
         self,
@@ -2740,6 +2798,7 @@ class ModelCapabilityRegistry:
                     input_counts=input_counts,
                     input_roles=input_roles,
                     parameters=parameters,
+                    operation=str(variant.get("operation") or variant.get("variant_id") or ""),
                 ))
             except ModelCapabilityError as exc:
                 reason = str(exc).strip()
@@ -2853,8 +2912,14 @@ class ModelCapabilityRegistry:
         input_roles: Optional[Dict[str, int]] = None,
         parameters: Optional[Dict[str, Any]] = None,
         input_metadata: Optional[Dict[str, Any]] = None,
+        operation: str = "",
+        endpoint_id: str = "",
+        region: str = "",
     ) -> Dict[str, Any]:
-        profile = self.find_model(providers, provider_id, model_id, node_type)
+        profile = self.find_model(
+            providers, provider_id, model_id, node_type,
+            operation=operation, endpoint_id=endpoint_id, region=region,
+        )
         if not profile:
             raise ModelCapabilityError(f"平台 {provider_id} 未启用模型 {model_id}")
         if profile["validation_mode"] != "strict":

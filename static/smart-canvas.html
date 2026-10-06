@@ -8,21 +8,46 @@
     <script>
         (function(){
             try {
-                var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light';
-                if(theme === 'dark') {
-                    document.documentElement.classList.add('theme-dark');
-                    document.documentElement.classList.add('studio-theme-dark');
+                var preferenceKey='studio_theme_preference_v1';
+                var knownThemeIds=['studio-violet','sunlit','vermilion','forest','classic'];
+                var saved=localStorage.getItem(preferenceKey), preference=null;
+                try { preference=saved?JSON.parse(saved):null; } catch(e) {}
+                var valid=preference && preference.version===1 && ['light','dark','system'].includes(preference.appearance);
+                if(!valid) {
+                    var old=localStorage.getItem('studio_theme'), legacy=localStorage.getItem('canvas_theme');
+                    var appearance=old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light';
+                    preference={version:1,themeId:'studio-violet',appearance:appearance};
+                    if(saved===null) { try { localStorage.setItem(preferenceKey,JSON.stringify(preference)); } catch(e) {} }
                 }
+                var themeId=knownThemeIds.includes(preference.themeId)?preference.themeId:'studio-violet';
+                var mode=['light','dark','system'].includes(preference.appearance)?preference.appearance:'light';
+                var theme=mode==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):mode;
+                var root=document.documentElement;
+                root.dataset.studioTheme=themeId; root.dataset.studioAppearance=theme; root.dataset.studioAppearanceMode=mode;
+                root.style.colorScheme=theme;
+                root.classList.toggle('studio-theme-dark',theme==='dark'); root.classList.toggle('theme-dark',theme==='dark');
+                var query=new URLSearchParams(location.search);
+                var settingsMode=query.get('mode');
+                var isHypitSettings=query.get('id')==='hypit-settings' && settingsMode==='hypit-settings';
+                var isArticleSettings=query.get('id')==='article-settings' && settingsMode==='article-settings';
+                var isCanvasSettings=query.get('id')==='canvas-settings' && settingsMode==='canvas-settings';
+                if(isHypitSettings || isArticleSettings || isCanvasSettings) {
+                    root.dataset.canvasMode=settingsMode;
+                    root.dataset.canvasSettings='true';
+                    if(query.get('embedded')==='1') root.dataset.canvasEmbedded='1';
+                }
+
             } catch(e) {}
         })();
     </script>
     <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
-    <script src="/static/js/theme.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/theme.js?v=2026.10.04.theme-1"></script>
     <script src="/static/js/touch-mouse.js?v=2026.08.17.1786430759"></script>
     <script src="/static/js/i18n.js?v=2026.08.17.1787068901"></script>
     <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.08.17.1787813528">
     <link rel="stylesheet" href="/static/css/model-config-control.css?v=2026.09.23.1">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css?v=2026.10.04.theme-1">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -58,6 +83,17 @@
             </div>
         </div>
         <div id="smartTitle" class="smart-title" data-i18n="smart.title">智能画布</div>
+        <aside id="hypitOutputDrawer" class="hypit-output-drawer" aria-label="Hypit 输出端口" data-hypit-aria-label-en="Hypit output ports" hidden>
+            <div class="hypit-output-drawer-head"><strong data-hypit-label-en="Output ports">输出端口</strong><span data-hypit-label-en="Adds only this output port; selecting it again focuses the existing one.">只添加对应输出端口；重复选择会定位已有端口</span><button type="button" data-hypit-drawer-close aria-label="关闭" data-hypit-label-en="Close">×</button></div>
+            <div class="hypit-output-drawer-list">
+                <button type="button" data-hypit-slot="text"><i data-lucide="text"></i><span>文本</span></button>
+                <button type="button" data-hypit-slot="image"><i data-lucide="image"></i><span>图片</span></button>
+                <button type="button" data-hypit-slot="video"><i data-lucide="film"></i><span>视频</span></button>
+                <button type="button" data-hypit-slot="audio"><i data-lucide="audio-lines"></i><span>音效</span></button>
+                <button type="button" data-hypit-slot="music"><i data-lucide="music-2"></i><span>音乐</span></button>
+                <button type="button" data-hypit-slot="voice"><i data-lucide="mic-2"></i><span>语音</span></button>
+            </div>
+        </aside>
         <div id="createMenu" class="create-menu">
             <div class="create-menu-section">
                 <div class="create-menu-heading">添加资源</div>
@@ -132,6 +168,9 @@
             <div id="minimapContent" class="smart-minimap-content">
                 <div id="minimapViewport" class="smart-minimap-viewport"></div>
             </div>
+        </div>
+        <div id="hypitCanvasTools" class="hypit-canvas-tools" hidden>
+            <button id="hypitOutputDrawerToggle" type="button" class="hypit-output-toggle" aria-label="添加输出端口" title="添加输出端口" data-hypit-label-en="Add output port" aria-expanded="false" aria-controls="hypitOutputDrawer"><i data-lucide="corner-down-right"></i><span>添加输出端口</span></button>
         </div>
         <button id="canvasProductionToggle" class="smart-production-toggle" type="button" aria-expanded="false"><i data-lucide="table-properties"></i><span>创作进度</span></button>
         <button id="canvasAgentToggle" disabled class="smart-agent-toggle" type="button"><i data-lucide="bot"></i><span>节点默认设置</span></button>

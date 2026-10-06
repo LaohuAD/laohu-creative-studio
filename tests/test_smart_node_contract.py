@@ -9,17 +9,62 @@ CONTRACT = ROOT / "static/js/smart-node-contract.js"
 
 
 def run_node(source):
-    result = subprocess.run(
-        ["node", "-e", source],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["node", "-e", source],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "Node fixture failed").strip()
+        raise AssertionError(detail[:2000]) from exc
     return json.loads(result.stdout)
 
 
+def capability_identity_expression(source):
+    """连同真实目录投影 helper 一起执行模型身份映射，避免空壳全局变量掩盖依赖。"""
+    catalog_start = source.index("function capabilityPickerCatalog")
+    catalog_end = source.index("function managementOptionForProfile", catalog_start)
+    identity_start = source.index("function capabilitySelectionIdentity")
+    identity_end = source.index("function resolveCapabilityFamilySelection", identity_start)
+    block = source[catalog_start:catalog_end] + "\n" + source[identity_start:identity_end]
+    return json.dumps(block + "\ncapabilitySelectionIdentity")
+
+
 class SmartNodeContractTests(unittest.TestCase):
+    def test_api_model_picker_keeps_reviewed_laohu_image_badges_distinct(self):
+        source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
+        badge = source[source.index("function providerModelBadge"):source.index("function runningHubAvailabilityBadge")]
+        categories = source[source.index("function modelPickerCapabilityCategories"):source.index("function modelListForKind")]
+        badge_literal = json.dumps(badge)
+        categories_literal = json.dumps(categories)
+        data = run_node(f"""
+const vm=require('vm');
+const reviewed=new Set([
+  'laohu-image-g-v2.5-flare','laohu-image-g-v2.5-lowprice','laohu-image-g-v2.5-sunburst',
+  'laohu-image-g2-i2i','laohu-image-g2-t2i','laohu-image-g-v2-lowprice'
+]);
+const badge=vm.runInNewContext('('+{badge_literal}+')',{{LAOHU_GPT_IMAGE_MODEL_IDS:reviewed}});
+const capabilityCategories=vm.runInNewContext('('+{categories_literal}+')',{{
+  LAOHU_GPT_IMAGE_MODEL_IDS:reviewed,
+  modelCapabilityCatalog:{{providers:[]}}
+}});
+const imageCategories={{}};
+for(const model of reviewed) imageCategories[model]=[...capabilityCategories({{id:'ai-money'}},model)];
+console.log(JSON.stringify({{
+  gpt:badge('laohu-image-g-v2.5-flare',''),
+  grok:badge('laohu-image-gk-v2-edit',''),
+  unreviewed:badge('laohu-image-g-v9-alpha',''),
+  imageCategories
+}}));
+""")
+        self.assertEqual(data["gpt"], "G")
+        self.assertEqual(data["grok"], "GK")
+        self.assertNotEqual(data["unreviewed"], "G")
+        self.assertTrue(all(categories == ["image"] for categories in data["imageCategories"].values()))
+
     def test_smart_canvas_reads_structured_runninghub_error_message(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         block = source[
@@ -555,6 +600,7 @@ console.log(JSON.stringify({
     def test_concrete_parameter_values_and_manual_creation_are_independent_from_agent(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         defaults = source[source.index("const CAPABILITY_PARAMETER_UNSET"):source.index("function setCapabilityParameter")]
+        schema_default = source[source.index("function capabilitySchemaDefaultIsValid"):source.index("\nfunction capabilityDefaultsForReset")]
         memory = source[source.index("const manualNodeSettingsFingerprints"):source.index("function smartSettingsModeKey")]
         descriptor = source[source.index("function executionSelectionDescriptor"):source.index("function executionSelectionInputState")]
         create = source[source.index("function createExecutionNode"):source.index("function resultIdsForMediaItems")]
@@ -562,6 +608,9 @@ console.log(JSON.stringify({
 const assert=require('node:assert/strict');
 const SMART_NODE_CONTRACT=require('./static/js/smart-node-contract.js');
 const CanvasCreation=require('./static/js/canvas-creation.js');
+// 用真实模型契约核心验证必填默认值，不能用空对象掩盖必填参数护栏。
+global.window={};
+global.window.ModelConfigCore=require('./static/js/model-config-core.js');
 const SMART_NODE_TYPES=SMART_NODE_CONTRACT.NODE_TYPES;
 const cloneSmartSettings=s=>JSON.parse(JSON.stringify(s||{}));
 let settings={}, recentSmartSettingsByMode={}, selectedId='', nodes=[];
@@ -573,7 +622,7 @@ const capabilityProfileFor=()=>null;
 const sanitizeSmartApiSelection=()=>{};
 const ensureExecutionSelectionDefaults=(s,n,opts)=>{if(opts.resetSelection)s.model='initial';};
 const uid=()=>String(nodes.length),pushUndo=()=>{},render=()=>{},scheduleSave=()=>{};
-""" + defaults + descriptor + memory + create + """
+""" + schema_default + defaults + descriptor + memory + create + """
 const profile={model_id:'m',parameters:{
  resolution:{level:'optional',type:'string',options:['1K','2K']},
  audio:{level:'optional',type:'boolean',default:false},
@@ -629,7 +678,8 @@ console.log(JSON.stringify({ok:true}));
         self.assertNotIn("options[0]", defaults)
         self.assertNotIn("Number(spec.min)", defaults)
         self.assertIn("保持未设置", defaults)
-        self.assertIn("storedValue ?? spec?.default ?? ''", editor)
+        self.assertIn("storedValue ?? (defaultIsValid ? spec?.default : '')", editor)
+        self.assertIn("defaultIsValid ? spec?.default : ''", editor)
         self.assertNotIn("spec?.default ?? spec?.min ?? ''", editor)
 
     def test_new_model_candidates_do_not_inherit_previous_model_parameter_constraints(self):
@@ -637,6 +687,8 @@ console.log(JSON.stringify({ok:true}));
         initialize = source[source.index("function ensureExecutionSelectionDefaults"):source.index("function capabilityFamilyLabel")]
         data = run_node("""
 const assert=require('node:assert/strict');
+const isCanvasSettingsMode=false;
+const window={};
 const executionSelectionDescriptor=()=>({kind:'image',nodeType:'image_generation',providerKey:'provider_id',modelKey:'model',familyKey:'imageFamilyId'});
 const executionSelectionInputState=()=>({inputCounts:{text:1},inputRoles:[]});
 const capabilityRegionForProvider=()=>'';
@@ -1167,8 +1219,10 @@ console.log(JSON.stringify(request));
 
     def test_canvas_load_restores_run_state_from_backend_ledger(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-        load = source[source.index("async function loadCanvas"):source.index("function scheduleSave")]
-        restore = source[source.index("async function restoreCanvasRuns"):source.index("async function loadCanvas")]
+        restore_start = source.index("async function restoreCanvasRuns")
+        load_start = source.index("async function loadCanvas()", restore_start)
+        load = source[load_start:source.index("function scheduleSave", load_start)]
+        restore = source[restore_start:load_start]
 
         self.assertIn("fetch(`/api/canvas-runs?canvas_id=", restore)
         self.assertIn("runById.get(canvasRunId(node))", restore)
@@ -1219,7 +1273,7 @@ console.log(JSON.stringify(request));
         self.assertIn("const inputCounts = textGenerationCandidateInputCounts(request)", renderer)
         self.assertIn("resolveCapabilityFamilySelection(settings.textProvider, 'text_generation', inputCounts", renderer)
 
-        from provider_fixture import configured_providers
+        from tests.provider_fixture import configured_providers
         providers = configured_providers()
         codex = next(item for item in providers if item["id"] == "codex")
         codex_profile = json.loads((ROOT / "data/model_capabilities/providers/codex-cli.json").read_text(encoding="utf-8"))
@@ -2073,14 +2127,11 @@ console.log(JSON.stringify({
 
     def test_video_series_aliases_merge_vidu_kling_versions_and_pixverse_c1(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-        start = source.index("function capabilitySelectionIdentity")
-        end = source.index("function resolveCapabilityFamilySelection", start)
-        identity = source[start:end]
-        self.assertIn("reviewedVideoFamilies", identity)
-        identity_literal = json.dumps(identity)
+        identity_literal = capability_identity_expression(source)
+        self.assertIn("reviewedVideoFamilies", source[source.index("function capabilitySelectionIdentity"):source.index("function resolveCapabilityFamilySelection")])
         data = run_node(f"""
 const vm=require('node:vm');
-const identity=vm.runInNewContext('('+{identity_literal}+')',{{window:{{}}}});
+const identity=vm.runInNewContext({identity_literal},{{window:{{}},modelCapabilityCatalog:{{options:[]}},isCanvasSettingsMode:false}});
 const resolve=(model_id,family_name)=>identity({{provider_id:'runninghub',model_id,family_name}},'video_generation');
 console.log(JSON.stringify({{
   viduA:resolve('Vidu-reference-to-video-q2-pro','Vidu'),
@@ -2096,20 +2147,25 @@ console.log(JSON.stringify({{
 
     def test_model_id_repairs_only_incomplete_or_wrong_family_mappings(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-        start = source.index("function capabilitySelectionIdentity")
-        end = source.index("function resolveCapabilityFamilySelection", start)
-        identity = source[start:end]
-        identity_literal = json.dumps(identity)
+        identity_literal = capability_identity_expression(source)
         data = run_node(f"""
 const vm=require('vm');
-const identity=vm.runInNewContext('('+{identity_literal}+')',{{window:{{}}}});
+const identity=vm.runInNewContext({identity_literal},{{window:{{}},modelCapabilityCatalog:{{options:[]}},isCanvasSettingsMode:false}});
 const resolve=(model_id,family_name,node_type='image_generation')=>identity({{provider_id:'laohu',model_id,family_name}},node_type);
 console.log(JSON.stringify({{
   jimeng:resolve('bytedance/jimeng-4.6/text-to-image','Seedream'),
   jimengCli:identity({{provider_id:'jimeng-cli',model_id:'5.0Pro',family_id:'jimeng-image-5.0-pro',family_name:'即梦图片 5.0 Pro'}},'image_generation'),
   banana:resolve('nano-banana-pro/text-to-image','全能图片 G'),
-  grok:resolve('xai/grok-imagine-image/text-to-image','海螺'),
-  qwen:resolve('Qwen/Qwen-Image-2512','Qwen Image'),
+          grok:resolve('xai/grok-imagine-image/text-to-image','海螺'),
+          laohuGptFlare:resolve('laohu-image-g-v2.5-flare','provider-local-image-g'),
+          laohuGptLowprice:resolve('laohu-image-g-v2.5-lowprice','provider-local-image-g'),
+          laohuGptSunburst:resolve('laohu-image-g-v2.5-sunburst','provider-local-image-g'),
+          laohuGptI2i:resolve('laohu-image-g2-i2i','provider-local-image-g'),
+          laohuGptT2i:resolve('laohu-image-g2-t2i','provider-local-image-g'),
+          laohuGptLegacy:resolve('laohu-image-g-v2-lowprice','provider-local-image-g'),
+          laohuGrok:resolve('laohu-image-gk-v2-edit','provider-local-image-g'),
+          laohuUnreviewed:resolve('laohu-image-g-v9-alpha','provider-local-image-g'),
+          qwen:resolve('Qwen/Qwen-Image-2512','Qwen Image'),
   hailuo:resolve('hailuo-h3-global-i2v','MiniMax H3','video_generation'),
   minimax:resolve('minimax-h3-ow-i2v','MiniMax H3','video_generation'),
   horse:resolve('happyhorse-1.1-t2v','HappyHorse','video_generation'),
@@ -2121,6 +2177,13 @@ console.log(JSON.stringify({{
             "jimengCli": "series-image-seedream",
             "banana": "series-image-nano-banana",
             "grok": "series-image-grok-image",
+            "laohuGptFlare": "series-image-gpt-image",
+            "laohuGptLowprice": "series-image-gpt-image",
+            "laohuGptSunburst": "series-image-gpt-image",
+            "laohuGptI2i": "series-image-gpt-image",
+            "laohuGptT2i": "series-image-gpt-image",
+            "laohuGptLegacy": "series-image-gpt-image",
+            "laohuGrok": "series-image-grok-image",
             "qwen": "series-image-qwen-image",
             "hailuo": "series-video-minimax",
             "minimax": "series-video-minimax",
@@ -2129,35 +2192,41 @@ console.log(JSON.stringify({{
         }
         for key, family_id in expected.items():
             self.assertEqual(data[key]["canonical_family_id"], family_id, key)
+        self.assertNotIn(data["laohuUnreviewed"]["canonical_family_id"], {
+            "series-image-gpt-image", "series-image-grok-image"
+        })
 
     def test_canvas_picker_uses_reviewed_identity_before_provider_family(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-        block = source[source.index("function capabilitySelectionIdentity"):source.index("function resolveCapabilityFamilySelection")]
+        block = capability_identity_expression(source)
         script = f"""
 const vm=require('vm');
 const options=[
  {{capability_provider_id:'runninghub',catalog_model_id:'xai/rhart-imagine-image-quality/text-to-image-official-stable',node_type:'image_generation',operation:'text_to_image',canonical_family_id:'series-image-grok-image',canonical_family_label:{{zh:'Grok Image',en:'Grok Image'}},display_mode:'高质量 · 文生图'}},
  {{capability_provider_id:'runninghub',catalog_model_id:'Luma uni-1-max Text to Image',node_type:'image_generation',operation:'text_to_image',canonical_family_id:'series-image-luma',canonical_family_label:{{zh:'Luma',en:'Luma'}},display_mode:'Uni-1 · Max · 文生图'}},
  {{capability_provider_id:'ai-money',catalog_model_id:'laohu-image-nb-pro',node_type:'image_generation',operation:'text_to_image',canonical_family_id:'series-image-nano-banana',canonical_family_label:{{zh:'Nano Banana',en:'Nano Banana'}},display_mode:'Pro · 文生图'}},
+ {{capability_provider_id:'ai-money',catalog_model_id:'laohu-image-g-v2.5-flare',node_type:'image_generation',operation:'text_to_image',canonical_family_id:'series-image-grok-image',canonical_family_label:{{zh:'Grok Image',en:'Grok Image'}},display_mode:'文生图'}},
  {{capability_provider_id:'jimeng-cli',catalog_model_id:'5.0Pro',node_type:'image_generation',operation:'text_to_image_or_image_to_image',canonical_family_id:'series-image-seedream',canonical_family_label:{{zh:'Seedream',en:'Seedream'}},display_mode:'5.0 · Pro · 文生图／图生图'}}
 ];
-const identity=vm.runInNewContext('('+{json.dumps(block)}+')',{{window:{{}},modelCapabilityCatalog:{{options}}}});
+const identity=vm.runInNewContext({block},{{window:{{}},modelCapabilityCatalog:{{options}},isCanvasSettingsMode:false}});
 console.log(JSON.stringify([
  identity({{provider_id:'runninghub',model_id:options[0].catalog_model_id,family_name:'全能图片X 高质量',operation:'text_to_image'}},'image_generation'),
  identity({{provider_id:'runninghub',model_id:options[1].catalog_model_id,family_name:'Luma Uni max',operation:'text_to_image'}},'image_generation'),
  identity({{provider_id:'ai-money',model_id:options[2].catalog_model_id,family_name:'Nano Banana Pro',operation:'text_to_image'}},'image_generation'),
- identity({{provider_id:'jimeng',model_id:options[3].catalog_model_id,family_name:'即梦图片 Pro',operation:'text_to_image_or_image_to_image'}},'image_generation')
+ identity({{provider_id:'ai-money',model_id:options[3].catalog_model_id,family_name:'Grok Image',operation:'text_to_image'}},'image_generation'),
+ identity({{provider_id:'jimeng',model_id:options[4].catalog_model_id,family_name:'即梦图片 Pro',operation:'text_to_image_or_image_to_image'}},'image_generation')
 ]));
 """
         result = run_node(script)
         self.assertEqual([item["canonical_family_id"] for item in result], [
-            "series-image-grok-image", "series-image-luma", "series-image-nano-banana", "series-image-seedream",
+            "series-image-grok-image", "series-image-luma", "series-image-nano-banana",
+            "series-image-gpt-image", "series-image-seedream",
         ])
         self.assertEqual(result[-1]["display_mode"], "5.0 · Pro · 文生图／图生图")
 
     def test_mixed_image_mode_remains_available_with_and_without_reference(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-        block = source[source.index("function capabilityProfileMatchesCurrentInput"):source.index("function resolveCapabilityFamilyPickerSelection")]
+        block = source[source.index("function capabilityProfileMatchesCurrentInput"):source.index("function capabilityProfileVisibleInPicker")]
         script = f"""
 const vm=require('vm');
 const matches=vm.runInNewContext('('+{json.dumps(block)}+')');
@@ -2182,11 +2251,10 @@ console.log(JSON.stringify([matches(mixed,'image_generation',{{image:0}}),matche
 
     def test_text_model_aliases_are_grouped_into_the_nine_requested_families(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-        block = source[source.index("function capabilitySelectionIdentity"):source.index("function resolveCapabilityFamilySelection")]
-        identity_literal = json.dumps(block)
+        identity_literal = capability_identity_expression(source)
         script = f"""
 const vm=require('vm');
-const identity=vm.runInNewContext('('+{identity_literal}+')',{{window:{{}},modelCapabilityCatalog:{{options:[]}}}});
+const identity=vm.runInNewContext({identity_literal},{{window:{{}},modelCapabilityCatalog:{{options:[]}},isCanvasSettingsMode:false}});
 const resolve=(model_id,family_name)=>identity({{provider_id:'ai-money',model_id,family_name}},'text_generation');
 console.log(JSON.stringify({{
   g5:resolve('laohu/g5.6-sol','provider-local-g5'),
@@ -2224,7 +2292,7 @@ console.log(JSON.stringify(['laohu/g5.6-sol','laohu/g6-astra','laohu/gk-4.6','la
 
     def test_text_picker_excludes_specialized_tools(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
-        block = source[source.index("function capabilityProfileMatchesCurrentInput"):source.index("function resolveCapabilityFamilyPickerSelection")]
+        block = source[source.index("function capabilityProfileMatchesCurrentInput"):source.index("function capabilityProfileVisibleInPicker")]
         script = f"""
 const vm=require('vm');
 const matches=vm.runInNewContext('('+{json.dumps(block)}+')');
@@ -2238,6 +2306,33 @@ console.log(JSON.stringify([
 ]));
 """
         self.assertEqual(run_node(script), [True, True, True, False, False, False])
+
+    def test_management_picker_ignores_inputs_while_formal_picker_keeps_required_reference_gate(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        start = source.index("function capabilityProfileMatchesCurrentInput")
+        middle = source.index("function capabilityProfileVisibleInPicker")
+        end = source.index("function resolveCapabilityFamilyPickerSelection")
+        helpers = source[start:middle] + source[middle:end]
+        script = f"""
+const vm=require('vm');
+const context={{
+  isCanvasSettingsMode:true,
+  capabilityProviderEnabled:()=>true,
+  managementOptionForProfile:profile=>profile.option_id==='fixture-required-reference'?profile:null
+}};
+const visible=vm.runInNewContext('(()=>{{'+{json.dumps(helpers)}+';return capabilityProfileVisibleInPicker;}})()',context);
+const profile={{option_id:'fixture-required-reference',node_type:'image_generation',operation:'image_to_image',inputs:{{reference:{{media_type:'image',role:'reference',min:1}}}}}};
+const managerWithoutInput=visible(profile,'image_generation',{{image:0}});
+const managerWithWrongInput=visible(profile,'image_generation',{{audio:1,image:0}});
+context.isCanvasSettingsMode=false;
+const formalWithoutInput=visible(profile,'image_generation',{{image:0}});
+const formalWithReference=visible(profile,'image_generation',{{image:1}});
+context.isCanvasSettingsMode=true;
+context.managementOptionForProfile=()=>null;
+const managerWithoutStrictOption=visible(profile,'image_generation',{{image:0}});
+console.log(JSON.stringify([managerWithoutInput,managerWithWrongInput,formalWithoutInput,formalWithReference,managerWithoutStrictOption]));
+"""
+        self.assertEqual(run_node(script), [True, True, False, True, False])
 
     def test_result_connections_have_dedicated_layout_and_visual_semantics(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -2938,7 +3033,14 @@ console.log(JSON.stringify({
         self.assertIn("os.replace", backend)
         self.assertIn("base_revision:storageCanvas.revision", frontend)
         self.assertIn("canvas.revision = Number(data.canvas?.revision", frontend)
-        self.assertIn("canvas.revision = Math.max(1, Number(serverCanvas.revision", frontend)
+        merge_start = frontend.index("function applyMergedServerCanvas")
+        merge_end = frontend.index("async function mergeReloadCanvasNow", merge_start)
+        merge = frontend[merge_start:merge_end]
+        self.assertIn("const incomingRevision = Number(serverCanvas.revision)", merge)
+        self.assertIn("Number(canvasSyncBase?.revision)", merge)
+        self.assertIn("return {stale:true, conflicts:[]}", merge)
+        self.assertIn("CANVAS_SYNC.merge(base, local, remote)", merge)
+        self.assertIn("canvasSyncSaveBlocked = Boolean(merged.conflicts.length)", merge)
 
     def test_classic_canvas_entrypoint_is_retired(self):
         self.assertFalse((ROOT / "static/canvas.html").exists())
@@ -4142,7 +4244,9 @@ console.log(JSON.stringify({text:c.textContentForNode(node)}));
         self.assertIn("meta.inputRefs) && meta.inputRefs.length", stripped)
         self.assertNotIn("inputRefs:meta.inputRefs || meta.promptRefs", stripped)
 
-        restored = source[source.index("async function restoreCanvasRuns"):source.index("async function loadCanvas")]
+        restore_start = source.index("async function restoreCanvasRuns")
+        load_start = source.index("async function loadCanvas()", restore_start)
+        restored = source[restore_start:load_start]
         self.assertIn("function smartRunRecordedReferences", restored)
         self.assertIn("run?.standard_request?.inputs", restored)
         self.assertIn("target.runInputRefs = cloneSmartSettings(refs)", restored)

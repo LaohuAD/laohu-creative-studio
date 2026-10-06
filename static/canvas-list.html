@@ -8,49 +8,57 @@
     <script>
         (function(){
             try {
-                var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light';
-                if(theme === 'dark') {
-                    document.documentElement.classList.add('studio-theme-dark');
-                    document.documentElement.classList.add('theme-dark');
+                var preferenceKey='studio_theme_preference_v1';
+                var knownThemeIds=['studio-violet','sunlit','vermilion','forest','classic'];
+                var saved=localStorage.getItem(preferenceKey), preference=null;
+                try { preference=saved?JSON.parse(saved):null; } catch(e) {}
+                var valid=preference && preference.version===1 && ['light','dark','system'].includes(preference.appearance);
+                if(!valid) {
+                    var old=localStorage.getItem('studio_theme'), legacy=localStorage.getItem('canvas_theme');
+                    var appearance=old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light';
+                    preference={version:1,themeId:'studio-violet',appearance:appearance};
+                    if(saved===null) { try { localStorage.setItem(preferenceKey,JSON.stringify(preference)); } catch(e) {} }
                 }
+                var themeId=knownThemeIds.includes(preference.themeId)?preference.themeId:'studio-violet';
+                var mode=['light','dark','system'].includes(preference.appearance)?preference.appearance:'light';
+                var theme=mode==='system'?(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):mode;
+                var root=document.documentElement;
+                root.dataset.studioTheme=themeId; root.dataset.studioAppearance=theme; root.dataset.studioAppearanceMode=mode;
+                root.style.colorScheme=theme;
+                root.classList.toggle('studio-theme-dark',theme==='dark'); root.classList.toggle('theme-dark',theme==='dark');
+
             } catch(e) {}
         })();
     </script>
     <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
-    <script src="/static/js/theme.js?v=2026.08.17.1786430759"></script>
+    <script src="/static/js/theme.js?v=2026.10.04.theme-1"></script>
     <script src="/static/js/i18n.js?v=2026.08.17.1787068901"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
     <link rel="stylesheet" href="/static/css/studio-projects.css?v=2026.09.19.1">
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css?v=2026.10.04.theme-1">
 </head>
 <body data-studio-module="canvas">
     <div class="studio-project-page">
         <main class="studio-project-main">
             <section class="studio-project-toolbar" aria-labelledby="studioProjectListTitle">
-                <div>
-                    <h2 id="studioProjectListTitle">画布项目</h2>
-                    <p id="studioProjectCount" class="studio-project-count">正在读取...</p>
-                </div>
-                <div class="studio-project-toolbar-actions">
-                    <label class="studio-search-field" for="studioProjectSearch">
-                        <i data-lucide="search" aria-hidden="true"></i>
-                        <input id="studioProjectSearch" type="search" autocomplete="off" placeholder="搜索项目" aria-label="搜索项目">
-                    </label>
-                    <button id="studioNewProjectButton" class="studio-primary-button" type="button">
-                        <i data-lucide="plus" aria-hidden="true"></i><span>新建项目</span>
-                    </button>
-                </div>
-            </section>
-
-            <section id="studioCanvasTools" class="studio-legacy-tools">
-                <div class="studio-legacy-copy">
-                    <div class="studio-section-kicker" data-copy="canvasTools">画布工具</div>
-                    <strong data-copy="canvasToolsTitle">导入工程与回收站</strong>
-                    <span data-copy="canvasToolsHint">导入与导出使用同一套工程 ZIP 结构；打开画布后可在工作流工具中导入工程，删除的画布可从回收站恢复。</span>
-                </div>
-                <div class="studio-legacy-actions">
-                    <button id="studioImportGuide" class="studio-secondary-button" type="button"><i data-lucide="file-input" aria-hidden="true"></i><span>导入工程</span></button>
-                    <button id="studioTrashButton" class="studio-secondary-button" type="button"><i data-lucide="trash-2" aria-hidden="true"></i><span>回收站</span><b id="studioTrashBadge" hidden>0</b></button>
+                <div class="studio-project-toolbar-top">
+                    <div class="studio-project-toolbar-heading">
+                        <h2 id="studioProjectListTitle">画布项目</h2>
+                        <p id="studioProjectDescription" class="studio-project-description">整理素材、连接画布节点，逐步完成作品。</p>
+                    </div>
+                    <div class="studio-project-toolbar-actions">
+                        <label class="studio-search-field" for="studioProjectSearch">
+                            <i data-lucide="search" aria-hidden="true"></i>
+                            <input id="studioProjectSearch" type="search" autocomplete="off" placeholder="搜索项目" aria-label="搜索项目">
+                        </label>
+                        <button id="studioPrepareButton" class="studio-secondary-button" type="button"><i data-lucide="book-open-check" aria-hidden="true"></i><span>准备创作技能</span></button>
+                        <button id="studioNewProjectButton" class="studio-primary-button" type="button">
+                            <i data-lucide="plus" aria-hidden="true"></i><span>新建项目</span>
+                        </button>
+                        <button id="studioImportGuide" class="studio-secondary-button" type="button"><i data-lucide="file-input" aria-hidden="true"></i><span>导入工程</span></button>
+                        <button id="studioTrashButton" class="studio-secondary-button" type="button"><i data-lucide="trash-2" aria-hidden="true"></i><span>回收站</span><b id="studioTrashBadge" hidden>0</b></button>
+                    </div>
                 </div>
             </section>
 

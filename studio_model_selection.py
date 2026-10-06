@@ -61,7 +61,15 @@ IDENTITY_RULES: List[Dict[str, Any]] = [
 MODEL_ID_RULES: List[Dict[str, Any]] = [
     {"family": "series-image-seedream", "label": {"zh": "Seedream", "en": "Seedream"}, "tokens": ["/jimeng-", "dreamina-"], "node_types": ["image_generation"]},
     {"family": "series-image-nano-banana", "label": {"zh": "Nano Banana", "en": "Nano Banana"}, "tokens": ["nano-banana", "nanobanana"], "node_types": ["image_generation"]},
-    {"family": "series-image-grok-image", "label": {"zh": "Grok Image", "en": "Grok Image"}, "tokens": ["grok-image", "grok-imagine-image", "grok-3-image", "grok-4-image", "laohu-image-g"], "node_types": ["image_generation"]},
+    {"family": "series-image-gpt-image", "label": {"zh": "GPT Image", "en": "GPT Image"}, "model_ids": [
+        "laohu-image-g-v2-lowprice",
+        "laohu-image-g-v2.5-flare",
+        "laohu-image-g-v2.5-lowprice",
+        "laohu-image-g-v2.5-sunburst",
+        "laohu-image-g2-i2i",
+        "laohu-image-g2-t2i",
+    ], "node_types": ["image_generation"], "source_ref": "现有 laohu 静态与动态能力档案为这些精确 ID 建立 GPT Image 输入/用途映射；未据 g 前缀外推"},
+    {"family": "series-image-grok-image", "label": {"zh": "Grok Image", "en": "Grok Image"}, "tokens": ["grok-image", "grok-imagine-image", "grok-3-image", "grok-4-image", "laohu-image-gk-"], "node_types": ["image_generation"]},
     {"family": "series-image-midjourney", "label": {"zh": "Midjourney", "en": "Midjourney"}, "tokens": ["midjourney"], "node_types": ["image_generation"]},
     {"family": "series-image-qwen-image", "label": {"zh": "Qwen Image", "en": "Qwen Image"}, "tokens": ["qwen-image", "qwen/image"], "node_types": ["image_generation"]},
     {"family": "series-image-seedream", "label": {"zh": "Seedream", "en": "Seedream"}, "tokens": ["seedream"], "node_types": ["image_generation"]},
@@ -104,8 +112,10 @@ def match_identity_rule(
             if re.search(pattern, alias_text, re.I):
                 return {"family": family, "label": label, "tokens": [], "node_types": ["text_generation"], "source_ref": source_ref}
     for rule in MODEL_ID_RULES:
-        if node_type in rule["node_types"] and any(token in model_text for token in rule["tokens"]):
-            return {**rule, "source_ref": "真实模型 ID 的已确认产品系列"}
+        exact_model_ids = {str(value).lower() for value in rule.get("model_ids") or []}
+        token_match = any(token in model_text for token in rule.get("tokens") or [])
+        if node_type in rule["node_types"] and (model_text in exact_model_ids or token_match):
+            return {**rule, "source_ref": rule.get("source_ref") or "真实模型 ID 的已确认产品系列"}
     if capability_provider_id == "jimeng-cli" and node_type == "image_generation" and model_text in {
         "3.0", "3.1", "4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0pro"
     }:
@@ -304,22 +314,185 @@ def compile_option(record: Dict[str, Any], *, adapter_id: str = "") -> Dict[str,
     }
 
 
+_IMAGE_OPERATION_LABELS = {
+    "text_to_image": ("文生图", "Text to Image"),
+    "image_to_image": ("图生图", "Image to Image"),
+    "text_to_image_or_image_to_image": ("文生图 / 图生图", "Text or Image to Image"),
+    "text_or_image_to_image": ("文生图 / 图生图", "Text or Image to Image"),
+    "text_or_reference_to_image": ("文生图 / 图生图", "Text or Image to Image"),
+}
+
+_MODE_LABELS = {
+    "text to image": ("text_to_image", "文生图", "Text to image"),
+    "文生图": ("text_to_image", "文生图", "Text to image"),
+    "image to image": ("image_to_image", "图生图", "Image to image"),
+    "图生图": ("image_to_image", "图生图", "Image to image"),
+    "text or image to image": ("text_or_image_to_image", "文生图 / 图生图", "Text or Image to Image"),
+    "文生图 / 图生图": ("text_or_image_to_image", "文生图 / 图生图", "Text or Image to Image"),
+    "image editing": ("image_editing", "图像编辑", "Image Editing"),
+    "图像编辑": ("image_editing", "图像编辑", "Image Editing"),
+    "regional editing": ("regional_editing", "局部编辑", "Regional Editing"),
+    "局部编辑": ("regional_editing", "局部编辑", "Regional Editing"),
+    "image segmentation": ("image_segmentation", "图像分割", "Image Segmentation"),
+    "图像分割": ("image_segmentation", "图像分割", "Image Segmentation"),
+    "low-price channel": ("low_price_channel", "低价渠道版", "Low-price Channel"),
+    "low price channel": ("low_price_channel", "低价渠道版", "Low-price Channel"),
+    "低价渠道": ("low_price_channel", "低价渠道版", "Low-price Channel"),
+    "低价渠道版": ("low_price_channel", "低价渠道版", "Low-price Channel"),
+    "official stable": ("official_stable", "官方稳定版", "Official Stable"),
+    "official stable version": ("official_stable", "官方稳定版", "Official Stable"),
+    "官方稳定": ("official_stable", "官方稳定版", "Official Stable"),
+    "官方稳定版": ("official_stable", "官方稳定版", "Official Stable"),
+    "fast": ("fast", "快速版", "Fast"),
+    "快速版": ("fast", "快速版", "Fast"),
+    "turbo": ("turbo", "极速版", "Turbo"),
+    "极速版": ("turbo", "极速版", "Turbo"),
+    "pro": ("pro", "专业版", "Pro"),
+    "专业版": ("pro", "专业版", "Pro"),
+    "standard": ("standard", "标准版", "Standard"),
+    "标准版": ("standard", "标准版", "Standard"),
+    "flare": ("flare", "Flare", "Flare"),
+    "sunburst": ("sunburst", "Sunburst", "Sunburst"),
+    "economy": ("economy", "经济渠道", "Economy"),
+    "stable-token": ("stable_token", "稳定 Token", "Stable Token"),
+}
+
+_GENERIC_MODE_LABELS = {"default", "默认"}
+_INPUT_DETAIL_LABELS = {"image input", "图片输入", "text input", "文字输入", "单图输入", "图片参考"}
+
+
+def _mode_parts(value: Any) -> List[str]:
+    return [part.strip() for part in str(value or "").split("·") if part.strip()]
+
+
+def _mode_label_entry(part: str) -> Optional[Tuple[str, str, str]]:
+    return _MODE_LABELS.get(part.strip().casefold())
+
+
+def _mode_version_value(part: str) -> str:
+    return part.strip().lower().lstrip("v")
+
+
+def _mode_numeric_version(parts: List[str]) -> str:
+    """只把审阅模式中的完整数字片段识别为版本，不拆解其他名称。"""
+    import re
+
+    return next((part for part in parts if re.fullmatch(r"[vV]?\d+(?:\.\d+)?", part.strip())), "")
+
+
+def _image_option_display_label(option: Dict[str, Any]) -> Tuple[str, str]:
+    """从审阅标签、精确 ID 和输入操作组成可辨认的图片运行模式名。"""
+    model_id = _norm(option.get("catalog_model_id"))
+    model_id_lower = model_id.lower()
+    reviewed_parts = _mode_parts(option.get("display_mode"))
+    variant_parts = _mode_parts(option.get("variant_name"))
+    variant_en_parts = _mode_parts(option.get("variant_name_en"))
+    reviewed_version = _mode_numeric_version(reviewed_parts)
+    variant_version = _mode_numeric_version(variant_parts)
+    version = (
+        reviewed_version
+        or variant_version
+        or _norm(option.get("model_version"))
+        or extract_version(model_id)[0]
+    )
+
+    # 已审阅模式中的 V2/V2.5 写法优先保留；档案版本为空时再从真实模型 ID 提取。
+    version_display = next((part for part in reviewed_parts
+                            if version and _mode_version_value(part) == _mode_version_value(version)), "")
+    version_display = version_display or reviewed_version
+    if not version_display:
+        version_display = variant_version
+    version_display = version_display or version
+
+    reviewed_entries = [(part, _mode_label_entry(part)) for part in reviewed_parts]
+    reviewed_purpose = next((entry for _, entry in reviewed_entries
+                             if entry and entry[0] in {"image_editing", "regional_editing", "image_segmentation"}), None)
+
+    operation = _norm(option.get("operation"))
+    purpose = reviewed_purpose
+    if purpose is None:
+        operation_label = _IMAGE_OPERATION_LABELS.get(operation)
+        if operation_label:
+            purpose = (operation, operation_label[0], operation_label[1])
+        else:
+            purpose = next((entry for _, entry in reviewed_entries
+                            if entry and entry[0] in {"text_to_image", "image_to_image", "text_or_image_to_image"}), None)
+
+    descriptor_entries: List[Tuple[str, str, str]] = []
+
+    def add_descriptor(part: str, counterpart: str = "") -> None:
+        cleaned = part.strip()
+        if not cleaned or cleaned.casefold() in _GENERIC_MODE_LABELS or cleaned.casefold() in _INPUT_DETAIL_LABELS:
+            return
+        if version and _mode_version_value(cleaned) == _mode_version_value(version):
+            return
+        if cleaned.casefold() in {model_id_lower, _norm(option.get("family_name")).lower(), operation.casefold()}:
+            return
+        entry = _mode_label_entry(cleaned)
+        if entry:
+            # 运行目的已表达同一信息时，删除重复片段。
+            if entry[0] in {"text_to_image", "image_to_image", "text_or_image_to_image"}:
+                return
+            if purpose and entry[0] == purpose[0]:
+                return
+            descriptor_entries.append(entry)
+            return
+        counterpart = counterpart.strip()
+        counterpart_is_id = counterpart.casefold() in {
+            model_id_lower, _norm(option.get("family_name")).lower(), operation.casefold(),
+        }
+        if not counterpart or counterpart.casefold() in _GENERIC_MODE_LABELS | _INPUT_DETAIL_LABELS or counterpart_is_id:
+            counterpart = cleaned
+        # 保留档案中的未映射变体名称，并使用同位置英文名称；不推断其质量或渠道含义。
+        descriptor_entries.append(("label:" + cleaned.casefold(), cleaned, counterpart))
+
+    for part in reviewed_parts:
+        add_descriptor(part)
+    if len(variant_parts) == len(variant_en_parts):
+        for zh_part, en_part in zip(variant_parts, variant_en_parts):
+            add_descriptor(zh_part, en_part)
+    else:
+        for part in variant_parts:
+            add_descriptor(part)
+        for part in variant_en_parts:
+            add_descriptor(part)
+
+    # 按审阅档案先后取值，不依赖候选列表顺序；归并中英文同义项与重复渠道标签。
+    unique_descriptors: List[Tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for entry in descriptor_entries:
+        if entry[0] not in seen:
+            seen.add(entry[0])
+            unique_descriptors.append(entry)
+
+    zh_parts = [part for part in (version_display, purpose[1] if purpose else "") if part]
+    en_parts = [part for part in (version_display, purpose[2] if purpose else "") if part]
+    zh_parts.extend(item[1] for item in unique_descriptors)
+    en_parts.extend(item[2] for item in unique_descriptors)
+    if not zh_parts:
+        # 没有可核实的版本、用途或名称时，保留原始模型 ID 供用户核对。
+        return model_id, model_id
+    return " · ".join(zh_parts), " · ".join(en_parts)
+
+
 def option_display_label(option: Dict[str, Any]) -> Dict[str, str]:
-    """第三栏叶子主标题：必要版本 · 必要档次 · 任务模式（§5.5）。"""
-    reviewed_mode = _norm(option.get("display_mode"))
-    if reviewed_mode:
-        label = dict(option.get("canonical_family_label") or {})
-        return {"zh": reviewed_mode, "en": reviewed_mode, "family_zh": label.get("zh", ""), "family_en": label.get("en", "")}
-    parts = [
-        _norm(option.get("model_version")),
-        _norm(option.get("edition_id")),
-        _norm(option.get("operation")),
-    ]
-    text = " · ".join(p for p in parts if p)
-    if not text:
-        text = _norm(option.get("catalog_model_id"))
+    """第三栏叶子主标题；名称改变不改变 option_id 或请求身份。"""
     label = dict(option.get("canonical_family_label") or {})
-    return {"zh": text, "en": text, "family_zh": label.get("zh", ""), "family_en": label.get("en", "")}
+    if _norm(option.get("node_type")) == "image_generation":
+        zh, en = _image_option_display_label(option)
+    else:
+        reviewed_mode = _norm(option.get("display_mode"))
+        if reviewed_mode:
+            zh, en = reviewed_mode, _norm(option.get("display_mode_en")) or reviewed_mode
+        else:
+            parts = [
+                _norm(option.get("model_version")),
+                _norm(option.get("edition_id")),
+                _norm(option.get("operation")),
+            ]
+            fallback = " · ".join(part for part in parts if part) or _norm(option.get("catalog_model_id"))
+            zh, en = fallback, fallback
+    return {"zh": zh, "en": en, "family_zh": label.get("zh", ""), "family_en": label.get("en", "")}
 
 
 def compile_options(records: Iterable[Dict[str, Any]], *, adapter_id: str = "") -> List[Dict[str, Any]]:
@@ -520,6 +693,29 @@ def compile_catalog_options(catalog: Dict[str, Any], *, adapter_id: str = "") ->
                 from model_capabilities import generation_visibility_issue
                 visibility_issue = generation_visibility_issue({**model, **scoped})
                 tags_zh, tags_en = generation_capability_tags({**model, **scoped})
+                use_image_mode_label = node_type == "image_generation"
+                if use_image_mode_label:
+                    display = option_display_label({
+                        "canonical_family_label": identity["canonical_family_label"],
+                        "catalog_model_id": model_id,
+                        "family_name": _norm(model.get("family_name")),
+                        "model_version": identity.get("model_version", ""),
+                        "edition_id": identity.get("edition_id"),
+                        "display_mode": identity.get("display_mode", ""),
+                        "display_mode_en": identity.get("display_mode_en", ""),
+                        "variant_name": _norm(model.get("variant_name")),
+                        "variant_name_en": _norm(model.get("variant_name_en")),
+                        "operation": operation,
+                        "node_type": node_type,
+                    })
+                    display_label = {"zh": display["zh"], "en": display["en"]}
+                else:
+                    # 图片命名规则不扩展到文本、视频、音频等其他能力。
+                    display_label = {
+                        "zh": _norm(model.get("variant_name")) or _norm(identity.get("display_mode")) or model_id,
+                        "en": _norm(model.get("variant_name_en")) or _norm(model.get("variant_name"))
+                             or _norm(identity.get("display_mode_en")) or _norm(identity.get("display_mode")) or model_id,
+                    }
                 option = {
                     "schema_version": SCHEMA_VERSION,
                     "option_id": compute_option_id(
@@ -538,8 +734,10 @@ def compile_catalog_options(catalog: Dict[str, Any], *, adapter_id: str = "") ->
                     "model_version": identity["model_version"],
                     "edition_id": identity["edition_id"],
                     "display_mode": identity.get("display_mode", ""),
-                    "display_label": {'zh': model.get('variant_name') or identity.get('display_mode') or model_id,
-                                      'en': model.get('variant_name_en') or model.get('variant_name') or model_id},
+                    "display_label": display_label,
+                    # Hypit 通过模型 variant 字段读取同一份投影名称。
+                    "variant_name": display_label["zh"],
+                    "variant_name_en": display_label["en"],
                     "operation": operation,
                     "node_type": node_type,
                     "connection_id": connection_id,
@@ -568,9 +766,32 @@ def compile_catalog_options(catalog: Dict[str, Any], *, adapter_id: str = "") ->
                     "profile_ref": _norm(scoped.get("profile_ref") or model.get("profile_ref") or model_id),
                 }
                 compiled.setdefault(option["option_id"], option)
-    return sorted(compiled.values(), key=lambda item: (
+    options = sorted(compiled.values(), key=lambda item: (
         item["canonical_family_id"], item["connection_id"], item["region_id"], item["catalog_model_id"], item["operation"]
     ))
+    # 同平台、同地区、同家族的模式重名时，以真实目录 ID 作为最后消歧信息。
+    duplicate_labels: Dict[Tuple[str, str, str, str, str], List[Dict[str, Any]]] = {}
+    for option in options:
+        if option.get("node_type") != "image_generation":
+            continue
+        label = option.get("display_label") or {}
+        key = (
+            _norm(option.get("connection_id")), _norm(option.get("region_id")),
+            _norm(option.get("canonical_family_id")), _norm(label.get("zh")), _norm(label.get("en")),
+        )
+        duplicate_labels.setdefault(key, []).append(option)
+    for group in duplicate_labels.values():
+        if len({_norm(item.get("catalog_model_id")) for item in group}) < 2:
+            continue
+        for option in group:
+            model_id = _norm(option.get("catalog_model_id"))
+            option["display_label"] = {
+                "zh": f"{option['display_label']['zh']} · {model_id}",
+                "en": f"{option['display_label']['en']} · {model_id}",
+            }
+            option["variant_name"] = option["display_label"]["zh"]
+            option["variant_name_en"] = option["display_label"]["en"]
+    return options
 
 
 def catalog_revision(options: Iterable[Dict[str, Any]]) -> str:

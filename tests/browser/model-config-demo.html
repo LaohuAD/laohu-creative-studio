@@ -2,12 +2,13 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>模型配置公共控件 · 假数据验收页（测试专用，不进入产品导航）</title>
 <link rel="stylesheet" href="../../static/css/model-config-control.css">
 <style>
     body { margin: 0; padding: 16px; background: #f7f3eb; font: 14px/1.5 -apple-system, "PingFang SC", sans-serif; }
     #host { display: flex; gap: 12px; flex-wrap: wrap; }
-    #host > div { width: 460px; }
+    #host > div { width: min(460px, calc(100vw - 32px)); min-width: 0; }
     .fixture-note { margin: 0 0 12px; color: #8a8378; font-size: 12px; }
 </style>
 </head>
@@ -20,9 +21,9 @@
 /* 纯假目录。test_only=true，ID 全部使用 fixture 前缀（规划 §18.1）。 */
 function buildCatalog(scale) {
     var families = [
-        { id: 'fixture-seedance', label: { zh: 'Seedance', en: 'Seedance' }, tags: ['多模态参考', '首尾帧', '视频参考'] },
-        { id: 'fixture-kling', label: { zh: 'Kling', en: 'Kling' }, tags: ['首尾帧', '图片参考'] },
-        { id: 'fixture-vidu', label: { zh: 'Vidu', en: 'Vidu' }, tags: ['文生视频', '首尾帧'] }
+        { id: 'fixture-seedance', label: { zh: 'Seedance', en: 'Seedance' }, tags: ['多模态参考', '首尾帧', '视频参考'], tagsEn: ['Multimodal reference', 'First and last frame', 'Video reference'] },
+        { id: 'fixture-kling', label: { zh: 'Kling', en: 'Kling' }, tags: ['首尾帧', '图片参考'], tagsEn: ['First and last frame', 'Image reference'] },
+        { id: 'fixture-vidu', label: { zh: 'Vidu', en: 'Vidu' }, tags: ['文生视频', '首尾帧'], tagsEn: ['Text to video', 'First and last frame'] }
     ];
     var platforms = [
         { key: 'fixture-conn-ai@global', provider: 'fixture-rh', region: 'global' },
@@ -52,6 +53,7 @@ function buildCatalog(scale) {
                     region_id: platform.region,
                     platform_label: platform.provider + (platform.region === 'default' ? '' : ' ' + platform.region.toUpperCase()),
                     capability_tags: family.tags,
+                    capability_tags_en: family.tagsEn,
                     profile_ref: 'fixture-profile-' + family.id,
                     selectable: !blocked,
                     runnable: !blocked,

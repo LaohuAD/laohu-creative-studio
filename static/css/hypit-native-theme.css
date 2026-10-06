@@ -5,28 +5,29 @@
  */
 :root {
   color-scheme: light;
-  --app: #f7f3eb;
-  --panel: #fffaf2;
-  --panel-raised: #fffdf8;
-  --field: #f0ebe2;
-  --lane: #eee8df;
-  --line: #ded8ce;
-  --line-strong: #c7beb1;
-  --text: #30363b;
-  --text-2: #6f7b83;
-  --text-3: #98a0a3;
-  --subtab-surface: #f0ebe2;
-  --subtab-active-surface: #fffdf8;
-  --subtab-active-text: #30363b;
-  --brand-200: #ead1a5;
-  --brand-400: #c29a61;
-  --brand-500: #b48a5a;
-  --brand-600: #916a43;
-  --brand-soft: rgba(180, 138, 90, .14);
-  --brand-foreground: #30363b;
-  --interaction-accent: #7891a4;
-  --interaction-pressed: #5f7789;
-  --danger: #b85c62;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --app: var(--studio-bg);
+  --panel: var(--studio-surface);
+  --panel-raised: var(--studio-card);
+  --field: var(--studio-soft);
+  --lane: var(--studio-bg);
+  --line: var(--studio-line);
+  --line-strong: var(--studio-line-strong);
+  --text: var(--studio-text);
+  --text-2: var(--studio-muted);
+  --text-3: var(--studio-faint);
+  --subtab-surface: var(--studio-soft);
+  --subtab-active-surface: var(--studio-accent);
+  --subtab-active-text: var(--studio-strong-text);
+  --brand-200: var(--studio-soft-strong);
+  --brand-400: var(--studio-accent-text);
+  --brand-500: var(--studio-accent);
+  --brand-600: var(--studio-accent-strong);
+  --brand-soft: var(--studio-accent-soft);
+  --brand-foreground: var(--studio-strong-text);
+  --interaction-accent: var(--studio-focus);
+  --interaction-pressed: var(--studio-accent-strong);
+  --danger: var(--studio-danger);
   --ok: #3b8068;
   --tone-orange: #a96532;
   --tone-orange-rail: #d6945c;
@@ -41,7 +42,7 @@
   --semantic-segment: #617f80;
   --semantic-word: #41696a;
   --semantic-intent: #a07c38;
-  --semantic-moment: #b48a5a;
+  --semantic-moment: #7047eb;
   --semantic-current: #5f9691;
   --intent-depth-0: #e4ca86;
   --intent-depth-1: #c7aa5b;
@@ -59,32 +60,43 @@
   --tone-magenta-muted-rail: #a27a96;
   --tone-neutral: #778087;
   --tone-neutral-rail: #aab2b5;
+  --native-code-text: var(--studio-text);
+  --native-code-line-number: var(--studio-muted);
+  --native-code-comment: var(--studio-muted);
+  --native-code-punctuation: var(--studio-muted);
+  --native-code-tag: var(--studio-accent-text);
+  --native-code-attribute: var(--studio-info);
+  --native-code-string: var(--studio-info);
+  --native-code-reference: var(--studio-danger);
+  --native-code-role: var(--studio-accent-text);
+  --native-code-marker: var(--studio-muted);
 }
 
 :root[data-laohu-theme="dark"] {
   color-scheme: dark;
-  --app: #202528;
-  --panel: #282d2f;
-  --panel-raised: #303638;
-  --field: #252a2d;
-  --lane: #202528;
-  --line: #465055;
-  --line-strong: #627078;
-  --text: #f2eee7;
-  --text-2: #bec5c4;
-  --text-3: #929da1;
-  --subtab-surface: #252a2d;
-  --subtab-active-surface: #3a4245;
-  --subtab-active-text: #f2eee7;
-  --brand-200: #ecd29b;
-  --brand-400: #d4b47a;
-  --brand-500: #d4b47a;
-  --brand-600: #b48a5a;
-  --brand-soft: rgba(212, 180, 122, .16);
-  --brand-foreground: #f2eee7;
-  --interaction-accent: #a7bac4;
-  --interaction-pressed: #c4d2d8;
-  --danger: #ed9a96;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --app: var(--studio-bg);
+  --panel: var(--studio-surface);
+  --panel-raised: var(--studio-card);
+  --field: var(--studio-soft);
+  --lane: var(--studio-bg);
+  --line: var(--studio-line);
+  --line-strong: var(--studio-line-strong);
+  --text: var(--studio-text);
+  --text-2: var(--studio-muted);
+  --text-3: var(--studio-faint);
+  --subtab-surface: var(--studio-soft);
+  --subtab-active-surface: var(--studio-accent);
+  --subtab-active-text: var(--studio-strong-text);
+  --brand-200: var(--studio-soft-strong);
+  --brand-400: var(--studio-accent-text);
+  --brand-500: var(--studio-accent);
+  --brand-600: var(--studio-accent-strong);
+  --brand-soft: var(--studio-accent-soft);
+  --brand-foreground: var(--studio-strong-text);
+  --interaction-accent: var(--studio-focus);
+  --interaction-pressed: var(--studio-accent-strong);
+  --danger: var(--studio-danger);
   --ok: #8ac9a8;
   --tone-orange: #d39460;
   --tone-orange-rail: #edb47f;
@@ -99,7 +111,7 @@
   --semantic-segment: #8ab1b0;
   --semantic-word: #b3d0cd;
   --semantic-intent: #d6b86b;
-  --semantic-moment: #d4b47a;
+  --semantic-moment: #7047eb;
   --semantic-current: #8fc8c0;
   --intent-depth-0: #f0d995;
   --intent-depth-1: #ddc174;
@@ -117,34 +129,54 @@
   --tone-magenta-muted-rail: #c39bb5;
   --tone-neutral: #b0bcc1;
   --tone-neutral-rail: #d0d9dc;
+  --native-code-text: var(--studio-text);
+  --native-code-line-number: var(--studio-muted);
+  --native-code-comment: var(--studio-muted);
+  --native-code-punctuation: var(--studio-muted);
+  --native-code-tag: var(--studio-accent-text);
+  --native-code-attribute: var(--studio-info);
+  --native-code-string: var(--studio-info);
+  --native-code-reference: var(--studio-danger);
+  --native-code-role: var(--studio-accent-text);
+  --native-code-marker: var(--studio-muted);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-laohu-theme]) {
     color-scheme: dark;
-    --app: #202528;
-    --panel: #282d2f;
-    --panel-raised: #303638;
-    --field: #252a2d;
-    --lane: #202528;
-    --line: #465055;
-    --line-strong: #627078;
-    --text: #f2eee7;
-    --text-2: #bec5c4;
-    --text-3: #929da1;
-    --subtab-surface: #252a2d;
-    --subtab-active-surface: #3a4245;
-    --subtab-active-text: #f2eee7;
-    --brand-200: #ecd29b;
-    --brand-400: #d4b47a;
-    --brand-500: #d4b47a;
-    --brand-600: #b48a5a;
-    --brand-soft: rgba(212, 180, 122, .16);
-    --brand-foreground: #f2eee7;
-    --interaction-accent: #a7bac4;
-    --interaction-pressed: #c4d2d8;
-    --danger: #ed9a96;
+    --app: var(--studio-bg);
+    --panel: var(--studio-surface);
+    --panel-raised: var(--studio-card);
+    --field: var(--studio-soft);
+    --lane: var(--studio-bg);
+    --line: var(--studio-line);
+  --line-strong: var(--studio-line-strong);
+    --text: var(--studio-text);
+    --text-2: var(--studio-muted);
+    --text-3: var(--studio-faint);
+    --subtab-surface: var(--studio-soft);
+    --subtab-active-surface: var(--studio-accent);
+    --subtab-active-text: var(--studio-strong-text);
+    --brand-200: var(--studio-soft-strong);
+    --brand-400: var(--studio-accent-text);
+    --brand-500: var(--studio-accent);
+    --brand-600: var(--studio-accent-strong);
+    --brand-soft: var(--studio-accent-soft);
+    --brand-foreground: var(--studio-strong-text);
+    --interaction-accent: var(--studio-focus);
+    --interaction-pressed: var(--studio-accent-strong);
+    --danger: var(--studio-danger);
     --ok: #8ac9a8;
+    --native-code-text: var(--studio-text);
+    --native-code-line-number: var(--studio-muted);
+    --native-code-comment: var(--studio-muted);
+    --native-code-punctuation: var(--studio-muted);
+    --native-code-tag: var(--studio-accent-text);
+    --native-code-attribute: var(--studio-info);
+    --native-code-string: var(--studio-info);
+    --native-code-reference: var(--studio-danger);
+    --native-code-role: var(--studio-accent-text);
+    --native-code-marker: var(--studio-muted);
   }
 }
 
@@ -279,6 +311,62 @@ select {
 .library-empty,
 .inspector-empty,
 .preview-unavailable {
+  color: var(--text-2) !important;
+}
+
+/* Hypit renders source as .code-line DOM, separately from its hidden textarea.
+   Recolor the real read view as well as the editor without touching previews. */
+.code-scroll .code-line code {
+  color: var(--native-code-text) !important;
+}
+
+.code-scroll .code-line .line-number {
+  color: var(--native-code-line-number) !important;
+}
+
+.code-scroll .tok-header,
+.code-scroll .tok-comment {
+  color: var(--native-code-comment) !important;
+}
+
+.code-scroll .tok-punct {
+  color: var(--native-code-punctuation) !important;
+}
+
+.code-scroll .tok-tag {
+  color: var(--native-code-tag) !important;
+}
+
+.code-scroll .tok-attr {
+  color: var(--native-code-attribute) !important;
+}
+
+.code-scroll .tok-string {
+  color: var(--native-code-string) !important;
+}
+
+.code-scroll .tok-reference {
+  color: var(--native-code-reference) !important;
+}
+
+.code-scroll .tok-role {
+  color: var(--native-code-role) !important;
+}
+
+.code-scroll .tok-marker,
+.code-scroll .tok-marker.tone-0,
+.code-scroll .tok-marker.tone-1,
+.code-scroll .tok-marker.tone-2,
+.code-scroll .tok-marker.tone-3 {
+  color: var(--native-code-marker) !important;
+}
+
+.property-group h3 {
+  color: var(--text) !important;
+}
+
+.property > span,
+.parameter-label {
   color: var(--text-2) !important;
 }
 

@@ -56,6 +56,19 @@ class ExecutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(node['images'][0]['url'], '/api/results/result')
             self.assertEqual(len(node['resultVersions']), 1)
 
+    async def test_task_metadata_callback_is_persisted_server_side(self):
+        self.service.task_metadata = lambda canvas, node, request: {
+            'hypit_source_node_id': node['id'],
+            'hypit_source_recipe_fingerprint': 'a' * 64,
+            'hypit_supported_output_slots': ['image'],
+        }
+        result = await self.service.submit(self.canvas, self.canvas['nodes'][0], 'metadata')
+        task = self.store.get_canvas_task(result['task_ids'][0])
+        self.assertEqual(task['hypit_source_node_id'], 'a')
+        self.assertEqual(task['hypit_source_recipe_fingerprint'], 'a' * 64)
+        self.assertEqual(task['hypit_supported_output_slots'], ['image'])
+        await self.finish()
+
     async def test_copy_run_forks_and_edit_during_run_keeps_new_recipe(self):
         self.canvas['nodes'].append({**copy.deepcopy(self.canvas['nodes'][0]), 'id': 'b'})
         await self.service.submit(self.canvas, self.canvas['nodes'][1], 'two')

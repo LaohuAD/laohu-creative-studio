@@ -45,8 +45,10 @@ class HypitTests(unittest.TestCase):
         style.write_text(':root { --brand-500: #e3406a; }\n', encoding='utf-8')
         index.write_text('<!doctype html><html><head></head><body><div id="app"></div></body></html>\n', encoding='utf-8')
         theme = self.root / 'static/css/hypit-native-theme.css'
+        palettes = self.root / 'static/css/studio-theme-palettes.css'
         theme.parent.mkdir(parents=True)
         theme.write_text(':root { --brand-500: #b48a5a; }', encoding='utf-8')
+        palettes.write_text(':root { --shared-palette-test: teal; }', encoding='utf-8')
 
         first = self.runtime._ensure_native_theme()
         style_after_first = style.read_text(encoding='utf-8')
@@ -60,6 +62,17 @@ class HypitTests(unittest.TestCase):
         self.assertEqual(index_after_first.count('laohu-native-theme:start'), 1)
         self.assertIn('dataset.laohuTheme', index_after_first)
         self.assertIn('event.source !== window.parent', index_after_first)
+        self.assertIn('laohu_theme_id', index_after_first)
+        self.assertIn('laohu_appearance', index_after_first)
+        self.assertIn('dataset.laohuThemeId', index_after_first)
+        self.assertIn('dataset.laohuAppearanceMode', index_after_first)
+        self.assertIn('const incoming = event.data', index_after_first)
+        self.assertIn('incoming.preference', index_after_first)
+        self.assertIn('themeId: incoming.themeId || saved.themeId', index_after_first)
+        self.assertIn('appearance: incoming.appearance || saved.appearance', index_after_first)
+        self.assertIn('laohu_resolved_appearance', index_after_first)
+        self.assertIn('laohu_parent_origin', index_after_first)
+        self.assertIn('--shared-palette-test: teal', style_after_first)
         backup = self.root / 'backups/hypit/native-studio/0.2.7'
         self.assertTrue((backup / 'style.css').is_file())
         self.assertTrue((backup / 'index.html').is_file())

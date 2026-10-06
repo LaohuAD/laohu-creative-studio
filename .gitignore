@@ -4,6 +4,7 @@
 __pycache__/
 **/__pycache__/
 *.py[cod]
+!python/**/*.pyd
 *.log
 *.zip
 
@@ -21,6 +22,7 @@ data/*
 assets/
 output/
 uploads/
+.cache/
 /workflows/
 cache/
 backups/

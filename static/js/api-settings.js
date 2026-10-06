@@ -48,8 +48,19 @@ const rhWorkflowsList = document.getElementById('rhWorkflowsList');
 const rhWorkflowsCount = document.getElementById('rhWorkflowsCount');
 const runningHubModelRegionTabs = document.getElementById('runningHubModelRegionTabs');
 const settingsContent = document.getElementById('settingsContent');
+const apiSettingsBootState = document.getElementById('apiSettingsBootState');
 const providerSettingsView = document.getElementById('providerSettingsView');
 const canvasModelSettingsBlock = document.getElementById('canvasModelSettingsBlock');
+const articleSettingsBlock = document.getElementById('articleSettingsBlock');
+const articleSettingsNav = document.getElementById('articleSettingsNav');
+const articleSettingsStatus = document.getElementById('articleSettingsStatus');
+const articleSettingsFrame = document.getElementById('articleSettingsCanvasFrame');
+const articleSettingsResetButton = document.getElementById('articleSettingsReset');
+const articleSettingsNewTabButton = document.getElementById('articleSettingsNewTab');
+const canvasSettingsStatus = document.getElementById('canvasSettingsStatus');
+const canvasSettingsFrame = document.getElementById('canvasSettingsCanvasFrame');
+const canvasSettingsResetButton = document.getElementById('canvasSettingsReset');
+const canvasSettingsNewTabButton = document.getElementById('canvasSettingsNewTab');
 const canvasModelProviderSelect = document.getElementById('canvasModelProviderSelect');
 const comfyuiSettingsBlock = document.getElementById('comfyuiSettingsBlock');
 const comfyuiSubnav = document.getElementById('comfyuiSubnav');
@@ -161,10 +172,29 @@ let apiAutosaveLastWriteRevision = 0;
 let apiAutosaveRevision = 0;
 let apiNavigationCaptureInProgress = false;
 let apiClosingHypitSettings = false;
+const ARTICLE_SETTINGS_CANVAS_ID = 'article-settings';
+const CANVAS_SETTINGS_CANVAS_ID = 'canvas-settings';
+let articleSettingsBootstrap = null;
+let articleSettingsBootstrapPromise = null;
+let articleSettingsLoadPromise = null;
+let articleSettingsLoaded = false;
+let articleSettingsRequestSequence = 0;
+let articleSettingsResetting = false;
+let articleSettingsStatusState = null;
+let canvasSettingsBootstrap = null;
+let canvasSettingsBootstrapPromise = null;
+let canvasSettingsLoadPromise = null;
+let canvasSettingsLoaded = false;
+let canvasSettingsRequestSequence = 0;
+let canvasSettingsResetting = false;
+let canvasSettingsStatusState = null;
 
 function closeHypitSettingsForApiNavigation(){
     if(apiClosingHypitSettings) return;
     const layout = document.querySelector('.layout');
+    if(layout?.classList?.contains('article-settings-mode')) {
+        window.closeArticleSettings?.({deferEditor:true});
+    }
     if(!layout?.classList?.contains('hypit-settings-mode')) return;
     if(typeof window.closeHypitSettings !== 'function') return;
     apiClosingHypitSettings = true;
@@ -310,9 +340,15 @@ function setApiSettingsSection(section='connections'){
     closeHypitSettingsForApiNavigation();
     if(comfyuiSettingsMode) closeComfyUiSettings();
     apiSettingsSection = section === 'models' ? 'models' : 'connections';
+    if(apiSettingsSection === 'models' && settingsContent?.dataset.apiStartup === 'empty'){
+        setApiSettingsStartupState('ready');
+        if(editorTitle) editorTitle.textContent = tr('api.canvasModelsTitle');
+        if(editorSub) editorSub.textContent = '';
+    }
     if(apiSettingsSection === 'models') canvasModelCategory = 'all';
     syncApiSettingsView();
     renderEditor();
+    if(apiSettingsSection === 'models') void loadCanvasSettingsCanvas();
     refreshIcons();
 }
 function selectCanvasModelProvider(id){
@@ -321,7 +357,7 @@ function selectCanvasModelProvider(id){
     void captureApiObjectBeforeNavigation({immediate:true});
     clearFetchedModelState();
     selectedId = next.id;
-    apiSettingsSection = 'models';
+    apiSettingsSection = 'connections';
     syncApiSettingsView();
     renderEditor();
 }
@@ -368,6 +404,7 @@ function setComfyUiSection(section='local'){
 function openComfyUiSettings(section='local'){
     void captureApiObjectBeforeNavigation({immediate:true});
     closeHypitSettingsForApiNavigation();
+    if(settingsContent?.dataset.apiStartup === 'empty') setApiSettingsStartupState('ready');
     comfyuiSettingsMode = true;
     providerSettingsView?.classList.add('comfyui-embedded-mode');
     if(comfyuiSettingsBlock) comfyuiSettingsBlock.hidden = false;
@@ -385,6 +422,353 @@ function closeComfyUiSettings(){
     syncComfyUiNavigation();
     renderEditor();
 }
+function articleSettingsText(key, values={}){
+    let text = tr(`articleSettings.${key}`);
+    Object.entries(values).forEach(([name,value])=>{ text = text.replace(`{${name}}`, String(value)); });
+    return text;
+}
+function setArticleSettingsStatus(message, kind='', retry=false){
+    if(!articleSettingsStatus) return;
+    articleSettingsStatusState=message?{message,kind,retry}:null;
+    renderArticleSettingsStatus();
+}
+function renderArticleSettingsStatus(){
+    if(!articleSettingsStatus) return;
+    articleSettingsStatus.replaceChildren();
+    articleSettingsStatus.dataset.state = articleSettingsStatusState?.kind || '';
+    const state=articleSettingsStatusState;
+    const message=typeof state?.message==='function'?state.message():state?.message||'';
+    if(message){
+        const label=document.createElement('span');label.textContent=message;articleSettingsStatus.appendChild(label);
+    }
+    if(state?.retry){
+        const button=document.createElement('button');button.type='button';button.id='articleSettingsRetry';button.className='inline-action-btn';button.textContent=articleSettingsText('canvasRetry');
+        articleSettingsStatus.appendChild(button);
+    }
+    articleSettingsStatus.hidden=!message;
+}
+function articleSettingsCanvasUrl(payload,{embedded=true}={}){
+    const url=new URL(String(payload?.url||''),location.href);
+    if(url.origin!==location.origin||url.pathname!=='/static/smart-canvas.html'||url.searchParams.get('id')!==ARTICLE_SETTINGS_CANVAS_ID||url.searchParams.get('mode')!=='article-settings'){
+        throw new Error(articleSettingsText('canvasLoadError',{message:articleSettingsText('canvasRetry')}));
+    }
+    if(embedded)url.searchParams.set('embedded','1');
+    else url.searchParams.delete('embedded');
+    return `${url.pathname}${url.search}`;
+}
+async function loadArticleSettingsBootstrap({force=false}={}){
+    if(articleSettingsBootstrapPromise)return articleSettingsBootstrapPromise;
+    if(!force&&articleSettingsBootstrap)return articleSettingsBootstrap;
+    articleSettingsBootstrapPromise=(async()=>{
+        const response=await fetch('/api/studio/articles/settings-canvas',{cache:'no-store'});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok)throw new Error(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`);
+        if(payload?.id!==ARTICLE_SETTINGS_CANVAS_ID||payload?.canvas?.id!==ARTICLE_SETTINGS_CANVAS_ID)throw new Error(articleSettingsText('canvasLoadError',{message:articleSettingsText('canvasRetry')}));
+        articleSettingsCanvasUrl(payload);
+        articleSettingsBootstrap=payload;
+        return payload;
+    })().finally(()=>{articleSettingsBootstrapPromise=null;});
+    return articleSettingsBootstrapPromise;
+}
+function syncArticleSettingsCanvasContext(){
+    const target=articleSettingsFrame?.contentWindow;
+    if(!target||target===window)return;
+    try{
+        const preference=window.StudioTheme?.getPreference?.();
+        if(preference)target.postMessage({type:'studio-theme',preference},location.origin);
+        target.postMessage({type:'studio-lang',lang:window.StudioI18n?.lang?.()||'zh'},location.origin);
+    }catch(_){}
+}
+async function loadArticleSettingsCanvas({force=false}={}){
+    if(articleSettingsLoadPromise)return articleSettingsLoadPromise;
+    if(!force&&articleSettingsLoaded&&articleSettingsFrame?.getAttribute('src')){
+        articleSettingsFrame.removeAttribute('hidden');
+        return true;
+    }
+    const request=++articleSettingsRequestSequence;
+    articleSettingsFrame?.setAttribute('hidden','hidden');
+    setArticleSettingsStatus(()=>articleSettingsText('canvasLoading'));
+    articleSettingsLoadPromise=(async()=>{
+        try{
+            const payload=await loadArticleSettingsBootstrap({force});
+            if(request!==articleSettingsRequestSequence)return false;
+            const src=articleSettingsCanvasUrl(payload);
+            const current=articleSettingsFrame?.getAttribute('src')||'';
+            articleSettingsFrame?.removeAttribute('hidden');
+            if(current!==src||force){
+                articleSettingsLoaded=false;
+                await new Promise((resolve,reject)=>{
+                    const timer=setTimeout(()=>reject(new Error('画布页面加载超时')),15000);
+                    articleSettingsFrame.addEventListener('load',()=>{clearTimeout(timer);resolve();},{once:true});
+                    articleSettingsFrame.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('画布页面无法打开'));},{once:true});
+                    articleSettingsFrame.src=src;
+                });
+            }
+            if(request!==articleSettingsRequestSequence)return false;
+            articleSettingsLoaded=true;
+            syncArticleSettingsCanvasContext();
+            setArticleSettingsStatus('');
+            return true;
+        }catch(error){
+            if(request===articleSettingsRequestSequence){
+                articleSettingsLoaded=false;
+                articleSettingsFrame?.setAttribute('hidden','hidden');
+                setArticleSettingsStatus(()=>articleSettingsText('canvasLoadError',{message:error?.message||error}),'error',true);
+            }
+            return false;
+        }finally{
+            if(request===articleSettingsRequestSequence)articleSettingsLoadPromise=null;
+        }
+    })();
+    return articleSettingsLoadPromise;
+}
+function openArticleSettingsCanvasEditor(){
+    const opened=window.open('about:blank','_blank');
+    if(!opened){setArticleSettingsStatus(()=>articleSettingsText('canvasLoadError',{message:window.StudioI18n?.lang?.()==='en'?'the browser blocked the new tab':'浏览器阻止了新标签'}),'error');return false;}
+    try{opened.opener=null;}catch(_){}
+    void (async()=>{
+        try{
+            const payload=await loadArticleSettingsBootstrap();
+            const url=articleSettingsCanvasUrl(payload,{embedded:false});
+            opened.location.replace(new URL(url,location.origin).href);
+        }catch(error){
+            try{opened.close();}catch(_){}
+            setArticleSettingsStatus(()=>articleSettingsText('canvasLoadError',{message:error?.message||error}),'error',true);
+        }
+    })();
+    return true;
+}
+async function resetArticleSettingsCanvas(){
+    if(articleSettingsResetting)return false;
+    const message=articleSettingsText('canvasResetConfirm');
+    if(!window.StudioDialog?.confirm){
+        setArticleSettingsStatus(()=>articleSettingsText('canvasResetError',{message:articleSettingsText('canvasRetry')}),'error');
+        return false;
+    }
+    const confirmed=await window.StudioDialog.confirm(message,{title:articleSettingsText('canvasReset'),type:'danger'});
+    if(!confirmed)return false;
+    articleSettingsResetting=true;articleSettingsResetButton?.setAttribute('disabled','disabled');articleSettingsFrame?.classList.add('is-resetting');
+    try{
+        if(!await loadArticleSettingsCanvas())throw new Error(articleSettingsText('canvasRetry'));
+        const bridge=articleSettingsFrame?.contentWindow?.SettingsCanvasBridge;
+        if(!bridge?.prepareReset||!bridge?.applyReset)throw new Error(articleSettingsText('canvasRetry'));
+        const revision=await bridge.prepareReset();
+        const response=await fetch('/api/studio/articles/settings-canvas/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base_revision:revision,client_id:`article_settings_${Date.now().toString(36)}`})});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok||payload?.reset!==true||payload?.canvas?.id!==ARTICLE_SETTINGS_CANVAS_ID)throw new Error(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`);
+        if(await bridge.applyReset(payload.canvas)!==true)throw new Error(articleSettingsText('canvasRetry'));
+        setArticleSettingsStatus(()=>articleSettingsText('canvasResetDone'),'success');
+        return true;
+    }catch(error){
+        articleSettingsFrame?.contentWindow?.SettingsCanvasBridge?.cancelReset?.();
+        setArticleSettingsStatus(()=>articleSettingsText('canvasResetError',{message:error?.message||error}),'error');
+        return false;
+    }finally{
+        articleSettingsResetting=false;articleSettingsResetButton?.removeAttribute('disabled');articleSettingsFrame?.classList.remove('is-resetting');
+    }
+}
+function openArticleSettings(){
+    void captureApiObjectBeforeNavigation({immediate:true});
+    closeHypitSettingsForApiNavigation();
+    if(comfyuiSettingsMode)closeComfyUiSettings();
+    if(settingsContent?.dataset.apiStartup==='empty')setApiSettingsStartupState('ready');
+    apiSettingsSection='connections';comfyuiSettingsMode=false;
+    providerSettingsView?.classList.remove('comfyui-embedded-mode');
+    syncApiSettingsView();
+    document.querySelector('.layout')?.classList.add('article-settings-mode');
+    articleSettingsBlock?.removeAttribute('hidden');
+    articleSettingsNav?.classList.add('active');articleSettingsNav?.setAttribute('aria-current','page');
+    document.querySelector('.api-page-delete-btn')?.setAttribute('hidden','hidden');
+    document.querySelector('.api-page-save-btn')?.setAttribute('hidden','hidden');
+    void loadArticleSettingsCanvas();
+    refreshIcons();
+}
+function closeArticleSettings(){
+    document.querySelector('.layout')?.classList.remove('article-settings-mode');
+    articleSettingsBlock?.setAttribute('hidden','hidden');
+    articleSettingsNav?.classList.remove('active');articleSettingsNav?.setAttribute('aria-current','false');
+    document.querySelector('.api-page-delete-btn')?.removeAttribute('hidden');
+    document.querySelector('.api-page-save-btn')?.removeAttribute('hidden');
+}
+window.openArticleSettings=openArticleSettings;
+window.closeArticleSettings=closeArticleSettings;
+window.openArticleSettingsCanvasEditor=openArticleSettingsCanvasEditor;
+window.resetArticleSettingsCanvas=resetArticleSettingsCanvas;
+articleSettingsResetButton?.addEventListener('click',()=>{void resetArticleSettingsCanvas();});
+articleSettingsNewTabButton?.addEventListener('click',openArticleSettingsCanvasEditor);
+articleSettingsFrame?.addEventListener('load',syncArticleSettingsCanvasContext);
+articleSettingsStatus?.addEventListener('click',event=>{if(event.target.closest('#articleSettingsRetry'))void loadArticleSettingsCanvas({force:true});});
+window.addEventListener('studio-lang-change',()=>{
+    if(articleSettingsBlock&&!articleSettingsBlock.hidden){
+        renderArticleSettingsStatus();
+        syncArticleSettingsCanvasContext();
+    }
+});
+function canvasSettingsText(key, values={}){
+    const english=window.StudioI18n?.lang?.()==='en';
+    const messages={
+        loading:['正在读取画布模型配置…','Loading canvas model configuration…'],
+        loadError:['画布模型配置无法打开','Could not open canvas model configuration'],
+        retry:['重试','Retry'],
+        reset:['重置配置','Reset configuration'],
+        resetConfirm:['重置会清空配置画布中的节点、连线和显示排序偏好；不会停用模型或删除平台配置。是否继续？','Reset clears nodes, connections, and display-order preferences in the configuration canvas. It does not disable models or delete provider settings. Continue?'],
+        resetDone:['配置已重置','Configuration reset'],
+        resetError:['重置配置失败','Could not reset configuration'],
+        preferencesRefreshError:['显示偏好已重置；请重新读取当前配置','Display preferences were reset; reload the current configuration']
+    };
+    let message=(messages[key]||['',''])[english?1:0];
+    Object.entries(values).forEach(([name,value])=>{message=message.replace(`{${name}}`,String(value));});
+    return message;
+}
+function canvasSettingsPayloadError(payload,fallback='请求失败'){
+    const detail=payload?.detail??payload?.error??payload?.message;
+    if(typeof detail==='string')return detail||fallback;
+    if(detail&&typeof detail==='object')return String(detail.message||detail.message_en||fallback);
+    return fallback;
+}
+function setCanvasSettingsStatus(message,kind='',retry=false){
+    if(!canvasSettingsStatus)return;
+    canvasSettingsStatusState=message?{message,kind,retry}:null;
+    renderCanvasSettingsStatus();
+}
+function renderCanvasSettingsStatus(){
+    if(!canvasSettingsStatus)return;
+    canvasSettingsStatus.replaceChildren();
+    canvasSettingsStatus.dataset.state=canvasSettingsStatusState?.kind||'';
+    const state=canvasSettingsStatusState;
+    const message=typeof state?.message==='function'?state.message():state?.message||'';
+    if(message){const label=document.createElement('span');label.textContent=message;canvasSettingsStatus.appendChild(label);}
+    if(state?.retry){const button=document.createElement('button');button.type='button';button.id='canvasSettingsRetry';button.className='inline-action-btn';button.textContent=canvasSettingsText('retry');canvasSettingsStatus.appendChild(button);}
+    canvasSettingsStatus.hidden=!message;
+}
+function canvasSettingsCanvasUrl(payload,{embedded=true}={}){
+    const url=new URL(String(payload?.url||''),location.href);
+    if(url.origin!==location.origin||url.pathname!=='/static/smart-canvas.html'||url.searchParams.get('id')!==CANVAS_SETTINGS_CANVAS_ID||url.searchParams.get('mode')!=='canvas-settings'){
+        throw new Error(canvasSettingsText('loadError'));
+    }
+    if(embedded)url.searchParams.set('embedded','1');else url.searchParams.delete('embedded');
+    return `${url.pathname}${url.search}`;
+}
+async function loadCanvasSettingsBootstrap({force=false}={}){
+    if(canvasSettingsBootstrapPromise)return canvasSettingsBootstrapPromise;
+    if(!force&&canvasSettingsBootstrap)return canvasSettingsBootstrap;
+    canvasSettingsBootstrapPromise=(async()=>{
+        const response=await fetch('/api/studio/canvas/settings-canvas',{cache:'no-store'});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok)throw new Error(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`);
+        if(payload?.id!==CANVAS_SETTINGS_CANVAS_ID||payload?.canvas?.id!==CANVAS_SETTINGS_CANVAS_ID)throw new Error(canvasSettingsText('loadError'));
+        canvasSettingsCanvasUrl(payload);
+        canvasSettingsBootstrap=payload;
+        return payload;
+    })().finally(()=>{canvasSettingsBootstrapPromise=null;});
+    return canvasSettingsBootstrapPromise;
+}
+function syncCanvasSettingsCanvasContext(){
+    const target=canvasSettingsFrame?.contentWindow;
+    if(!target||target===window)return;
+    try{
+        const preference=window.StudioTheme?.getPreference?.();
+        if(preference)target.postMessage({type:'studio-theme',preference},location.origin);
+        target.postMessage({type:'studio-lang',lang:window.StudioI18n?.lang?.()||'zh'},location.origin);
+    }catch(_){}
+}
+async function loadCanvasSettingsCanvas({force=false}={}){
+    if(canvasSettingsLoadPromise)return canvasSettingsLoadPromise;
+    if(!force&&canvasSettingsLoaded&&canvasSettingsFrame?.getAttribute('src')){
+        canvasSettingsFrame.removeAttribute('hidden');
+        return true;
+    }
+    const request=++canvasSettingsRequestSequence;
+    canvasSettingsFrame?.setAttribute('hidden','hidden');
+    setCanvasSettingsStatus(()=>canvasSettingsText('loading'));
+    canvasSettingsLoadPromise=(async()=>{
+        try{
+            const payload=await loadCanvasSettingsBootstrap({force});
+            if(request!==canvasSettingsRequestSequence)return false;
+            const src=canvasSettingsCanvasUrl(payload);
+            const current=canvasSettingsFrame?.getAttribute('src')||'';
+            canvasSettingsFrame?.removeAttribute('hidden');
+            if(current!==src||force){
+                canvasSettingsLoaded=false;
+                await new Promise((resolve,reject)=>{
+                    const timer=setTimeout(()=>reject(new Error('Canvas load timed out')),15000);
+                    canvasSettingsFrame.addEventListener('load',()=>{clearTimeout(timer);resolve();},{once:true});
+                    canvasSettingsFrame.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('Canvas could not be opened'));},{once:true});
+                    canvasSettingsFrame.src=src;
+                });
+            }
+            if(request!==canvasSettingsRequestSequence)return false;
+            canvasSettingsLoaded=true;
+            syncCanvasSettingsCanvasContext();
+            setCanvasSettingsStatus('');
+            return true;
+        }catch(error){
+            if(request===canvasSettingsRequestSequence){
+                canvasSettingsLoaded=false;
+                canvasSettingsFrame?.setAttribute('hidden','hidden');
+                setCanvasSettingsStatus(()=>`${canvasSettingsText('loadError')} · ${error?.message||error}`,'error',true);
+            }
+            return false;
+        }finally{
+            if(request===canvasSettingsRequestSequence)canvasSettingsLoadPromise=null;
+        }
+    })();
+    return canvasSettingsLoadPromise;
+}
+function openCanvasSettingsCanvasEditor(){
+    const opened=window.open('about:blank','_blank');
+    if(!opened){setCanvasSettingsStatus(`${canvasSettingsText('loadError')} · ${window.StudioI18n?.lang?.()==='en'?'the browser blocked the new tab':'浏览器阻止了新标签'}`,'error');return false;}
+    try{opened.opener=null;}catch(_){}
+    void (async()=>{
+        try{
+            const payload=await loadCanvasSettingsBootstrap();
+            opened.location.replace(new URL(canvasSettingsCanvasUrl(payload,{embedded:false}),location.origin).href);
+        }catch(error){
+            try{opened.close();}catch(_){}
+            setCanvasSettingsStatus(`${canvasSettingsText('loadError')} · ${error?.message||error}`,'error',true);
+        }
+    })();
+    return true;
+}
+async function resetCanvasSettingsCanvas(){
+    if(canvasSettingsResetting)return false;
+    if(!window.StudioDialog?.confirm){setCanvasSettingsStatus(canvasSettingsText('resetError'),'error');return false;}
+    if(!await window.StudioDialog.confirm(canvasSettingsText('resetConfirm'),{title:canvasSettingsText('reset'),type:'danger'}))return false;
+    canvasSettingsResetting=true;canvasSettingsResetButton?.setAttribute('disabled','disabled');canvasSettingsFrame?.classList.add('is-resetting');
+    try{
+        if(!await loadCanvasSettingsCanvas())throw new Error(canvasSettingsText('loadError'));
+        const bridge=canvasSettingsFrame?.contentWindow?.CanvasSettingsBridge;
+        if(!bridge?.prepareReset||!bridge?.applyReset)throw new Error(canvasSettingsText('loadError'));
+        const revision=await bridge.prepareReset();
+        const response=await fetch('/api/studio/canvas/settings-canvas/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base_revision:revision,client_id:`canvas_settings_${Date.now().toString(36)}`})});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok){
+            const detail=payload?.detail;
+            if(detail&&typeof detail==='object'&&detail.preferences_reset===true){
+                const refreshed=await bridge.refreshPreferences?.().catch(()=>false);
+                if(!refreshed)throw new Error(`${canvasSettingsPayloadError(payload,`HTTP ${response.status}`)} · ${canvasSettingsText('preferencesRefreshError')}`);
+            }
+            throw new Error(canvasSettingsPayloadError(payload,`HTTP ${response.status}`));
+        }
+        if(payload?.reset!==true||payload?.canvas?.id!==CANVAS_SETTINGS_CANVAS_ID||!payload?.preferences||typeof payload.preferences!=='object')throw new Error(canvasSettingsPayloadError(payload,canvasSettingsText('loadError')));
+        if(await bridge.applyReset(payload.canvas,payload.preferences)!==true)throw new Error(canvasSettingsText('loadError'));
+        setCanvasSettingsStatus(canvasSettingsText('resetDone'),'success');
+        return true;
+    }catch(error){
+        canvasSettingsFrame?.contentWindow?.CanvasSettingsBridge?.cancelReset?.();
+        setCanvasSettingsStatus(`${canvasSettingsText('resetError')} · ${error?.message||error}`,'error');
+        return false;
+    }finally{
+        canvasSettingsResetting=false;canvasSettingsResetButton?.removeAttribute('disabled');canvasSettingsFrame?.classList.remove('is-resetting');
+    }
+}
+canvasSettingsResetButton?.addEventListener('click',()=>{void resetCanvasSettingsCanvas();});
+canvasSettingsNewTabButton?.addEventListener('click',openCanvasSettingsCanvasEditor);
+canvasSettingsFrame?.addEventListener('load',syncCanvasSettingsCanvasContext);
+canvasSettingsStatus?.addEventListener('click',event=>{if(event.target.closest('#canvasSettingsRetry'))void loadCanvasSettingsCanvas({force:true});});
+window.addEventListener('studio-lang-change',()=>{
+    if(canvasModelSettingsBlock&&!canvasModelSettingsBlock.hidden){renderCanvasSettingsStatus();syncCanvasSettingsCanvasContext();}
+});
 function setRhAppSyncState(nextState){
     rhAppSyncState = nextState;
     renderRunningHubCards();
@@ -694,6 +1078,39 @@ function trf(key, vars={}){
     return text;
 }
 function setStatus(text){ statusEl.textContent = text || ''; }
+function setApiSettingsStartupState(nextState){
+    if(!settingsContent || !apiSettingsBootState) return;
+    if(nextState === 'ready'){
+        settingsContent.removeAttribute('data-api-startup');
+        settingsContent.setAttribute('aria-busy', 'false');
+        apiSettingsBootState.hidden = true;
+        settingsContent.querySelector(':scope > .content-head')?.removeAttribute('hidden');
+        return;
+    }
+    const state = ['loading', 'error', 'empty'].includes(nextState) ? nextState : 'loading';
+    settingsContent.dataset.apiStartup = state;
+    settingsContent.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+    apiSettingsBootState.dataset.state = state;
+    apiSettingsBootState.hidden = false;
+    const titleCopy = {
+        loading:{zh:'正在读取 API 设置', en:'Loading API settings'},
+        error:{zh:'无法读取 API 设置', en:'Could not read API settings'},
+        empty:{zh:'API 设置已读取', en:'API settings loaded'}
+    }[state];
+    const title = apiSettingsBootState.querySelector('.api-settings-boot-title');
+    const titleZh = title?.querySelector('.api-settings-boot-zh');
+    const titleEn = title?.querySelector('.api-settings-boot-en');
+    if(titleZh) titleZh.textContent = titleCopy.zh;
+    if(titleEn) titleEn.textContent = titleCopy.en;
+    const loading = apiSettingsBootState.querySelector('.api-settings-boot-loading');
+    const error = apiSettingsBootState.querySelector('.api-settings-boot-error');
+    const empty = apiSettingsBootState.querySelector('.api-settings-boot-empty');
+    const retry = apiSettingsBootState.querySelector('#apiSettingsBootRetry');
+    if(loading) loading.hidden = state !== 'loading';
+    if(error) error.hidden = state !== 'error';
+    if(empty) empty.hidden = state !== 'empty';
+    if(retry) retry.hidden = state !== 'error';
+}
 function apiResponseDetail(data, fallback='请求失败'){
     if(data && typeof data === 'object'){
         const detail = data.detail || data.message || data.error;
@@ -764,6 +1181,7 @@ function broadcastStudioApiChange(type='providers-changed'){
     try { new BroadcastChannel('studio-api').postMessage(message); } catch(e) {}
     try { window.parent?.postMessage(message, '*'); } catch(e) {}
     try { window.top?.postMessage(message, '*'); } catch(e) {}
+    try { window.dispatchEvent(new CustomEvent('studio-api-change', {detail:message})); } catch(e) {}
 }
 function toggleRunningHubRegionEnabled(region, enabled){
     if(!RUNNINGHUB_REGIONS[region]) return;
@@ -4252,6 +4670,14 @@ let lastFetchedAll = [];          // 全部模型 id 列表
 let lastFetchedSuggestion = null; // 后端自动分类建议
 let lastFetchedModelNames = {};   // {模型 id: 展示名}
 let lastFetchedModelAvailability = {}; // RunningHub: confirmed | unverified
+const LAOHU_GPT_IMAGE_MODEL_IDS = new Set([
+    'laohu-image-g-v2.5-flare',
+    'laohu-image-g-v2.5-lowprice',
+    'laohu-image-g-v2.5-sunburst',
+    'laohu-image-g2-i2i',
+    'laohu-image-g2-t2i',
+    'laohu-image-g-v2-lowprice'
+]);
 
 function clearFetchedModelState(){
     lastFetchedAll = [];
@@ -4288,6 +4714,9 @@ function modelPickerCapabilityCategories(item, model){
     };
     const itemId = String(item?.id || '').trim().toLowerCase();
     const protocol = String(item?.protocol || '').trim().toLowerCase();
+    if(itemId === 'ai-money' && LAOHU_GPT_IMAGE_MODEL_IDS.has(String(model || '').trim().toLowerCase())){
+        return new Set(['image']);
+    }
     const aliases = {jimeng:'jimeng-cli', codex:'codex-cli'};
     const accepted = new Set([itemId, protocol, aliases[itemId], aliases[protocol]].filter(Boolean));
     const provider = (modelCapabilityCatalog.providers || []).find(entry => [entry?.id, entry?.capability_provider_id]
@@ -4390,6 +4819,9 @@ function modelDisplayName(model, item){
 }
 function providerModelBadge(model, label){
     const text = `${model || ''} ${label || ''}`.toLowerCase();
+    const normalizedModel = String(model || '').trim().toLowerCase();
+    if(LAOHU_GPT_IMAGE_MODEL_IDS.has(normalizedModel)) return 'G';
+    if(/^laohu-image-gk(?:[-_]|$)/.test(normalizedModel)) return 'GK';
     if(text.includes('gpt-image')) return 'G';
     if(String(model || '').toLowerCase() === 'auto' || text.includes('codex')) return 'C';
     if(text.includes('gpt-')) return 'GPT';
@@ -4481,6 +4913,7 @@ async function fetchModels(){
 // 每个模型只归一类（根据用户已配置 或 关键字猜测）；勾选 = 纳入该分类
 let pickerState = { category: {}, selected: {} };
 let pickerVisibleIds = [];
+let pickerEditorRenderPending = false;
 function openModelPicker(){
     const item = provider();
     if(!item || !lastFetchedAll.length){ StudioDialog.alert('没有拉取到模型', {type:'warning'}); return; }
@@ -4518,8 +4951,12 @@ function openModelPicker(){
 function closeModelPicker(){
     const overlay = document.getElementById('modelPickerOverlay');
     if(overlay) overlay.style.display = 'none';
+    if(pickerEditorRenderPending){
+        pickerEditorRenderPending = false;
+        renderEditor();
+    }
 }
-function renderModelPicker(){
+function renderModelPicker({preserveRows=false}={}){
     const item = provider();
     const filter = (document.getElementById('pickerFilter')?.value || '').toLowerCase();
     const currentTab = document.querySelector('.picker-cat-tab.active')?.dataset.cat || 'all';
@@ -4545,27 +4982,47 @@ function renderModelPicker(){
     document.getElementById('pickerCount').textContent = trf('api.modelPickerCount', {total:totals.all, visible:list.length});
     document.querySelectorAll('.picker-cat-tab').forEach(tab => {
         const cat = tab.dataset.cat;
-        tab.querySelector('.cat-count').textContent = `${selecteds[cat]}/${totals[cat]}`;
+        let count = tab.querySelector('.cat-count');
+        // i18n 会重写 data-i18n 按钮的文本节点；模型选择器每次打开时补回计数节点。
+        if(!count){
+            count = document.createElement('span');
+            count.className = 'cat-count';
+            tab.appendChild(count);
+        }
+        count.textContent = `${selecteds[cat]}/${totals[cat]}`;
     });
     // 列表
-    const html = list.map((id, index) => {
-        const checked = pickerState.selected[id];
-        const label = modelDisplayName(id, item);
-        const badge = providerModelBadge(id, label);
-        return `
-            <div class="picker-row ${checked?'has-sel':''}" onclick="togglePickerRowByIndex(${index})">
-                <div class="picker-checkbox ${checked?'checked':''}">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    const pickerList = document.getElementById('pickerList');
+    const existingRows = [...(pickerList?.querySelectorAll('.picker-row') || [])];
+    const canPaintRowsInPlace = preserveRows
+        && existingRows.length === list.length
+        && list.every((id, index) => existingRows[index]?.dataset.modelId === id);
+    if(canPaintRowsInPlace){
+        existingRows.forEach(row => {
+            const checked = !!pickerState.selected[row.dataset.modelId];
+            row.classList.toggle('has-sel', checked);
+            row.querySelector('.picker-checkbox')?.classList.toggle('checked', checked);
+        });
+    } else {
+        const html = list.map((id, index) => {
+            const checked = pickerState.selected[id];
+            const label = modelDisplayName(id, item);
+            const badge = providerModelBadge(id, label);
+            return `
+                <div class="picker-row ${checked?'has-sel':''}" data-model-id="${escapeAttr(id)}" onclick="togglePickerRowByIndex(${index})">
+                    <div class="picker-checkbox ${checked?'checked':''}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                    </div>
+                    <div class="picker-model-badge">${escapeHtml(badge)}</div>
+                    <div class="picker-model-name" title="${escapeAttr(id)}">
+                        <div class="picker-model-label">${escapeHtml(label || id)} ${runningHubAvailabilityBadge(id, item)}</div>
+                        ${label && label !== id ? `<div class="picker-model-id">${escapeHtml(id)}</div>` : ''}
+                    </div>
                 </div>
-                <div class="picker-model-badge">${escapeHtml(badge)}</div>
-                <div class="picker-model-name" title="${escapeAttr(id)}">
-                    <div class="picker-model-label">${escapeHtml(label || id)} ${runningHubAvailabilityBadge(id, item)}</div>
-                    ${label && label !== id ? `<div class="picker-model-id">${escapeHtml(id)}</div>` : ''}
-                </div>
-            </div>
-        `;
-    }).join('');
-    document.getElementById('pickerList').innerHTML = html || `<div style="padding:32px;text-align:center;color:var(--faint);font-size:12px">${escapeHtml(tr('api.modelPickerNoMatch'))}</div>`;
+            `;
+        }).join('');
+        if(pickerList) pickerList.innerHTML = html || `<div style="padding:32px;text-align:center;color:var(--faint);font-size:12px">${escapeHtml(tr('api.modelPickerNoMatch'))}</div>`;
+    }
     // 底部汇总
     const sumImage = document.getElementById('sumImage');
     const sumVideo = document.getElementById('sumVideo');
@@ -4582,7 +5039,7 @@ function renderModelPicker(){
 }
 function togglePickerRow(id){
     pickerState.selected[id] = !pickerState.selected[id];
-    renderModelPicker();
+    renderModelPicker({preserveRows:true});
     void autosavePickerSelection();
 }
 function togglePickerRowByIndex(index){
@@ -4609,7 +5066,7 @@ function selectPickerModels(mode){
         mode,
         isRunningHubLike(item)
     );
-    renderModelPicker();
+    renderModelPicker({preserveRows:true});
     void autosavePickerSelection();
 }
 function selectPickerCat(cat){
@@ -5011,6 +5468,7 @@ async function addCliProvider(kind){
     applyCliProtocolDefaults(item, preset.protocol, created);
     clearFetchedModelState();
     selectedId = item.id;
+    if(settingsContent?.dataset.apiStartup === 'empty') setApiSettingsStartupState('ready');
     renderProviderList();
     renderEditor();
     if(protocolInput) protocolInput.value = preset.protocol;
@@ -5176,6 +5634,7 @@ function removeModel(kind, index){
     void scheduleProviderAutosave({providerId:item.id, immediate:true, sync:false});
 }
 async function loadProviders(){
+    setApiSettingsStartupState('loading');
     setStatus(tr('api.loading'));
     try {
         const capabilityRequest = fetch('/api/model-capabilities')
@@ -5186,12 +5645,21 @@ async function loadProviders(){
         const capabilityData = await capabilityRequest;
         if(capabilityData?.providers) modelCapabilityCatalog = capabilityData;
         clearFetchedModelState();
+        if(!providers.length){
+            selectedId = '';
+            renderProviderList();
+            setStatus('');
+            setApiSettingsStartupState('empty');
+            return;
+        }
         selectedId = sortedProviders()[0]?.id || '';
         renderEditor();
         closeRecommendApi();
         setStatus('');
+        setApiSettingsStartupState('ready');
     } catch(err) {
         setStatus(tr('api.loadFailed'));
+        setApiSettingsStartupState('error');
     }
 }
 async function saveProviders(draft=null){
@@ -5353,7 +5821,14 @@ async function saveProviders(draft=null){
                 delete item._clearVolcengineSecretKey;
             });
             selectedId = provider()?.id || providers[0]?.id || '';
-            renderEditor();
+            const pickerOverlay = document.getElementById('modelPickerOverlay');
+            if(pickerOverlay && getComputedStyle(pickerOverlay).display !== 'none'){
+                // 自动保存回包会替换 providers 对象；选择器打开时延后重绘底层编辑器，
+                // 避免列表重建打断当前浏览。关闭选择器后再投影已保存状态。
+                pickerEditorRenderPending = true;
+            } else {
+                renderEditor();
+            }
             setStatus(draft ? (tr('api.autosaved') || tr('api.saved')) : tr('api.saved'));
             // 广播变更，画布等其他 iframe 立即重新拉取最新平台/模型列表
             broadcastStudioApiChange('providers-changed');
@@ -5373,7 +5848,7 @@ function escapeHtml(str){
 }
 function escapeAttr(str){ return escapeHtml(str).replace(/`/g, '&#96;'); }
 window.addEventListener('message', event => {
-    if(event.data?.type === 'studio-theme' && window.StudioTheme) window.StudioTheme.set(event.data.theme);
+    if(event.origin !== location.origin || event.source !== window.parent) return;
     if(event.data?.type === 'studio-lang' && window.StudioI18n) {
         window.StudioI18n.set(event.data.lang);
         if(recommendInlineOpen) renderRecommendApi();
@@ -5420,7 +5895,7 @@ window.addEventListener('studio-lang-change', () => {
     else renderEditor();
 });
 window.onload = () => {
-    if(window.StudioTheme) window.StudioTheme.apply();
+    if(window.StudioTheme) window.StudioTheme.applyPreference(window.StudioTheme.getPreference());
     if(window.StudioI18n) window.StudioI18n.apply();
     document.title = tr('api.title');
     syncRecommendView();

@@ -6,6 +6,17 @@ let canvasProductionView = null;
 const canvasModelClient = CanvasModelClient.create({request:(...args)=>fetch(...args),errorMessage:response=>smartResponseErrorMessage(response, tr('smart.errRunFailed'))});
 const params = new URLSearchParams(location.search);
 const canvasId = params.get('id') || '';
+const isHypitSettingsMode = canvasId === 'hypit-settings' && params.get('mode') === 'hypit-settings';
+const isArticleSettingsMode = canvasId === 'article-settings' && params.get('mode') === 'article-settings';
+const isCanvasSettingsMode = canvasId === 'canvas-settings' && params.get('mode') === 'canvas-settings';
+const isSettingsCanvasMode = isHypitSettingsMode || isArticleSettingsMode;
+const isSettingsCanvasEmbedded = isSettingsCanvasMode && params.get('embedded') === '1';
+const isCanvasSettingsEmbedded = isCanvasSettingsMode && params.get('embedded') === '1';
+const HYPIT_OUTPUT_SLOTS = ['text','image','video','audio','music','voice'];
+const HYPIT_OUTPUT_KINDS = {text:'text', image:'image', video:'video', audio:'audio', music:'audio', voice:'audio'};
+const hypitCanvasTools = document.getElementById('hypitCanvasTools');
+const hypitOutputDrawerToggle = document.getElementById('hypitOutputDrawerToggle');
+const hypitOutputDrawer = document.getElementById('hypitOutputDrawer');
 const sourceProjectId = params.get('project') || '';
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
 const shell = document.getElementById('shell');
@@ -138,8 +149,24 @@ let smartMediaToolCapabilities = {loaded:false, media_transform:false, missing:[
 let smartMediaToolCapabilitiesPromise = null;
 const textResultContentCache = new Map();
 let saveTimer = null;
+let hypitResetPending = false;
+const hypitServerPassedSignatures = new Map();
+const hypitNodeRunOperations = new Map();
+const hypitNodeCancelOperations = new Map();
+const hypitObservedRecipeSignatures = new Map();
+let hypitTestStatuses = {};
+let hypitServerSignaturesNeedSeed = false;
+let hypitServerSignatureSnapshot = null;
 let apiProviders = [];
 let modelCapabilityCatalog = {schema_version:0, providers:[]};
+let canvasModelManagementCatalog = {options:[], catalog:null, catalog_revision:'', selection_contract_version:0};
+let canvasModelManagementCatalogError = '';
+const hypitSlotModelOptions = new Map();
+const hypitSlotModelOptionLoads = new Map();
+let hypitModelOptionGeneration = 0;
+let hypitModelOptionCatalogRevision = '';
+let hypitModelOptionPendingNodeId = '';
+let hypitModelOptionPendingContextKey = '';
 let modelPricingCatalog = {schema_version:0, default_status:'pending', entries:{}, unit_definitions:{}};
 let modelCapabilityLoadError = '';
 let smartPriceHighlightKey = '';
@@ -907,7 +934,9 @@ function mediaItemForStorage(item){
 }
 function canvasForStorage(){
     const clean = JSON.parse(JSON.stringify(canvas || {}));
-    clean.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
+    if(isSettingsCanvasMode){delete clean.test_statuses;delete clean.testStatuses;clean.settings={};}
+    else if(isCanvasSettingsMode) clean.settings={};
+    else clean.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
     // 日志预览的临时节点（编辑器打开期间临时塞进 nodes）绝不能被持久化，否则刷新后会留下幽灵节点。
     if(Array.isArray(clean.nodes)) clean.nodes = clean.nodes.filter(node => node.id !== SMART_LOG_PREVIEW_NODE_ID);
     (clean.nodes || []).forEach(node => {
@@ -1156,8 +1185,31 @@ let smartCanvasPersonalization = null;
 let smartCapabilityOptionDragState = null;
 const smartCapabilityOptionShiftAnimations = new WeakMap();
 let smartPreferencePointerDragState = null;
-let smartPreferenceDragMoved = false;
+let smartPreferenceDragClickSuppression = null;
+let smartParameterPresentationDragState = null;
 let smartCanvasPersonalizationSaveTimer = null;
+let smartCanvasPersonalizationRevision = 0;
+let smartCanvasPersonalizationPendingWrites = 0;
+let smartCanvasPersonalizationDirty = false;
+let canvasPickerCatalogRefreshPromise = null;
+let deferredCapabilityControlRefresh = null;
+
+document.addEventListener('pointerdown',()=>{smartPreferenceDragClickSuppression=null;},true);
+
+function ignoreSyntheticPreferenceDragClick(event){
+    const suppression=smartPreferenceDragClickSuppression;
+    if(!suppression)return false;
+    if(performance.now()>suppression.expiresAt){smartPreferenceDragClickSuppression=null;return false;}
+    // 程序化/键盘 click 和之后真实按下产生的 click 都应正常工作；只吞拖拽手势
+    // 结束时浏览器紧接着发出的、仍落在原排序项上的合成 click。
+    if(Number(event?.detail||0)<=0)return false;
+    const button=event.target?.closest?.('button[data-preference-id]');
+    if(button!==suppression.button)return false;
+    smartPreferenceDragClickSuppression=null;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return true;
+}
 
 async function loadSmartCanvasPersonalization(){
     let localValue = null;
@@ -1166,17 +1218,39 @@ async function loadSmartCanvasPersonalization(){
         const response = await fetch('/api/smart-canvas/personalization', {cache:'no-store'});
         if(response.ok){
             const serverValue = await response.json();
-            const serverHasPreferences = serverValue && ['executionLayouts','parameterOptionOrder','modelOrder']
+            const serverEpoch=Number.isInteger(serverValue?.reset_epoch)&&serverValue.reset_epoch>=0?serverValue.reset_epoch:0;
+            const localEpoch=Number.isInteger(localValue?.reset_epoch)&&localValue.reset_epoch>=0?localValue.reset_epoch:0;
+            const serverHasPreferences = serverValue && ['executionLayouts','parameterOptionOrder','modelOrder','parameterPresentation']
                 .some(key => serverValue[key] && Object.keys(serverValue[key]).length);
-            const localHasPreferences = localValue && ['executionLayouts','parameterOptionOrder','modelOrder']
+            const localHasPreferences = localValue && ['executionLayouts','parameterOptionOrder','modelOrder','parameterPresentation']
                 .some(key => localValue[key] && Object.keys(localValue[key]).length);
-            smartCanvasPersonalization = serverHasPreferences || !localHasPreferences ? serverValue : localValue;
+            // reset_epoch 不同意味着另一个标签页完成了明确重置；服务器值优先，旧本地顺序不能复活。
+            smartCanvasPersonalization = serverEpoch!==localEpoch || serverHasPreferences || !localHasPreferences ? serverValue : localValue;
             localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalization));
             if(!serverHasPreferences && localHasPreferences) saveSmartCanvasPersonalization();
             return;
         }
     } catch(e) {}
     smartCanvasPersonalization = localValue && typeof localValue === 'object' ? localValue : {};
+}
+
+function discardLegacyParameterVisibilityPreferences(value=smartCanvasPersonalizationStore()){
+    const presentation=value?.parameterPresentation;
+    if(!presentation||typeof presentation!=='object'||Array.isArray(presentation))return value;
+    Object.entries(presentation).forEach(([optionId,fields])=>{
+        if(!fields||typeof fields!=='object'||Array.isArray(fields))return;
+        Object.entries(fields).forEach(([key,entry])=>{
+            if(!entry||typeof entry!=='object'||Array.isArray(entry))return;
+            if(Object.prototype.hasOwnProperty.call(entry,'visible')){
+                const next={...entry};
+                delete next.visible;
+                if(Object.keys(next).length)fields[key]=next;
+                else delete fields[key];
+            }
+        });
+        if(!Object.keys(fields).length)delete presentation[optionId];
+    });
+    return value;
 }
 
 function smartCanvasPersonalizationStore(){
@@ -1188,20 +1262,68 @@ function smartCanvasPersonalizationStore(){
         smartCanvasPersonalization = {};
     }
     if(!smartCanvasPersonalization.version) smartCanvasPersonalization.version = 1;
+    if(!Number.isInteger(smartCanvasPersonalization.reset_epoch)||smartCanvasPersonalization.reset_epoch<0) smartCanvasPersonalization.reset_epoch = 0;
     if(!smartCanvasPersonalization.executionLayouts || typeof smartCanvasPersonalization.executionLayouts !== 'object') smartCanvasPersonalization.executionLayouts = {};
     if(!smartCanvasPersonalization.parameterOptionOrder || typeof smartCanvasPersonalization.parameterOptionOrder !== 'object') smartCanvasPersonalization.parameterOptionOrder = {};
     if(!smartCanvasPersonalization.modelOrder || typeof smartCanvasPersonalization.modelOrder !== 'object') smartCanvasPersonalization.modelOrder = {};
+    if(!smartCanvasPersonalization.parameterPresentation || typeof smartCanvasPersonalization.parameterPresentation !== 'object') smartCanvasPersonalization.parameterPresentation = {};
     return smartCanvasPersonalization;
 }
 function saveSmartCanvasPersonalization(){
-    const value = smartCanvasPersonalizationStore();
+    const value = discardLegacyParameterVisibilityPreferences(smartCanvasPersonalizationStore());
     try { localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(value)); } catch(e) {}
+    // 只有 canvas-settings 管理图能改模型/参数展示偏好；普通画布的保存
+    // 只提交它负责的节点布局，避免旧标签把管理页的新排序覆盖回去。
+    const payload = isCanvasSettingsMode
+        ? value
+        : {version:value.version || 1, reset_epoch:Number.isInteger(value.reset_epoch)?value.reset_epoch:0, executionLayouts:value.executionLayouts || {}};
+    const revision = ++smartCanvasPersonalizationRevision;
+    smartCanvasPersonalizationDirty = true;
     clearTimeout(smartCanvasPersonalizationSaveTimer);
-    smartCanvasPersonalizationSaveTimer = setTimeout(() => {
-        fetch('/api/smart-canvas/personalization', {
-            method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(value), keepalive:true
-        }).catch(() => {});
+    smartCanvasPersonalizationSaveTimer = setTimeout(async () => {
+        smartCanvasPersonalizationSaveTimer = null;
+        smartCanvasPersonalizationPendingWrites += 1;
+        try {
+            const response = await fetch('/api/smart-canvas/personalization', {
+                method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), keepalive:true
+            });
+            if(response.ok && revision === smartCanvasPersonalizationRevision) smartCanvasPersonalizationDirty = false;
+            else if(response.status===409 && revision===smartCanvasPersonalizationRevision){
+                const latestResponse=await fetch('/api/smart-canvas/personalization',{cache:'no-store'});
+                const latest=latestResponse.ok?await latestResponse.json().catch(()=>null):null;
+                if(latest&&typeof latest==='object'&&!Array.isArray(latest)){
+                    smartCanvasPersonalization=latest;
+                    smartCanvasPersonalizationStore();
+                    smartCanvasPersonalizationDirty=false;
+                    try{localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY,JSON.stringify(smartCanvasPersonalization));}catch(e){}
+                    if(isCanvasSettingsMode){render();}
+                }
+                toast(capabilityUiText('展示偏好已在其他标签页重置；已读取最新设置，本次旧设置未覆盖重置结果。','Display preferences were reset in another tab. Latest settings were reloaded; this older update was not reapplied.'));
+            }
+        } catch(e) {
+            // 本地值保留；下次打开控件时不以旧服务器值覆盖未保存偏好。
+        } finally {
+            smartCanvasPersonalizationPendingWrites = Math.max(0, smartCanvasPersonalizationPendingWrites - 1);
+        }
     }, 180);
+}
+async function refreshSmartCanvasPersonalizationForUse(){
+    if(smartCanvasPersonalizationSaveTimer || smartCanvasPersonalizationPendingWrites || smartCanvasPersonalizationDirty) return false;
+    const revision = smartCanvasPersonalizationRevision;
+    try {
+        const before=JSON.stringify(smartCanvasPersonalizationStore());
+        const response = await fetch('/api/smart-canvas/personalization', {cache:'no-store'});
+        if(!response.ok) return false;
+        const value = await response.json();
+        if(!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        if(revision !== smartCanvasPersonalizationRevision || smartCanvasPersonalizationSaveTimer || smartCanvasPersonalizationPendingWrites || smartCanvasPersonalizationDirty) return false;
+        smartCanvasPersonalization = value;
+        smartCanvasPersonalizationStore();
+        try { localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalization)); } catch(e) {}
+        return before!==JSON.stringify(smartCanvasPersonalizationStore());
+    } catch(e) {
+        return false;
+    }
 }
 function smartPreferenceScopeKey(kind, ...parts){
     return [kind, ...parts].map(part => String(part ?? '').trim()).join('::');
@@ -1220,6 +1342,7 @@ function smartOrderedItems(items, scope, idFor){
     });
 }
 function saveSmartPreferenceOrder(scope, ids){
+    if(!isCanvasSettingsMode) return;
     const store = smartCanvasPersonalizationStore();
     store.modelOrder[scope] = [...new Set((ids || []).map(id => String(id || '').trim()).filter(Boolean))];
     saveSmartCanvasPersonalization();
@@ -1236,12 +1359,60 @@ function capabilityOptionOrderScope(profile, parameterKey){
     return smartPreferenceScopeKey('parameter-options', capabilityLayoutKey(profile), parameterKey);
 }
 function saveCapabilityOptionOrder(scope, order){
+    if(!isCanvasSettingsMode) return;
     const store = smartCanvasPersonalizationStore();
     store.parameterOptionOrder[scope] = [...new Set((order || []).map(item => String(item || '').trim()).filter(Boolean))];
     saveSmartCanvasPersonalization();
 }
+function capabilityParameterPresentation(optionId, parameterKey){
+    const option = String(optionId || '').trim();
+    const key = String(parameterKey || '').trim();
+    if(!option || !key) return {};
+    const saved = smartCanvasPersonalizationStore().parameterPresentation[option];
+    const value = saved && typeof saved === 'object' ? saved[key] : null;
+    if(!value || typeof value !== 'object')return {};
+    return {
+        ...(value.width === 'full' || value.width === 'half' ? {width:value.width} : {}),
+        ...(Number.isInteger(value.order) && value.order >= 0 ? {order:value.order} : {})
+    };
+}
+function saveCapabilityParameterPresentation(optionId, parameterKey, patch){
+    if(!isCanvasSettingsMode) return false;
+    const option = String(optionId || '').trim();
+    const key = String(parameterKey || '').trim();
+    if(!option || !key || !patch || typeof patch !== 'object') return false;
+    const store = smartCanvasPersonalizationStore();
+    if(!store.parameterPresentation[option] || typeof store.parameterPresentation[option] !== 'object') store.parameterPresentation[option] = {};
+    const current = store.parameterPresentation[option][key] && typeof store.parameterPresentation[option][key] === 'object'
+        ? store.parameterPresentation[option][key] : {};
+    const next = {...current};
+    // 旧 visible 字段只为读取兼容；参数不再允许通过展示偏好隐藏。
+    delete next.visible;
+    if(patch.width === 'full' || patch.width === 'half') next.width = patch.width;
+    if(Number.isInteger(patch.order) && patch.order >= 0) next.order = patch.order;
+    store.parameterPresentation[option][key] = next;
+    saveSmartCanvasPersonalization();
+    return true;
+}
+function saveCapabilityParameterPresentationOrder(optionId, keys){
+    if(!isCanvasSettingsMode)return false;
+    const option=String(optionId||'').trim();
+    if(!option||!Array.isArray(keys)||!keys.length)return false;
+    const store=smartCanvasPersonalizationStore();
+    if(!store.parameterPresentation[option]||typeof store.parameterPresentation[option]!=='object')store.parameterPresentation[option]={};
+    keys.forEach((key,index)=>{
+        const current=store.parameterPresentation[option][key]&&typeof store.parameterPresentation[option][key]==='object'?store.parameterPresentation[option][key]:{};
+        const next={...current,order:index*100};
+        delete next.visible;
+        store.parameterPresentation[option][key]=next;
+    });
+    saveSmartCanvasPersonalization();
+    return true;
+}
 function renderPreferenceHandle(scope, id){
-    return `<span class="model-order-handle" draggable="false" data-preference-sort-handle data-preference-scope="${escapeAttr(scope)}" title="${escapeAttr(capabilityUiText('拖动调整顺序','Drag to reorder'))}" aria-hidden="true"><i data-lucide="grip-vertical"></i></span>`;
+    if(!isCanvasSettingsMode) return '';
+    const label=capabilityUiText('拖动排序；也可按 Alt+上/下箭头移动','Drag to reorder, or press Alt+Up/Down');
+    return `<span class="model-order-handle" draggable="false" data-preference-sort-handle data-preference-scope="${escapeAttr(scope)}" role="button" tabindex="0" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown" aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}"><i data-lucide="grip-vertical" aria-hidden="true"></i></span>`;
 }
 const manualNodeSettingsFingerprints = new Map();
 function manualExecutionSettingsSnapshot(node, source){
@@ -1655,13 +1826,6 @@ function clearPromptInput(options={}){
         activeComposerSubject.promptDraftHtml = '';
         activeComposerSubject.promptDraftText = '';
     }
-}
-function applyTheme(theme){
-    const dark = theme === 'dark';
-    document.documentElement.classList.toggle('theme-dark', dark);
-    document.documentElement.classList.toggle('studio-theme-dark', dark);
-    document.body?.classList.toggle('theme-dark', dark);
-    document.body?.classList.toggle('studio-theme-dark', dark);
 }
 function toast(text, options={}){
     const el = document.getElementById('toast');
@@ -2792,6 +2956,15 @@ function smartGroupImageGridLayout(node){
     return {cols, rows, visibleRows, width, height, thumb:baseThumb};
 }
 function imageLayout(images, scale=1, node=null){
+    if(isHypitOutputNode(node)){
+        const width=Number(node.w),height=Number(node.h);
+        return {
+            cols:1,rows:1,
+            width:Number.isFinite(width)&&width>=160?Math.round(width):300,
+            height:Number.isFinite(height)&&height>=100?Math.round(height):150,
+            thumb:96,single:true,
+        };
+    }
     if(isSmartResultGroupNode(node)){
         const refs = resultGroupMediaItems(node);
         return imageLayout(refs, scale, {type:SMART_NODE_TYPES.material, images:refs, scale:node.scale, w:node.w, h:node.h});
@@ -2915,6 +3088,586 @@ function nodeRect(node){
     const layout = imageLayout(node.images || [], nodeScale(node), node);
     return {x:node.x || 0, y:node.y || 0, width:layout.width, height:layout.height};
 }
+function isHypitOutputNode(node){
+    return Boolean(isSettingsCanvasMode && node?.type === 'smart-hypit-output' && HYPIT_OUTPUT_SLOTS.includes(node?.hypitSlot));
+}
+function hypitSlotName(slot){
+    const labels={text:['文本','Text'],image:['图片','Image'],video:['视频','Video'],audio:['音效','Sound effects'],music:['音乐','Music'],voice:['语音','Voice']};
+    const pair=labels[slot]||['输出','Output'];
+    return capabilityUiText(pair[0],pair[1]);
+}
+function hypitSlotLabel(slot){
+    const labels={
+        text:['文本输出','Text output'],
+        image:['图片输出','Image output'],
+        video:['视频输出','Video output'],
+        audio:['音效输出','Sound effects output'],
+        music:['音乐输出','Music output'],
+        voice:['语音输出','Voice output'],
+    };
+    const pair=labels[slot]||['输出','Output'];
+    return capabilityUiText(pair[0],pair[1]);
+}
+function hypitIncomingConnections(nodeId){
+    return (canvas?.connections||[]).filter(edge=>edge?.to===nodeId && ['input','flow'].includes(edge.kind||'flow'));
+}
+function hypitOutputStatusEntry(node){
+    const statuses=hypitTestStatuses||{};
+    return statuses[node?.id]||statuses[node?.hypitSlot]||{};
+}
+function hypitStatusPassed(status){
+    return Boolean(status&&status.test_passed===true&&status.current_recipe_matches===true&&['passed','succeeded'].includes(String(status.status||'').toLowerCase()));
+}
+const HYPIT_RECIPE_LAYOUT_KEYS=new Set([
+    'title','x','y','w','h','scale','mediaSizeMode','displayNumber','selected','hovered','collapsed',
+    'layout_w','layout_h','created_at','updated_at','createdAt','updatedAt','lastViewedAt'
+]);
+const HYPIT_RECIPE_EXECUTION_STATE_KEYS=new Set([
+    'creationTasks','resultVersions','activeResultVersion','runStatus','runAt','runStartedAt','runFinishedAt','running','queued','runElapsedMs','runTimerHidden',
+    'runError','runRef','runSnapshot','pending','isRunPlaceholder','cancelInProgress','error','taskId','providerTaskId',
+    'creationId','creationOwnerNodeId','creationRevision','creationSignature','sourceKind','outputKind'
+]);
+function hypitNodeRecipe(node){
+    if(node?.type==='smart-hypit-output')return {id:node.id,type:node.type,hypitSlot:node.hypitSlot};
+    const excluded=new Set([...HYPIT_RECIPE_LAYOUT_KEYS,...HYPIT_RECIPE_EXECUTION_STATE_KEYS,'creationDetails','connections']);
+    if(!['smart-material','smart-image'].includes(String(node?.type||'')))excluded.add('images');
+    const recipe=Object.fromEntries(Object.entries(node||{}).filter(([key,value])=>
+        !excluded.has(key)&&typeof value!=='undefined'
+    ));
+    const inputBinding=recipe.creationInputBinding;
+    if(!inputBinding||(typeof inputBinding==='object'&&Object.keys(inputBinding).length===0))delete recipe.creationInputBinding;
+    return recipe;
+}
+function hypitCanonicalRecipeValue(value){
+    if(Array.isArray(value))return value.map(hypitCanonicalRecipeValue);
+    if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().filter(key=>typeof value[key]!=='undefined').map(key=>[key,hypitCanonicalRecipeValue(value[key])]));
+    return value;
+}
+function hypitRecipeSignature(outputNodeId,sourceSnapshot=null){
+    const sourceNodes=Array.isArray(sourceSnapshot?.nodes)?sourceSnapshot.nodes:nodes;
+    const sourceConnections=Array.isArray(sourceSnapshot?.connections)?sourceSnapshot.connections:(canvas?.connections||[]);
+    const output=sourceNodes.find(node=>node.id===outputNodeId);
+    if(!isHypitOutputNode(output))return '';
+    const relevantNodes=new Map([[output.id,output]]);
+    const stack=[output.id];
+    while(stack.length){
+        const targetId=stack.pop();
+        sourceConnections.filter(edge=>edge?.to===targetId&&['input','flow'].includes(edge.kind||'flow')).forEach(edge=>{
+            const source=sourceNodes.find(node=>node.id===edge.from);
+            if(!source||relevantNodes.has(source.id))return;
+            relevantNodes.set(source.id,source);stack.push(source.id);
+        });
+    }
+    const nodeState=[...relevantNodes.values()].map(hypitNodeRecipe).sort((a,b)=>String(a.id||'').localeCompare(String(b.id||'')));
+    const ids=new Set(relevantNodes.keys());
+    const edges=sourceConnections.filter(edge=>ids.has(edge.to)&&ids.has(edge.from)&&['input','flow'].includes(edge.kind||'flow'))
+        .map(edge=>hypitCanonicalRecipeValue(edge))
+        .sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    return JSON.stringify(hypitCanonicalRecipeValue({slot:output.hypitSlot,output_node_id:output.id,nodes:nodeState,connections:edges}));
+}
+function hypitRecipeGraphChanged(previousSnapshot,nextSnapshot){
+    if(!isSettingsCanvasMode)return false;
+    const before=(previousSnapshot?.nodes||[]).filter(isHypitOutputNode);
+    const after=(nextSnapshot?.nodes||[]).filter(isHypitOutputNode);
+    if(before.length!==after.length)return true;
+    const beforeIds=new Set(before.map(node=>node.id));
+    if(after.some(node=>!beforeIds.has(node.id)))return true;
+    return after.some(node=>hypitRecipeSignature(node.id,previousSnapshot)!==hypitRecipeSignature(node.id,nextSnapshot));
+}
+function hypitOutputPresentation(node){
+    const incoming=hypitIncomingConnections(node.id);
+    if(!incoming.length)return {status:'disconnected',label:capabilityUiText('未连接','Not connected')};
+    const saved=hypitOutputStatusEntry(node);
+    const currentSignature=hypitRecipeSignature(node.id);
+    const serverPassed=hypitServerPassedSignatures.get(node.id)===currentSignature;
+    const expectedKind=HYPIT_OUTPUT_KINDS[node.hypitSlot];
+    if(hypitStatusPassed(saved) && saved.output_kind===expectedKind && serverPassed){
+        return {status:'passed',label:capabilityUiText('运行成功','Run succeeded')};
+    }
+    return {status:'ready',label:saved.status==='failed'?capabilityUiText('运行失败','Run failed'):capabilityUiText('待运行','Ready to run')};
+}
+function hypitOutputAccessibleLabel(node){
+    const state=hypitOutputPresentation(node);
+    return `${hypitSlotLabel(node.hypitSlot)} · ${state.label}`;
+}
+function hypitObserveRecipeChanges(){
+    const currentIds=new Set();
+    nodes.filter(isHypitOutputNode).forEach(node=>{
+        currentIds.add(node.id);
+        const signature=hypitRecipeSignature(node.id);
+        const previous=hypitObservedRecipeSignatures.get(node.id);
+        hypitObservedRecipeSignatures.set(node.id,signature);
+    });
+    [...hypitObservedRecipeSignatures.keys()].forEach(id=>{
+        if(currentIds.has(id))return;
+        hypitObservedRecipeSignatures.delete(id);
+        hypitServerPassedSignatures.delete(id);
+    });
+}
+function toggleHypitOutputDrawer(open){
+    if(!isSettingsCanvasMode||!hypitOutputDrawer||!hypitOutputDrawerToggle)return;
+    const next=typeof open==='boolean'?open:hypitOutputDrawer.hasAttribute('hidden');
+    hypitOutputDrawer.toggleAttribute('hidden',!next);
+    hypitOutputDrawerToggle.setAttribute('aria-expanded',String(next));
+}
+function toggleHypitInputLock(nodeId){
+    if(!isSettingsCanvasMode)return false;
+    const node=nodes.find(item=>item.id===nodeId);
+    if(!isSmartMaterialNode(node)||String(node.sourceKind||'').toLowerCase()==='result')return false;
+    pushUndo();
+    node.hypitInputLocked=node.hypitInputLocked!==true;
+    selectedId=node.id;selectedIds=[];selectedImage={nodeId:'',index:-1};
+    render();scheduleSave();
+    return true;
+}
+function positionHypitCanvasTools(){
+    if(!isSettingsCanvasMode||!hypitCanvasTools||hypitCanvasTools.hidden)return;
+    const progress=document.getElementById('canvasProductionToggle');
+    const button=hypitOutputDrawerToggle;
+    if(!progress||!button||!shell)return;
+    const shellRect=shell.getBoundingClientRect();
+    const progressRect=progress.getBoundingClientRect();
+    const buttonWidth=button.getBoundingClientRect().width;
+    const left=progressRect.left-shellRect.left-buttonWidth-8;
+    hypitCanvasTools.style.left=`${Math.max(8,left)}px`;
+    hypitCanvasTools.style.right='auto';
+}
+if(isSettingsCanvasMode){
+    hypitOutputDrawerToggle?.addEventListener('click',()=>toggleHypitOutputDrawer());
+    hypitOutputDrawer?.addEventListener('click',event=>{
+        const close=event.target.closest('[data-hypit-drawer-close]');
+        if(close){toggleHypitOutputDrawer(false);return;}
+        const button=event.target.closest('[data-hypit-slot]');
+        if(button)addHypitOutput(button.dataset.hypitSlot);
+    });
+}
+function updateHypitModeUi(){
+    if(!isSettingsCanvasMode)return;
+    document.documentElement.dataset.canvasMode=isArticleSettingsMode?'article-settings':'hypit-settings';
+    document.documentElement.dataset.canvasSettings='true';
+    if(isSettingsCanvasEmbedded)document.documentElement.dataset.canvasEmbedded='1';
+    hypitCanvasTools?.removeAttribute('hidden');
+    const title=document.getElementById('smartTitle');
+    if(title)title.textContent=isArticleSettingsMode?capabilityUiText('文章生成配置','Article generation setup'):capabilityUiText('Hypit 流程设置','Hypit flow settings');
+    const drawerTitle=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head strong');
+    const drawerHelp=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head span');
+    if(drawerTitle)drawerTitle.textContent=capabilityUiText('输出端口',drawerTitle.dataset.hypitLabelEn||'Output ports');
+    if(drawerHelp)drawerHelp.textContent=capabilityUiText('只添加对应输出端口；重复选择会定位已有端口',drawerHelp.dataset.hypitLabelEn||'Adds only this output port; selecting it again focuses the existing one.');
+    if(hypitOutputDrawer)hypitOutputDrawer.setAttribute('aria-label',capabilityUiText(isArticleSettingsMode?'文章输出端口':'Hypit 输出端口',isArticleSettingsMode?'Article output ports':(hypitOutputDrawer.dataset.hypitAriaLabelEn||'Hypit output ports')));
+    const close=hypitOutputDrawer?.querySelector('[data-hypit-drawer-close]');if(close)close.setAttribute('aria-label',capabilityUiText('关闭',close.dataset.hypitLabelEn||'Close'));
+    if(hypitOutputDrawerToggle){
+        const label=capabilityUiText('添加输出端口',hypitOutputDrawerToggle.dataset.hypitLabelEn||'Add output port');
+        const text=hypitOutputDrawerToggle.querySelector('span');
+        if(text)text.textContent=label;
+        hypitOutputDrawerToggle.setAttribute('aria-label',label);
+        hypitOutputDrawerToggle.setAttribute('title',label);
+    }
+    hypitOutputDrawer?.querySelectorAll('[data-hypit-slot]').forEach(button=>{
+        const slot=button.dataset.hypitSlot,span=button.querySelector('span');
+        if(span)span.textContent=hypitSlotName(slot);
+    });
+    if(typeof requestAnimationFrame==='function')requestAnimationFrame(positionHypitCanvasTools);
+    else setTimeout(positionHypitCanvasTools,0);
+}
+function updateCanvasSettingsModeUi(){
+    if(!isCanvasSettingsMode)return;
+    const root=document.documentElement;
+    root.dataset.canvasMode='canvas-settings';
+    root.dataset.canvasSettings='true';
+    root.dataset.canvasManager='true';
+    if(isCanvasSettingsEmbedded)root.dataset.canvasEmbedded='1';
+    else delete root.dataset.canvasEmbedded;
+    // 共享模型管理图使用普通画布节点，不显示 Hypit/article 专用输出端口工具。
+    hypitCanvasTools?.setAttribute('hidden','hidden');
+    hypitOutputDrawer?.setAttribute('hidden','hidden');
+    hypitOutputDrawer?.classList.remove('open');
+    hypitOutputDrawerToggle?.setAttribute('aria-expanded','false');
+    const title=document.getElementById('smartTitle');
+    if(title)title.textContent=capabilityUiText('画布模型管理','Canvas model management');
+    document.title=capabilityUiText('画布模型管理','Canvas model management');
+}
+window.addEventListener('resize',positionHypitCanvasTools);
+function hypitExplicitOutputKind(node){
+    if(!node)return '';
+    if(node.type==='smart-prompt')return 'text';
+    if(isSmartExecutionNode(node)){
+        const kind=String(SMART_NODE_CONTRACT.outputKindForType(node.type)||'').toLowerCase();
+        return ['text','image','video','audio'].includes(kind)?kind:'';
+    }
+    const kindFromItem=item=>{
+        const explicit=String(item?.kind||item?.mediaKind||item?.media_type||item?.mediaType||item?.outputKind||item?.output_type||'').toLowerCase();
+        if(['text','image','video','audio'].includes(explicit))return explicit;
+        const path=String(item?.url||item?.path||item?.src||item?.uri||'').split(/[?#]/)[0].toLowerCase();
+        if(/\.(txt|md|markdown|json|csv|srt|vtt)$/.test(path))return 'text';
+        if(/\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(path))return 'image';
+        if(/\.(mp4|webm|mov|m4v|avi|mkv)$/.test(path))return 'video';
+        if(/\.(mp3|wav|m4a|aac|ogg|flac|opus)$/.test(path))return 'audio';
+        return '';
+    };
+    if(isSmartMaterialNode(node)){
+        const kinds=[...(node.images||[])].map(kindFromItem).filter(Boolean);
+        return kinds.length===1&&kinds.length===(node.images||[]).length?kinds[0]:'';
+    }
+    if(isSmartResultGroupNode(node)){
+        const items=resultGroupMediaItems(node),kinds=items.map(kindFromItem);
+        return kinds.length&&kinds.every(kind=>kind&&kind===kinds[0])?kinds[0]:'';
+    }
+    const explicit=String(node.outputKind||'').toLowerCase();
+    return ['text','image','video','audio'].includes(explicit)?explicit:'';
+}
+function hypitConnectionAllowed(source,output){
+    if(!isHypitOutputNode(output))return false;
+    if(!isSmartExecutionNode(source))return false;
+    if([SMART_NODE_TYPES.aiApp,SMART_NODE_TYPES.comfyWorkflow].includes(source.type))return true;
+    const expected=HYPIT_OUTPUT_KINDS[output.hypitSlot];
+    return Boolean(expected&&hypitExplicitOutputKind(source)===expected);
+}
+function recordHypitServerPassedSignatures(serverSnapshot=hypitServerSignatureSnapshot){
+    if(!serverSnapshot||!Array.isArray(serverSnapshot.nodes))return;
+    hypitServerPassedSignatures.clear();
+    if(!isSettingsCanvasMode)return;
+    const statuses=serverSnapshot.test_statuses||serverSnapshot.testStatuses;
+    if(!statuses||typeof statuses!=='object')return;
+    nodes.filter(isHypitOutputNode).forEach(node=>{
+        const status=statuses[node.id]||statuses[node.hypitSlot]||{};
+        if(!hypitStatusPassed(status)||status.output_kind!==HYPIT_OUTPUT_KINDS[node.hypitSlot])return;
+        const serverSignature=hypitRecipeSignature(node.id,serverSnapshot);
+        if(serverSignature)hypitServerPassedSignatures.set(node.id,serverSignature);
+    });
+}
+function hypitAgentCommandUrl(commandId=''){
+    const base=`/api/agent/canvases/${encodeURIComponent(canvasId||'hypit-settings')}/commands`;
+    return commandId?`${base}/${encodeURIComponent(commandId)}`:base;
+}
+function hypitRunRequestStorageKey(nodeId){
+    return `hypit_run_request:${canvasId||'hypit-settings'}:${nodeId}`;
+}
+function hypitStoredRunRequestId(nodeId){
+    try { return sessionStorage.getItem(hypitRunRequestStorageKey(nodeId)) || ''; } catch(_) { return ''; }
+}
+function hypitStoreRunRequestId(nodeId,requestId){
+    try {
+        const key=hypitRunRequestStorageKey(nodeId);
+        if(requestId)sessionStorage.setItem(key,requestId);else sessionStorage.removeItem(key);
+    } catch(_) {}
+}
+async function waitForCanvasSaveIdle(timeoutMs=15000){
+    const deadline=Date.now()+timeoutMs;
+    while(canvasSyncInFlight){
+        if(Date.now()>=deadline)throw new Error(canvasSyncText('画布仍在保存，请稍后重试','The canvas is still saving; retry in a moment'));
+        await hypitSleep(40);
+    }
+    if(canvasSyncSaveBlocked)throw new Error(canvasSyncText('画布有未解决的保存冲突，请先处理后再运行','Resolve the canvas save conflict before running'));
+}
+async function flushHypitCanvasBeforeRun(){
+    const deadline=Date.now()+15000;
+    while(true){
+        await waitForCanvasSaveIdle(Math.max(1,deadline-Date.now()));
+        const hadScheduledSave=Boolean(saveTimer);
+        clearTimeout(saveTimer);saveTimer=null;
+        const snapshot=canvasSyncCurrentSnapshot();
+        const dirty=canvasSyncHasLocalChanges(snapshot,canvasSyncBase);
+        if(!hadScheduledSave&&!canvasSyncSaveQueued&&!dirty)return true;
+        canvasSyncSaveQueued=false;
+        if(!await saveCanvas())throw new Error(canvasSyncText('流程保存失败，已保留修改；请修正后重试运行','The flow could not be saved; your edits were kept. Fix the issue and retry'));
+        if(Date.now()>=deadline)throw new Error(canvasSyncText('流程保存仍未完成，请稍后重试','The flow is still saving; retry shortly'));
+    }
+}
+async function findHypitAgentCommand(requestId){
+    const response=await fetch(hypitAgentCommandUrl(),{cache:'no-store'});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(apiErrorMessage(data,canvasSyncText('无法查询运行命令','Unable to find the run command')));
+    return (Array.isArray(data.commands)?data.commands:[]).find(item=>item?.request_id===requestId)||null;
+}
+async function submitHypitAgentCommand(action,args,requestId){
+    // 先查同一 request_id 是否已有命令，避免 recoverable 重试再创建执行任务。
+    let command=await findHypitAgentCommand(requestId);
+    if(!command)try {
+        const response=await fetch(hypitAgentCommandUrl(),{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({request_id:requestId,action,args})
+        });
+        const data=await response.json().catch(()=>({}));
+        if(!response.ok)throw new Error(apiErrorMessage(data,canvasSyncText('运行命令提交失败','Failed to submit the run command')));
+        command=data;
+    } catch(error) {
+        // POST 响应丢失时只查同一 request_id，不另建一次可能重复计费的命令。
+        try { command=await findHypitAgentCommand(requestId); } catch(_) {}
+        if(!command)throw new Error(canvasSyncText('命令提交结果暂时无法确认；系统不会自动重复提交，请检查任务状态后再试','The command result is unknown. It was not resubmitted automatically; check task status before retrying'));
+    }
+    if(!command?.id)throw new Error(canvasSyncText('运行服务没有返回命令编号','The run service returned no command ID'));
+    const deadline=Date.now()+60000;
+    while(!['succeeded','failed'].includes(String(command.status||'').toLowerCase())){
+        if(Date.now()>=deadline)throw new Error(canvasSyncText('运行命令仍在处理中；请稍后查看任务状态','The run command is still processing; check task status shortly'));
+        await hypitSleep(350);
+        const response=await fetch(hypitAgentCommandUrl(command.id),{cache:'no-store'});
+        const data=await response.json().catch(()=>({}));
+        if(!response.ok)throw new Error(apiErrorMessage(data,canvasSyncText('查询运行命令失败','Failed to check the run command')));
+        command=data;
+    }
+    if(String(command.status).toLowerCase()!=='succeeded'){
+        const error=new Error(String(command.error||canvasSyncText('执行节点运行失败','The execution node failed to run')));
+        error.hypitCommandTerminal=true;
+        throw error;
+    }
+    return command;
+}
+async function refreshHypitCanvasAfterAgentCommand(){
+    const response=await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`,{cache:'no-store'});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok||!data.canvas)throw new Error(apiErrorMessage(data,canvasSyncText('运行已提交，但画布结果暂时无法同步','The run was submitted, but its canvas result could not be synchronized')));
+    const merged=applyMergedServerCanvas(data.canvas,{prompt:false,scheduleSave:false});
+    if(!merged)throw new Error(canvasSyncText('运行已提交，但无法读取最新画布','The run was submitted, but the latest canvas could not be loaded'));
+    if(merged.conflicts?.length)throw new Error(canvasSyncText('运行已提交；画布有并行修改，请检查最新任务和画布内容','The run was submitted; review the latest task and canvas after a concurrent edit'));
+    return true;
+}
+async function refreshHypitCanvasProjectionAfterSave(){
+    const response=await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`,{cache:'no-store'});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok||!data.canvas)throw new Error(apiErrorMessage(data,canvasSyncText('无法更新 Hypit 输出状态','Could not refresh Hypit output status')));
+    const merged=applyMergedServerCanvas(data.canvas,{prompt:false,scheduleSave:false});
+    if(!merged||merged.conflicts?.length)throw new Error(canvasSyncText('画布有并行修改，输出状态将在下一次同步后更新','The canvas has concurrent edits; output status will refresh after synchronization'));
+    return true;
+}
+async function waitForHypitStudioTasks(taskIds=[]){
+    const ids=[...new Set((taskIds||[]).map(String).filter(id=>/^studio_(?:app_)?/.test(id)))];
+    if(!ids.length)throw new Error(canvasSyncText('运行命令没有返回有效任务编号','The run command returned no valid task IDs'));
+    const deadline=Date.now()+6*60*60*1000;
+    const unfinished=new Set(ids);
+    const terminalStatuses=new Map();
+    const recoverableStatuses=new Map();
+    while(unfinished.size){
+        for(const taskId of [...unfinished]){
+            const response=await fetch(`/api/studio/tasks/${encodeURIComponent(taskId)}`,{cache:'no-store'});
+            const data=await response.json().catch(()=>({}));
+            if(!response.ok)throw new Error(apiErrorMessage(data,canvasSyncText('查询 Studio 任务失败','Failed to check the Studio task')));
+            const status=String(data.status||data.runStatus||'').toLowerCase();
+            if(status==='recoverable'){
+                recoverableStatuses.set(taskId,{status,error:String(data.error||data.runError||'')});
+                unfinished.delete(taskId);
+                continue;
+            }
+            if(['succeeded','cancelled','failed','partially_succeeded'].includes(status)){
+                terminalStatuses.set(taskId,{status,error:String(data.error||data.runError||'')});
+                unfinished.delete(taskId);
+                continue;
+            }
+            if(!['queued','submitted','running','processing','validated'].includes(status)){
+                throw new Error(canvasSyncText(`任务返回了无法识别的状态：${status||'空'}`,`The task returned an unknown status: ${status||'empty'}`));
+            }
+        }
+        if(!unfinished.size)break;
+        if(Date.now()>=deadline)throw new Error(canvasSyncText('任务仍在运行；请稍后查看画布中的任务状态','The task is still running; check its status on the canvas later'));
+        await hypitSleep(700);
+    }
+    return {
+        cancelled:[...terminalStatuses.values()].some(item=>item.status==='cancelled'),
+        failures:[...terminalStatuses.values()].filter(item=>!['succeeded','cancelled'].includes(item.status)),
+        recoverable:[...recoverableStatuses.entries()].map(([taskId,result])=>({taskId,...result}))
+    };
+}
+async function runHypitExecutionNode(node,requestId=''){
+    if(!isSettingsCanvasMode||!isSmartExecutionNode(node)||!node?.id)return false;
+    if(hypitNodeRunOperations.has(node.id))return hypitNodeRunOperations.get(node.id);
+    const operationId=String(hypitStoredRunRequestId(node.id)||requestId||createCanvasOperationId(node.id));
+    hypitStoreRunRequestId(node.id,operationId);
+    const operation=(async()=>{
+        await flushHypitCanvasBeforeRun();
+        const command=await submitHypitAgentCommand('run_node',{node_id:node.id},operationId);
+        const result=command.result||{};
+        const taskIds=Array.isArray(result.task_ids)?result.task_ids.map(String).filter(Boolean):[];
+        if(!taskIds.length){
+            const error=new Error(canvasSyncText('运行命令已结束，但没有返回可追踪的任务编号','The run command finished without a trackable task ID'));
+            error.hypitCommandTerminal=true;
+            throw error;
+        }
+        await refreshHypitCanvasAfterAgentCommand();
+        const taskResult=await waitForHypitStudioTasks(taskIds);
+        await refreshHypitCanvasAfterAgentCommand();
+        if(taskResult.recoverable.length){
+            throw new Error(canvasSyncText(
+                '任务状态暂时无法确认，请重试查询原任务，或取消原任务。',
+                'The task status could not be confirmed. Retry checking the original task or cancel it.'
+            ));
+        }
+        hypitStoreRunRequestId(node.id,'');
+        if(taskResult.failures.length){
+            const error=new Error(taskResult.failures.find(item=>item.error)?.error||canvasSyncText('执行任务未成功完成','The execution task did not complete successfully'));
+            error.hypitCommandTerminal=true;
+            throw error;
+        }
+        if(taskResult.cancelled)return false;
+        return true;
+    })().catch(error=>{
+        if(error?.hypitCommandTerminal)hypitStoreRunRequestId(node.id,'');
+        errorToast((error?.message||canvasSyncText('运行失败','Run failed')).slice(0,180));
+        return false;
+    }).finally(()=>{
+        hypitNodeRunOperations.delete(node.id);
+        syncRunButtonState();
+        render();
+    });
+    hypitNodeRunOperations.set(node.id,operation);
+    syncRunButtonState(node);
+    render();
+    return operation;
+}
+function addHypitOutput(slot){
+    if(!isSettingsCanvasMode||!HYPIT_OUTPUT_SLOTS.includes(slot)||!canvas)return null;
+    const existing=nodes.find(node=>isHypitOutputNode(node)&&node.hypitSlot===slot);
+    if(existing){selectedId=existing.id;selectedIds=[];render();focusSmartNodeInViewport(existing.id);return existing;}
+    pushUndo();
+    const workflowNodes=nodes.filter(node=>!isHypitOutputNode(node));
+    const rightEdge=workflowNodes.reduce((max,node)=>Math.max(max,nodeRect(node).x+nodeRect(node).width),180);
+    const node={id:uid('hypit-output'),type:'smart-hypit-output',hypitSlot:slot,outputKind:HYPIT_OUTPUT_KINDS[slot],x:rightEdge+180,y:100+HYPIT_OUTPUT_SLOTS.indexOf(slot)*205,w:300,h:150,images:[],created_at:Date.now()};
+    appendSmartNodes(node);
+    canvas.nodes=nodes;selectedId=node.id;selectedIds=[];
+    render();scheduleSave();focusSmartNodeInViewport(node.id);
+    return node;
+}
+function updateHypitOutputStatuses(){
+    if(!isSettingsCanvasMode)return;
+    world?.querySelectorAll('.hypit-output-node').forEach(element=>{
+        const node=nodes.find(item=>item.id===element.dataset.id);
+        if(!node)return;
+        const state=hypitOutputPresentation(node);
+        element.dataset.hypitStatus=state.status;
+        element.setAttribute('title',state.label);
+        element.setAttribute('aria-label',hypitOutputAccessibleLabel(node));
+    });
+}
+function connectInputToHypitOutput(fromId,outputId,options={}){
+    const source=nodes.find(node=>node.id===fromId),output=nodes.find(node=>node.id===outputId);
+    if(!source||!hypitConnectionAllowed(source,output)){
+        toast(canvasSyncText('该节点的输出类型与此用途不符，未建立连接','This node has no confirmed output type for this purpose; no connection was added'),{tone:'error'});
+        return false;
+    }
+    const current=hypitIncomingConnections(output.id);
+    if(current.length===1&&current[0].from===source.id)return false;
+    pushUndo();
+    canvas.connections=canvas.connections.filter(edge=>edge.to!==output.id||!['input','flow'].includes(edge.kind||'flow'));
+    canvas.connections.push({id:uid('edge'),from:source.id,to:output.id,kind:'input',...(options.targetFieldKey?{targetFieldKey:options.targetFieldKey}:{})});
+    nodes.forEach(node=>{
+        if(!isSmartExecutionNode(node))return;
+        node.inputNodeIds=inputNodesFor(node).map(item=>item.id);
+    });
+    render();scheduleSave();
+    return true;
+}
+function disconnectHypitOutput(outputId){
+    const output=nodes.find(node=>node.id===outputId);
+    if(!isHypitOutputNode(output))return false;
+    const before=canvas.connections.length;
+    canvas.connections=canvas.connections.filter(edge=>edge.to!==outputId||!['input','flow'].includes(edge.kind||'flow'));
+    if(canvas.connections.length===before)return false;
+    render();scheduleSave();return true;
+}
+function removeHypitOutput(nodeId){
+    const node=nodes.find(item=>item.id===nodeId&&isHypitOutputNode(item));
+    if(!node)return false;
+    pushUndo();
+    nodes=nodes.filter(item=>item.id!==nodeId);
+    canvas.nodes=nodes;
+    canvas.connections=canvas.connections.filter(edge=>edge.from!==nodeId&&edge.to!==nodeId);
+    hypitServerPassedSignatures.delete(nodeId);hypitObservedRecipeSignatures.delete(nodeId);
+    render();scheduleSave();return true;
+}
+async function prepareHypitReset(){
+    if(!isSettingsCanvasMode||!['hypit-settings','article-settings'].includes(canvasId)||!canvas)return false;
+    hypitResetPending=true;clearTimeout(saveTimer);saveTimer=null;canvasSyncSaveQueued=false;
+    const started=Date.now();
+    while(canvasSyncInFlight&&Date.now()-started<15000)await hypitSleep(40);
+    if(canvasSyncInFlight)throw new Error(canvasSyncText('画布仍在保存，请稍后重试','The canvas is still saving; retry in a moment'));
+    const response=await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/meta`,{cache:'no-store'});
+    const meta=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(meta.detail?.message||meta.detail||`HTTP ${response.status}`);
+    const revision=Number(meta.revision||0);
+    if(!Number.isInteger(revision)||revision<=0)throw new Error(canvasSyncText('服务没有提供有效画布修订号','The server did not provide a valid canvas revision'));
+    return revision;
+}
+function applyHypitReset(snapshot){
+    if(!isSettingsCanvasMode||snapshot?.id!==canvasId)return false;
+    clearTimeout(saveTimer);saveTimer=null;canvasSyncSaveQueued=false;canvasSyncSaveBlocked=false;canvasSyncConflictState=null;
+    canvas=canvasSyncIncomingSnapshot(snapshot);
+    hypitTestStatuses={};
+    nodes=[];canvas.nodes=nodes;canvas.connections=[];canvas.logs=[];canvas.settings={};
+    viewport={...(snapshot.viewport||{x:0,y:0,scale:1})};viewport.scale=safeScale(viewport.scale);
+    canvas.viewport={...viewport};selectedId='';selectedIds=[];selectedImage={nodeId:'',index:-1};
+    hypitServerPassedSignatures.clear();hypitObservedRecipeSignatures.clear();
+    hypitServerSignatureSnapshot=null;hypitServerSignaturesNeedSeed=false;undoStack.length=0;
+    canvasSyncRememberBase(canvas);canvasSyncClearDraft();applyViewport();render();
+    hypitResetPending=false;
+    return true;
+}
+function cancelHypitReset(){hypitResetPending=false;}
+if(isSettingsCanvasMode){
+    window.SettingsCanvasBridge={prepareReset:prepareHypitReset,applyReset:applyHypitReset,cancelReset:cancelHypitReset};
+    if(isHypitSettingsMode)window.HypitSettingsCanvasBridge=window.SettingsCanvasBridge;
+}
+let canvasSettingsResetPending=false;
+function applyCanvasPersonalizationSnapshot(snapshot){
+    if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot))return false;
+    const next=cloneSmartSettings({value:snapshot}).value||{};
+    next.version=Number(next.version)||1;
+    next.reset_epoch=Number.isInteger(next.reset_epoch)&&next.reset_epoch>=0?next.reset_epoch:0;
+    ['executionLayouts','parameterOptionOrder','modelOrder','parameterPresentation'].forEach(key=>{
+        if(!next[key]||typeof next[key]!=='object'||Array.isArray(next[key]))next[key]={};
+    });
+    discardLegacyParameterVisibilityPreferences(next);
+    clearTimeout(smartCanvasPersonalizationSaveTimer);
+    smartCanvasPersonalizationSaveTimer=null;
+    smartCanvasPersonalizationRevision+=1;
+    smartCanvasPersonalizationDirty=false;
+    smartCanvasPersonalization=next;
+    try{localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY,JSON.stringify(next));}catch(e){}
+    return true;
+}
+async function refreshCanvasSettingsPersonalization(){
+    const response=await fetch('/api/smart-canvas/personalization',{cache:'no-store'});
+    if(!response.ok)return false;
+    const value=await response.json().catch(()=>null);
+    if(!applyCanvasPersonalizationSnapshot(value))return false;
+    if(isCanvasSettingsMode)render();
+    return true;
+}
+async function waitForCanvasPersonalizationWrite(){
+    const started=Date.now();
+    while((smartCanvasPersonalizationSaveTimer||smartCanvasPersonalizationPendingWrites)&&Date.now()-started<15000)await hypitSleep(40);
+    if(smartCanvasPersonalizationSaveTimer||smartCanvasPersonalizationPendingWrites)throw new Error(capabilityUiText('参数显示偏好仍在保存，请稍后重试','Display preferences are still saving; retry in a moment'));
+    if(smartCanvasPersonalizationDirty)throw new Error(capabilityUiText('参数显示偏好保存失败，请重试后再重置','Could not save display preferences. Retry before resetting'));
+}
+async function prepareCanvasSettingsReset(){
+    if(!isCanvasSettingsMode||canvasId!=='canvas-settings'||!canvas)return false;
+    canvasSettingsResetPending=true;
+    clearTimeout(saveTimer);saveTimer=null;canvasSyncSaveQueued=false;
+    await waitForCanvasPersonalizationWrite();
+    const started=Date.now();
+    while(canvasSyncInFlight&&Date.now()-started<15000)await hypitSleep(40);
+    if(canvasSyncInFlight)throw new Error(capabilityUiText('画布仍在保存，请稍后重试','The canvas is still saving; retry in a moment'));
+    const response=await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/meta`,{cache:'no-store'});
+    const meta=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(meta.detail?.message||meta.detail||`HTTP ${response.status}`);
+    const revision=Number(meta.revision||0);
+    if(!Number.isInteger(revision)||revision<=0)throw new Error(capabilityUiText('服务没有提供有效画布修订号','The server did not provide a valid canvas revision'));
+    return revision;
+}
+function applyCanvasSettingsReset(snapshot,preferences){
+    if(!isCanvasSettingsMode||snapshot?.id!=='canvas-settings'||!preferences||typeof preferences!=='object')return false;
+    if(!applyCanvasPersonalizationSnapshot(preferences))return false;
+    clearTimeout(saveTimer);saveTimer=null;canvasSyncSaveQueued=false;canvasSyncSaveBlocked=false;canvasSyncConflictState=null;
+    canvas=canvasSyncIncomingSnapshot(snapshot);
+    nodes=[];canvas.nodes=nodes;canvas.connections=[];canvas.logs=[];canvas.settings={};
+    viewport={...(snapshot.viewport||{x:0,y:0,scale:1})};viewport.scale=safeScale(viewport.scale);canvas.viewport={...viewport};
+    selectedId='';selectedIds=[];selectedImage={nodeId:'',index:-1};undoStack.length=0;
+    canvasSyncRememberBase(canvas);canvasSyncClearDraft();applyViewport();render();
+    canvasSettingsResetPending=false;
+    return true;
+}
+function cancelCanvasSettingsReset(){canvasSettingsResetPending=false;}
+if(isCanvasSettingsMode){
+    window.CanvasSettingsBridge={prepareReset:prepareCanvasSettingsReset,applyReset:applyCanvasSettingsReset,cancelReset:cancelCanvasSettingsReset,refreshPreferences:refreshCanvasSettingsPersonalization};
+}
+function hypitSleep(ms){return new Promise(resolve=>setTimeout(resolve,ms));}
 function smartArrangeAtomicIds(ids){
     const out = new Set((ids || []).filter(id => nodes.some(n => n.id === id)));
     let changed = true;
@@ -3338,11 +4091,93 @@ function capabilityInputCounts(apiKind, node=activeSettingsSubject()){
 function capabilityRegionForProvider(providerId, sourceSettings=settings){
     return providerId === 'runninghub' ? runningHubRegion(sourceSettings) : '';
 }
+function capabilityPickerCatalog(){
+    // 管理画布使用服务端筛过 provider/site 且只含严格可运行档案的脱敏目录；
+    // 普通画布仍只读用户正式启用目录，两者不互相写回。
+    if(!isCanvasSettingsMode) return modelCapabilityCatalog;
+    return Array.isArray(canvasModelManagementCatalog.catalog?.providers)
+        ? canvasModelManagementCatalog.catalog
+        : {schema_version:0, providers:[], options:[]};
+}
+function managementOptionForProfile(profile){
+    if(!isCanvasSettingsMode || !profile) return null;
+    const providerId=String(profile.connection_id||profile.provider_id||'').trim();
+    const modelId=String(profile.model_id||'').trim();
+    const nodeType=String(profile.node_type||'').trim();
+    const region=String(profile.region||profile.region_id||'').trim().toLowerCase();
+    const optionId=String(profile.option_id||'').trim();
+    if(!providerId||!modelId||!nodeType)return null;
+    const matches=(canvasModelManagementCatalog.options||[]).filter(option=>
+        (!optionId||String(option.option_id||'')===optionId)
+        && String(option.connection_id||'')===providerId
+        && String(option.catalog_model_id||'')===modelId
+        && String(option.node_type||'')===nodeType
+        && (!profile.operation||!option.operation||String(option.operation)===String(profile.operation))
+        && (!region||!option.region_id||String(option.region_id).toLowerCase()===region)
+        && option.validation_mode==='strict'
+        && option.runnable!==false);
+    return matches.length===1?matches[0]:null;
+}
+function decorateManagementProfile(profile){
+    const option=managementOptionForProfile(profile);
+    if(!option)return null;
+    const providerId=String(option.connection_id||profile.provider_id||'').trim();
+    const modelId=String(option.catalog_model_id||profile.model_id||'').trim();
+    const familyLabel=option.canonical_family_label||profile.canonical_family_label||{};
+    return {
+        ...profile,
+        ...option,
+        provider_id:providerId,
+        model_id:modelId,
+        node_type:option.node_type||profile.node_type,
+        operation:option.operation||profile.operation||'',
+        region:String(option.region_id||profile.region||''),
+        family_id:String(option.canonical_family_id||profile.family_id||option.legacy_family_id||modelId),
+        family_name:familyLabel.zh||profile.family_name||modelId,
+        family_name_en:familyLabel.en||profile.family_name_en||modelId,
+        canonical_family_id:option.canonical_family_id||profile.canonical_family_id||'',
+        canonical_family_label:familyLabel,
+        variant_id:String(option.option_id||profile.variant_id||modelId),
+        variant_name:option.display_label?.zh||option.display_mode||profile.variant_name||modelId,
+        variant_name_en:option.display_label?.en||option.display_mode||profile.variant_name_en||modelId,
+        option_id:String(option.option_id||''),
+        // 该目录只返回严格可运行项；普通 profile 缺少派生标志时，
+        // 不得把精确管理选项误判成不可运行。
+        validation_mode:option.validation_mode||'strict',
+        runnable:option.runnable!==false,
+        selectable:option.selectable!==false&&profile.selectable!==false,
+        inputs:Object.keys(profile.inputs||{}).length?profile.inputs:(option.inputs||{}),
+        parameters:Object.keys(profile.parameters||{}).length?profile.parameters:(option.parameters||{})
+    };
+}
+function canvasManagementProfilesForProvider(providerId,nodeType,region=''){
+    const provider=capabilityProviderConfig(providerId);
+    if(!provider||provider.enabled===false)return [];
+    const enabledRegions=providerId==='runninghub'?new Set(runningHubEnabledRegions(provider).map(value=>String(value||'').toLowerCase())):null;
+    return (canvasModelManagementCatalog.options||[])
+        .filter(option=>String(option.connection_id||'')===String(providerId||'')
+            &&String(option.node_type||'')===String(nodeType||'')
+            &&(!region||!option.region_id||String(option.region_id).toLowerCase()===String(region).toLowerCase())
+            &&(!enabledRegions||!option.region_id||enabledRegions.has(String(option.region_id).toLowerCase()))
+            &&option.validation_mode==='strict'
+            &&option.runnable!==false
+            &&option.selectable!==false)
+        .map(option=>canvasManagementProfileForOption(option))
+        .filter(profile=>profile&&managementOptionForProfile(profile));
+}
 function capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles={}, parameters={}, region=''){
-    const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId);
+    const catalog=capabilityPickerCatalog();
+    const provider = (catalog.providers || []).find(item => item.id === providerId);
     if(!provider) return null;
-    const models = window.SmartModelCapabilities?.modelsForInputs(modelCapabilityCatalog, nodeType, inputCounts, inputRoles, parameters, region)
-        .filter(model => model.provider_id === providerId && configuredCapabilityModelIds(providerId, nodeType, region).has(String(model.model_id || ''))) || [];
+    const models = (isCanvasSettingsMode
+        ? canvasManagementProfilesForProvider(providerId,nodeType,region)
+        : window.SmartModelCapabilities?.modelsForInputs(catalog, nodeType, inputCounts, inputRoles, parameters, region))
+        .filter(model => {
+            if(model.provider_id!==providerId || !capabilityProviderEnabled(providerId))return false;
+            if(isCanvasSettingsMode) return Boolean(managementOptionForProfile(model));
+            return configuredCapabilityModelIds(providerId,nodeType,region).has(String(model.model_id||''))
+                && hypitProfileAllowedForCurrentUse(model,nodeType);
+        }) || [];
     if(!models.length) return null;
     return {
         ...provider,
@@ -3354,6 +4189,370 @@ function capabilityProviderEntry(providerId, nodeType, inputCounts, inputRoles={
 }
 function capabilityProviderConfig(providerId){
     return (apiProviders || []).find(item => item.id === providerId || item.capability_provider_id === providerId) || null;
+}
+function hypitModelSlotContext(node){
+    if(!isSettingsCanvasMode || !executionSelectionDescriptor(node) || !['api',''].includes(String(settings.engine || 'api'))) return null;
+    const descriptor = executionSelectionDescriptor(node);
+    const outputSlots = [...new Set((canvas?.connections || [])
+        .filter(edge => edge?.from === node.id && ['input','flow'].includes(String(edge.kind || 'flow')))
+        .map(edge => nodes.find(item => item.id === edge.to))
+        .filter(isHypitOutputNode)
+        .map(output => output.hypitSlot))];
+    let slots = outputSlots;
+    let combine = 'all';
+    if(!slots.length){
+        slots = descriptor.kind === 'audio' ? ['audio','voice'] : [descriptor.kind];
+        combine = 'any';
+    }
+    slots = [...new Set(slots.filter(slot => HYPIT_OUTPUT_SLOTS.includes(slot)))];
+    return slots.length ? {nodeId:String(node.id || ''), slots, combine, key:`${node.id}:${combine}:${slots.join(',')}`} : null;
+}
+function requestHypitModelOptions(slot){
+    if(hypitSlotModelOptionLoads.has(slot)) return hypitSlotModelOptionLoads.get(slot);
+    const generation = hypitModelOptionGeneration;
+    const moduleId=isArticleSettingsMode?'article':'hypit';
+    const query = new URLSearchParams({module_id:moduleId, slot_id:slot});
+    let promise;
+    promise = (async()=>{
+        try{
+            const response = await fetch(`/api/studio/model-options?${query.toString()}`, {cache:'no-store'});
+            const payload = await response.json().catch(()=>({}));
+            if(!response.ok) throw new Error(payload?.detail?.message || payload?.detail || `HTTP ${response.status}`);
+            if(payload?.module_id !== moduleId
+                || !Array.isArray(payload?.options)
+                || !Array.isArray(payload?.slots)
+                || !payload.slots.some(item => item?.id === slot)){
+                throw new Error(capabilityUiText('服务没有返回当前用途的有效候选','The server did not return valid candidates for this use'));
+            }
+            const responseRevision = String(payload.catalog_revision || '');
+            const activeRevision = String(modelCapabilityCatalog.catalog_revision || '');
+            if(generation !== hypitModelOptionGeneration) return;
+            if(responseRevision && activeRevision && responseRevision !== activeRevision){
+                throw new Error(capabilityUiText('模型目录已更新，请重试读取','The model catalog changed; retry loading candidates'));
+            }
+            hypitSlotModelOptions.set(slot, {status:'ready', options:payload.options, catalogRevision:responseRevision});
+        }catch(error){
+            if(generation === hypitModelOptionGeneration){
+                hypitSlotModelOptions.set(slot, {status:'error', options:[], error:error?.message || String(error)});
+            }
+        }finally{
+            if(hypitSlotModelOptionLoads.get(slot) === promise) hypitSlotModelOptionLoads.delete(slot);
+            if(generation !== hypitModelOptionGeneration) return;
+            const active = activeSettingsSubject();
+            const current = hypitModelSlotContext(active);
+            if(active?.id === hypitModelOptionPendingNodeId && current?.key === hypitModelOptionPendingContextKey){
+                hypitModelOptionPendingNodeId = '';
+                hypitModelOptionPendingContextKey = '';
+                renderDynamicParams();
+            }
+        }
+    })();
+    hypitSlotModelOptionLoads.set(slot, promise);
+    return promise;
+}
+function hypitModelOptionState(context){
+    if(!context) return {status:'not-applicable'};
+    const states = context.slots.map(slot => hypitSlotModelOptions.get(slot));
+    if(states.some(state => state?.status === 'error')) return {status:'error', error:states.find(state => state?.status === 'error')?.error || ''};
+    const missing = context.slots.filter((slot, index) => !states[index]);
+    if(missing.length){
+        hypitModelOptionPendingNodeId = context.nodeId;
+        hypitModelOptionPendingContextKey = context.key;
+        missing.forEach(slot => { void requestHypitModelOptions(slot); });
+        return {status:'loading'};
+    }
+    return {status:'ready'};
+}
+function hypitOptionAllowedForContext(option, context){
+    if(!context) return true;
+    const allowedForSlot = slot => (hypitSlotModelOptions.get(slot)?.options || []).some(candidate => candidate?.option_id && candidate.option_id === option?.option_id);
+    return context.combine === 'all' ? context.slots.every(allowedForSlot) : context.slots.some(allowedForSlot);
+}
+function hypitProfileMatchesOption(option, profile, nodeType){
+    if(!option || !profile || option.node_type !== nodeType || profile.node_type !== nodeType) return false;
+    if(String(option.catalog_model_id || '') !== String(profile.model_id || '')) return false;
+    if(option.operation && String(option.operation) !== String(profile.operation || '')) return false;
+    const profileConnections = new Set([profile.provider_id, profile.connection_id, profile.capability_provider_id].map(value=>String(value||'').trim()).filter(Boolean));
+    const optionConnections = [option.connection_id, option.capability_provider_id].map(value=>String(value||'').trim()).filter(Boolean);
+    if(profileConnections.size && optionConnections.length && !optionConnections.some(value=>profileConnections.has(value))) return false;
+    const wantedRegion = String(profile.region || profile.region_id || '').trim().toLowerCase();
+    const optionRegion = String(option.region_id || '').trim().toLowerCase();
+    if(wantedRegion && optionRegion && wantedRegion !== optionRegion) return false;
+    const regions = Array.isArray(profile.regions) ? profile.regions.map(value=>String(value||'').toLowerCase()) : [];
+    if(optionRegion && regions.length && !regions.includes(optionRegion)) return false;
+    return true;
+}
+function hypitProfileAllowedForCurrentUse(profile, nodeType){
+    if(isArticleSettingsMode)return true;
+    const context = hypitModelSlotContext(activeSettingsSubject());
+    if(!context) return true;
+    const states = context.slots.map(slot => hypitSlotModelOptions.get(slot));
+    if(states.some(state => state?.status !== 'ready')) return false;
+    const allowedForSlot = slot => (hypitSlotModelOptions.get(slot)?.options || []).some(option => hypitProfileMatchesOption(option, profile, nodeType));
+    return context.combine === 'all' ? context.slots.every(allowedForSlot) : context.slots.some(allowedForSlot);
+}
+function invalidateHypitModelOptions(){
+    hypitModelOptionGeneration += 1;
+    hypitSlotModelOptions.clear();
+    hypitSlotModelOptionLoads.clear();
+    hypitModelOptionPendingNodeId = '';
+    hypitModelOptionPendingContextKey = '';
+}
+function updateHypitModelOptionCatalogRevision(revision){
+    const next = String(revision || '');
+    if(hypitModelOptionCatalogRevision && next && next !== hypitModelOptionCatalogRevision) invalidateHypitModelOptions();
+    if(next) hypitModelOptionCatalogRevision = next;
+}
+async function loadCanvasModelManagementCatalog(){
+    if(!isCanvasSettingsMode)return;
+    canvasModelManagementCatalogError='';
+    try{
+        const response=await fetch('/api/studio/canvas/model-management-catalog',{cache:'no-store'});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok)throw new Error(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`);
+        if(!Array.isArray(payload?.options)||!String(payload?.catalog_revision||''))throw new Error(capabilityUiText('服务没有返回有效的模型管理目录','The server did not return a valid model management catalog'));
+        canvasModelManagementCatalog={options:payload.options,catalog:payload.catalog&&Array.isArray(payload.catalog.providers)?payload.catalog:null,catalog_revision:String(payload.catalog_revision),selection_contract_version:payload.selection_contract_version||0};
+    }catch(error){
+        canvasModelManagementCatalog={options:[],catalog:null,catalog_revision:'',selection_contract_version:0};
+        canvasModelManagementCatalogError=String(error?.message||error);
+    }
+}
+async function refreshCanvasPickerSources(){
+    if(canvasPickerCatalogRefreshPromise) return canvasPickerCatalogRefreshPromise;
+    canvasPickerCatalogRefreshPromise=(async()=>{
+        const beforeConfig=JSON.stringify(apiProviders);
+        const beforeCatalog=JSON.stringify(modelCapabilityCatalog||{});
+        const beforeManagementCatalog=JSON.stringify(canvasModelManagementCatalog||{});
+        const [configResult,catalogResult]=await Promise.allSettled([
+            fetch('/api/config',{cache:'no-store'}).then(async response=>{
+                if(!response.ok)throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            }),
+            fetch('/api/model-capabilities',{cache:'no-store'}).then(async response=>{
+                if(!response.ok)throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
+        ]);
+        if(configResult.status==='fulfilled'){
+            const config=configResult.value||{};
+            if(Array.isArray(config.api_providers)) apiProviders=config.api_providers.map(provider=>SMART_NODE_CONTRACT.hydrateRunningHubProviderApps(provider));
+        }
+        if(catalogResult.status==='fulfilled'&&Array.isArray(catalogResult.value?.providers)){
+            modelCapabilityCatalog=catalogResult.value;
+            updateHypitModelOptionCatalogRevision(modelCapabilityCatalog.catalog_revision);
+        }
+        if(isCanvasSettingsMode) await loadCanvasModelManagementCatalog();
+        const preferencesUpdated=await refreshSmartCanvasPersonalizationForUse();
+        const configChanged=beforeConfig!==JSON.stringify(apiProviders);
+        const catalogChanged=beforeCatalog!==JSON.stringify(modelCapabilityCatalog||{});
+        const managementCatalogChanged=beforeManagementCatalog!==JSON.stringify(canvasModelManagementCatalog||{});
+        return {configChanged,catalogChanged,managementCatalogChanged,preferencesUpdated,ok:configResult.status==='fulfilled'||catalogResult.status==='fulfilled'};
+    })().finally(()=>{canvasPickerCatalogRefreshPromise=null;});
+    return canvasPickerCatalogRefreshPromise;
+}
+function rerenderOpenCapabilityPicker(picker, expectedSubjectId=''){
+    const subjectId=String(activeSettingsSubject()?.id||'');
+    if(!picker?.isConnected||!picker.classList.contains('pinned')||(expectedSubjectId&&subjectId!==expectedSubjectId)) return;
+    if(smartPreferencePointerDragState||smartCapabilityOptionDragState||smartParameterPresentationDragState){
+        deferredCapabilityControlRefresh={subjectId,controlKey:controlTypeKey(picker),kind:'picker'};
+        return;
+    }
+    const previousSearch=picker.querySelector('[data-capability-picker-search]');
+    const searchValue=previousSearch?.value||'';
+    const restoreSearchFocus=Boolean(previousSearch&&document.activeElement===previousSearch);
+    renderDynamicParams();
+    const nextPicker=dynamicParams?.querySelector('[data-capability-model-picker].pinned');
+    const search=nextPicker?.querySelector('[data-capability-picker-search]');
+    if(search){
+        search.value=searchValue;
+        search.dispatchEvent(new Event('input',{bubbles:true}));
+        if(restoreSearchFocus) search.focus({preventScroll:true});
+    }
+}
+function flushDeferredCapabilityControlRefresh(){
+    if(smartPreferencePointerDragState||smartCapabilityOptionDragState||smartParameterPresentationDragState)return;
+    const pending=deferredCapabilityControlRefresh;
+    deferredCapabilityControlRefresh=null;
+    if(!pending||String(activeSettingsSubject()?.id||'')!==pending.subjectId)return;
+    const current=dynamicParams?.querySelector('.smart-control.pinned');
+    if(!current||controlTypeKey(current)!==pending.controlKey)return;
+    if(pending.kind==='picker')rerenderOpenCapabilityPicker(current,pending.subjectId);
+    else renderDynamicParams();
+}
+function refreshCanvasPickerWhenOpened(control){
+    if(!control||!control.classList.contains('pinned'))return;
+    const isPicker=control.matches('[data-capability-model-picker]');
+    const isParameterPanel=control.matches('[data-capability-summary-control],[data-capability-settings]');
+    if(!isPicker&&!isParameterPanel)return;
+    const subjectId=String(activeSettingsSubject()?.id||'');
+    const task=isPicker?refreshCanvasPickerSources():refreshSmartCanvasPersonalizationForUse().then(preferencesUpdated=>({preferencesUpdated,ok:preferencesUpdated}));
+    Promise.resolve(task).then(result=>{
+        if(!result?.preferencesUpdated&&!result?.configChanged&&!result?.catalogChanged&&!result?.managementCatalogChanged)return;
+        const current=dynamicParams?.querySelector('.smart-control.pinned');
+        if(!current||controlTypeKey(current)!==controlTypeKey(control)||String(activeSettingsSubject()?.id||'')!==subjectId)return;
+        if(isPicker) rerenderOpenCapabilityPicker(current,subjectId);
+        else if(smartPreferencePointerDragState||smartCapabilityOptionDragState||smartParameterPresentationDragState){
+            deferredCapabilityControlRefresh={subjectId,controlKey:controlTypeKey(current),kind:'parameters'};
+        }else renderDynamicParams();
+    }).catch(()=>{});
+}
+async function updateCanvasModelEnablement(optionId,enabled,input){
+    if(!isCanvasSettingsMode||!optionId)return false;
+    const option=(canvasModelManagementCatalog.options||[]).find(item=>item.option_id===optionId);
+    if(!option)return false;
+    if(input)input.disabled=true;
+    let responseStatus=0;
+    try{
+        const response=await fetch('/api/studio/canvas/model-enablement',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({option_id:optionId,enabled:!!enabled,catalog_revision:canvasModelManagementCatalog.catalog_revision})});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok){responseStatus=response.status;throw new Error(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`);}
+        if(payload.option_id!==optionId||payload.enabled!==!!enabled||!payload.catalog_revision)throw new Error(capabilityUiText('服务未确认模型启用状态','The server did not confirm model enablement'));
+        canvasModelManagementCatalog.options=canvasModelManagementCatalog.options.map(item=>item.option_id===optionId?{...item,enabled:!!enabled}:item);
+        canvasModelManagementCatalog.catalog_revision=String(payload.catalog_revision);
+        renderDynamicParams();
+        return true;
+    }catch(error){
+        if(input)input.checked=option.enabled===true;
+        toast(`${capabilityUiText('启用状态未保存','Enablement was not saved')}: ${error?.message||error}`);
+        if(responseStatus===409){
+            await loadCanvasModelManagementCatalog();
+            const latest=(canvasModelManagementCatalog.options||[]).find(item=>item.option_id===optionId);
+            if(input?.isConnected&&latest)input.checked=latest.enabled===true;
+        }
+        return false;
+    }finally{
+        if(input?.isConnected)input.disabled=false;
+    }
+}
+function canvasSettingsResetTargetForNode(node){
+    if(!isCanvasSettingsMode||canvasId!=='canvas-settings')return null;
+    const descriptor=executionSelectionDescriptor(node);
+    if(!descriptor)return null;
+    const source=node.runSettings&&typeof node.runSettings==='object'?node.runSettings:{};
+    if(!['api',''].includes(String(source.engine||'api')))return null;
+    const providerId=String(source[descriptor.providerKey]||'').trim();
+    const modelId=String(source[descriptor.modelKey]||'').trim();
+    if(!providerId||!modelId)return null;
+    const region=capabilityRegionForProvider(providerId,source);
+    const selection=node?.modelSelection&&typeof node.modelSelection==='object'?node.modelSelection:{};
+    const selectionOptionId=String(selection.option_id||'').trim();
+    const selectionOperation=String(selection.operation||'').trim();
+    // 优先沿节点已保存的精确 option/operation 查契约；早期没有 modelSelection
+    // 的节点只在当前 provider/model/region 下恰好唯一时才允许恢复默认值。
+    const matches=(canvasModelManagementCatalog.options||[]).filter(item=>
+        String(item.node_type||'')===descriptor.nodeType
+        && String(item.connection_id||'')===providerId
+        && String(item.catalog_model_id||'')===modelId
+        && (!region||!item.region_id||String(item.region_id)===String(region))
+        && (!selectionOptionId||String(item.option_id||'')===selectionOptionId)
+        && (!selectionOperation||String(item.operation||'')===selectionOperation)
+        && item.validation_mode==='strict'
+        && item.runnable!==false
+    );
+    if(matches.length!==1)return null;
+    const option=matches[0];
+    const profile=canvasManagementProfileForOption(option);
+    if(!profile
+        ||profile.option_id!==option.option_id
+        ||profile.node_type!==descriptor.nodeType
+        ||profile.provider_id!==providerId
+        ||profile.model_id!==modelId
+        ||String(profile.operation||'')!==String(option.operation||'')
+        ||profile.validation_mode!=='strict'
+        ||profile.runnable===false
+        ||!profile.parameters
+        ||typeof profile.parameters!=='object')return null;
+    return {descriptor,profile,option};
+}
+function capabilitySchemaDefaultIsValid(spec){
+    return Boolean(spec&&typeof window.ModelConfigCore?.parameterDefaultIsValid==='function'
+        &&window.ModelConfigCore.parameterDefaultIsValid(spec));
+}
+function capabilityDefaultsForReset(profile, runSettings){
+    const next=cloneSmartSettings({value:runSettings||{}}).value||{};
+    const modelId=String(profile?.model_id||'').trim();
+    if(!modelId)return null;
+    const parameters=profile.parameters&&typeof profile.parameters==='object'?profile.parameters:{};
+    const defaults={};
+    Object.entries(parameters).forEach(([key,spec])=>{
+        if(!spec||typeof spec!=='object'||!capabilitySchemaDefaultIsValid(spec))return;
+        defaults[key]=cloneSmartSettings({value:spec.default}).value;
+    });
+    const all=next.capabilityParameters&&typeof next.capabilityParameters==='object'?{...next.capabilityParameters}:{};
+    if(Object.keys(defaults).length)all[modelId]=defaults;
+    else delete all[modelId];
+    next.capabilityParameters=all;
+    const aliases={
+        count:'count', quality:'quality', aspect_ratio:'capabilityAspectRatio', resolution:'resolution',
+        format:'audioFormat', sample_rate:'audioSampleRate', speaker:'audioSpeaker',
+        speech_rate:'audioSpeechRate', loudness_rate:'audioLoudnessRate', pitch_rate:'audioPitchRate'
+    };
+    Object.entries(aliases).forEach(([key,alias])=>{
+        if(!Object.prototype.hasOwnProperty.call(parameters,key))return;
+        if(Object.prototype.hasOwnProperty.call(defaults,key))next[alias]=defaults[key];
+        else delete next[alias];
+    });
+    return next;
+}
+function smartResponsePayloadMessage(payload,fallback='请求失败'){
+    const detail=payload?.detail??payload?.error??payload?.message;
+    if(typeof detail==='string')return detail||fallback;
+    if(detail&&typeof detail==='object')return String(detail.message||detail.message_en||fallback);
+    return fallback;
+}
+async function resetCanvasSettingsNodeParameters(nodeId){
+    if(!isCanvasSettingsMode||canvasId!=='canvas-settings')return false;
+    const node=nodes.find(item=>item.id===nodeId);
+    const target=canvasSettingsResetTargetForNode(node);
+    if(!node||!target){toast(capabilityUiText('此节点没有可验证的标准模型配置，未执行重置。','This node has no verified standard model profile; nothing was reset.'));return false;}
+    try{
+        await waitForCanvasPersonalizationWrite();
+        const started=Date.now();
+        while(canvasSyncInFlight&&Date.now()-started<15000)await hypitSleep(40);
+        if(canvasSyncInFlight||canvasSyncSaveBlocked||canvasSyncConflictState)throw new Error(canvasSyncText('画布尚未同步，请先解决保存状态后重试','The canvas is not synchronized. Resolve the save state and retry'));
+        if(saveTimer){clearTimeout(saveTimer);saveTimer=null;if(!await saveCanvas())throw new Error(canvasSyncText('当前画布改动未保存，参数未重置；请修正后重试','Canvas changes were not saved; parameters were not reset. Fix the save issue and retry'));}
+        const response=await fetch('/api/smart-canvas/personalization/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scope:'node',option_id:target.option.option_id,node_type:target.descriptor.nodeType})});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok){
+            if(response.status===409){
+                await refreshCanvasSettingsPersonalization().catch(()=>false);
+                throw new Error(capabilityUiText('显示偏好已在其他标签页重置；已尝试读取新设置，本次未覆盖重置结果。','Display preferences were reset in another tab. Latest settings were reloaded when possible; this update was not reapplied.'));
+            }
+            throw new Error(smartResponsePayloadMessage(payload,`HTTP ${response.status}`));
+        }
+        if(payload?.ok!==true||!payload?.personalization||typeof payload.personalization!=='object')throw new Error(capabilityUiText('服务未确认显示偏好重置','The server did not confirm the display preference reset'));
+        if(!applyCanvasPersonalizationSnapshot(payload.personalization))throw new Error(capabilityUiText('重置后的显示偏好无效，请重新读取','The reset display preferences were invalid; reload them'));
+        const current=nodes.find(item=>item.id===nodeId);
+        if(!current||current.type!==node.type)throw new Error(capabilityUiText('节点已变化；显示偏好已重置，请重新选择节点','The node changed; display preferences were reset. Select the node again'));
+        const currentTarget=canvasSettingsResetTargetForNode(current);
+        if(!currentTarget||currentTarget.option.option_id!==target.option.option_id)throw new Error(capabilityUiText('模型身份已变化；显示偏好已重置，参数未更改','The model identity changed; display preferences were reset, but parameters were not changed'));
+        const next=capabilityDefaultsForReset(currentTarget.profile,current.runSettings);
+        if(!next)throw new Error(capabilityUiText('无法读取精确参数契约，参数未更改','Could not read the exact parameter contract; parameters were not changed'));
+        pushUndo();
+        current.runSettings=SMART_NODE_CONTRACT.normalizeExecutionSettings(current,next);
+        const previousSelection=current.modelSelection&&typeof current.modelSelection==='object'?current.modelSelection:{};
+        current.modelSelection={
+            schema_version:2,
+            option_id:currentTarget.option.option_id,
+            connection_id:currentTarget.option.connection_id,
+            region_id:currentTarget.option.region_id||'',
+            operation:currentTarget.option.operation||'',
+            parameters:{...(current.runSettings.capabilityParameters?.[currentTarget.profile.model_id]||{})},
+            parameter_origins:previousSelection.parameter_origins||{},
+            revision:Number(previousSelection.revision||0)+1
+        };
+        if(activeSettingsSubject()?.id===nodeId){settings=cloneSmartSettings({value:current.runSettings}).value;updateComposer();}
+        render();
+        if(!await saveCanvas()){
+            toast(capabilityUiText('显示偏好已重置；参数默认值保留在本地草稿但尚未保存，请重试。','Display preferences reset; parameter defaults remain in the local draft but were not saved. Retry.'));
+            return false;
+        }
+        toast(capabilityUiText('此模型参数已恢复为已确认默认值；同模型节点共用的显示顺序也已重置。','Parameters were restored to verified defaults; display order shared by this model was also reset.'));
+        return true;
+    }catch(error){
+        toast(`${capabilityUiText('重置设置失败','Could not reset settings')}: ${error?.message||error}`);
+        return false;
+    }
 }
 function laohuDisplayText(value){
     return String(value || '')
@@ -3383,15 +4582,18 @@ function configuredCapabilityModelIds(providerId, nodeType, region=''){
     return new Set((provider[key] || []).map(model => String(model || '').trim()).filter(Boolean));
 }
 function capabilityEnabledProviderIds(nodeType, region=''){
-    return (modelCapabilityCatalog.providers || [])
+    const catalog=capabilityPickerCatalog();
+    return (catalog.providers || [])
         .filter(provider => !['modelscope','volcengine'].includes(provider.id))
         .filter(provider => capabilityProviderEnabled(provider.id))
-        .filter(provider => configuredCapabilityModelIds(provider.id, nodeType, region).size)
+        .filter(provider => isCanvasSettingsMode
+            ? (canvasModelManagementCatalog.options||[]).some(option=>option.node_type===nodeType&&option.connection_id===provider.id&&(!region||!option.region_id||option.region_id===region))
+            : configuredCapabilityModelIds(provider.id, nodeType, region).size)
         .map(provider => provider.id);
 }
 function capabilityProvidersFor(nodeType, inputCounts, fallback=[], inputRoles={}, parameters={}, region=''){
     const entries = [];
-    (modelCapabilityCatalog.providers || []).forEach(provider => {
+    (capabilityPickerCatalog().providers || []).forEach(provider => {
         if(provider.id === 'modelscope' || provider.id === 'volcengine') return;
         const entry = capabilityProviderEntry(provider.id, nodeType, inputCounts, inputRoles, parameters, region);
         if(entry) entries.push(entry);
@@ -3403,10 +4605,51 @@ function capabilityModelsForProvider(providerId, nodeType, inputCounts, fallback
     if(entry) return entry.capabilityModels || [];
     return [];
 }
+function canvasManagementFamiliesForProvider(providerId, nodeType, region=''){
+    const provider=capabilityProviderConfig(providerId);
+    const profiles=canvasManagementProfilesForProvider(providerId,nodeType,region);
+    if(!provider||provider.enabled===false||!profiles.length)return [];
+    const groups=new Map();
+    profiles.forEach(profile=>{
+        const identity=capabilitySelectionIdentity(profile,nodeType);
+        const familyId=String(identity?.canonical_family_id||profile.canonical_family_id||profile.family_id||profile.family_name||profile.model_id||'').trim();
+        if(!familyId)return;
+        let family=groups.get(familyId);
+        if(!family){
+            const canonicalLabel=identity?.canonical_family_label||profile.canonical_family_label||null;
+            family={
+                family_id:familyId,
+                canonical_family_id:identity?.canonical_family_id||profile.canonical_family_id||'',
+                canonical_family_label:canonicalLabel,
+                family_name:profile.family_name||canonicalLabel?.zh||familyId,
+                family_name_en:profile.family_name_en||canonicalLabel?.en||familyId,
+                display_name:canonicalLabel?.zh||profile.family_name||familyId,
+                display_name_en:canonicalLabel?.en||profile.family_name_en||familyId,
+                provider_id:providerId,
+                provider_name:provider.name||providerId,
+                providers:[{id:providerId,name:provider.name||providerId,protocol:provider.protocol||''}],
+                provider_ids:[providerId],
+                family_aliases:[profile.family_id||familyId],
+                variants:[],compatible_variants:[],resolved_variant:null
+            };
+            groups.set(familyId,family);
+        }
+        const identityKey=capabilityProfileIdentityKey(profile);
+        if(family.compatible_variants.some(item=>capabilityProfileIdentityKey(item)===identityKey))return;
+        family.variants.push(profile);
+        family.compatible_variants.push(profile);
+        if(!family.resolved_variant)family.resolved_variant=profile;
+    });
+    return smartOrderedItems([...groups.values()],smartPreferenceScopeKey('families',nodeType,providerId),family=>family.family_id);
+}
 function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation='', inputRoles={}, parameters={}, region=''){
+    // 设置画布是管理入口：列表按后端给出的精确可管理选项展示，不能因为
+    // 当前试跑节点尚未接入素材而隐藏候选。实际运行仍使用原输入契约预检。
+    if(isCanvasSettingsMode)return canvasManagementFamiliesForProvider(providerId,nodeType,region);
+    const catalog=capabilityPickerCatalog();
     const enabledIds = configuredCapabilityModelIds(providerId, nodeType, region);
     const families = (window.SmartModelCapabilities?.familiesForInputs(
-        modelCapabilityCatalog,
+        catalog,
         nodeType,
         inputCounts,
         providerId,
@@ -3415,7 +4658,11 @@ function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operat
         parameters,
         region
     ) || []).map(family => {
-        const variants = (family.variants || []).filter(variant => enabledIds.has(String(variant.model_id || '').trim()));
+        const variants = (family.variants || [])
+            .filter(variant => variant
+                && enabledIds.has(String(variant.model_id || '').trim())
+                && capabilityProviderEnabled(variant.provider_id||providerId)
+                && hypitProfileAllowedForCurrentUse(variant, nodeType));
         if(!variants.length) return null;
         const compatibleVariants = window.SmartModelCapabilities?.compatibleFamilyVariants({...family, variants}, inputCounts, inputRoles, parameters, region) || [];
         if(!compatibleVariants.length) return null;
@@ -3424,6 +4671,29 @@ function capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operat
     }).filter(Boolean);
     return smartOrderedItems(families, smartPreferenceScopeKey('families', nodeType, providerId), family => family.family_id);
 }
+function canvasManagementProfileForOption(option){
+    if(!option)return null;
+    const providerId=String(option.connection_id||'').trim();
+    const modelId=String(option.catalog_model_id||'').trim();
+    if(!providerId||!modelId)return null;
+    const provider=(capabilityPickerCatalog().providers||[]).find(item=>String(item.id||'')===providerId);
+    const records=(provider?.models||[]).map(model=>window.SmartModelCapabilities?.profileForRegion?.(model,String(option.region_id||''))||model)
+        .filter(model=>String(model?.provider_id||providerId)===providerId
+            &&String(model?.model_id||'')===modelId
+            &&String(model?.node_type||'')===String(option.node_type||'')
+            &&(!option.region_id||!model.region||String(model.region)===String(option.region_id))
+            &&(!option.operation||!model.operation||String(model.operation)===String(option.operation))
+            &&(!model.option_id||String(model.option_id)===String(option.option_id)));
+    const exactRecord=records.find(model=>String(model.option_id||'')===String(option.option_id||''))
+        ||(records.length===1?records[0]:null);
+    if(exactRecord)return decorateManagementProfile({...exactRecord,...option,provider_id:providerId,model_id:modelId});
+    // 后端 management option 已是脱敏且严格可运行的精确契约。若共享 provider
+    // profile 对同一 model/operation 有多条区域副本，不因副本歧义丢掉该 option。
+    if(option.parameters&&typeof option.parameters==='object'){
+        return decorateManagementProfile({...option,provider_id:providerId,model_id:modelId,option_id:option.option_id});
+    }
+    return null;
+}
 function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation='', inputRoles={}, parameters={}, region=''){
     const providerIds = capabilityEnabledProviderIds(nodeType, region);
     const grouped = new Map();
@@ -3431,9 +4701,12 @@ function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operati
         capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation, inputRoles, parameters, region).forEach(sourceFamily => {
             const variants = (sourceFamily.compatible_variants || sourceFamily.variants || []).filter(variant => (
                 capabilityProviderEnabled(variant.provider_id)
-                && configuredCapabilityModelIds(variant.provider_id, nodeType, region).has(String(variant.model_id || '').trim())
-                && capabilityProfileMatchesCurrentInput(variant, nodeType, inputCounts)
-                && window.SmartModelCapabilities?.modelSupportsInputs(variant, inputCounts, inputRoles, parameters, region)
+                && (isCanvasSettingsMode
+                    ? Boolean(managementOptionForProfile(variant))
+                    : configuredCapabilityModelIds(variant.provider_id, nodeType, region).has(String(variant.model_id || '').trim()))
+                && (isCanvasSettingsMode
+                    || (capabilityProfileMatchesCurrentInput(variant, nodeType, inputCounts)
+                        && window.SmartModelCapabilities?.modelSupportsInputs(variant, inputCounts, inputRoles, parameters, region)))
             ));
             variants.forEach(variant => {
                 const identity = capabilitySelectionIdentity(variant, nodeType);
@@ -3454,7 +4727,10 @@ function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operati
                     grouped.set(key, family);
                 }
                 family.family_aliases = [...new Set([...(family.family_aliases || []), sourceFamily.family_id])];
-                const existingIndex = family.compatible_variants.findIndex(item => item.provider_id === variant.provider_id && item.model_id === variant.model_id);
+                // 同一 model_id 可以对应不同 operation、endpoint 或区域契约。
+                // 有精确 option_id 时按它区分；旧档案没有 option_id 时才比较完整身份。
+                const identityKey = capabilityProfileIdentityKey(variant);
+                const existingIndex = family.compatible_variants.findIndex(item => capabilityProfileIdentityKey(item) === identityKey);
                 if(existingIndex >= 0) return;
                 const presented = identity ? {
                     ...variant,
@@ -3479,23 +4755,57 @@ function capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operati
         return family;
     }).sort((left, right) => String(left.canonical_family_label?.zh || left.display_name || left.family_id).localeCompare(String(right.canonical_family_label?.zh || right.display_name || right.family_id)));
 }
+function capabilityProfileIdentityKey(profile={}){
+    const provider=String(profile.provider_id||profile.connection_id||'').trim();
+    const model=String(profile.model_id||profile.catalog_model_id||'').trim();
+    const nodeType=String(profile.node_type||'').trim();
+    const operation=String(profile.operation||'').trim();
+    const region=String(profile.region_id||profile.region||'').trim().toLowerCase();
+    const endpoint=String(profile.endpoint_id||profile.endpoint_key||profile.endpoint||profile.base_endpoint||'').trim();
+    const optionId=String(profile.option_id||'').trim();
+    return optionId
+        ? [provider,'option',optionId,nodeType,operation,endpoint,region].join('::')
+        : [provider,model,nodeType,operation,endpoint,region].join('::');
+}
 function capabilitySelectionIdentity(profile, nodeType=''){
     const providerId = String(profile?.provider_id || '').trim();
     const modelId = String(profile?.model_id || '').trim();
     if(!providerId || !modelId) return null;
     const normalizedModelId = modelId.toLowerCase();
+    const reviewedLaohuGptImageIds = new Set([
+        'laohu-image-g-v2.5-flare',
+        'laohu-image-g-v2.5-lowprice',
+        'laohu-image-g-v2.5-sunburst',
+        'laohu-image-g2-i2i',
+        'laohu-image-g2-t2i',
+        'laohu-image-g-v2-lowprice'
+    ]);
     // 审核目录已经逐条绑定真实 ID、节点类型与 operation；先用它，避免旧平台家族名
     // 把 Luma Max、Nano Banana Pro 或即梦 CLI 重新拆成独立模型。
     const profileConnectionId = String(profile?.connection_id || '').trim();
     const capabilityProviderId = String(profile?.capability_provider_id || (providerId === 'jimeng' ? 'jimeng-cli' : providerId)).trim();
-    const matches = (typeof modelCapabilityCatalog === 'undefined' ? [] : (modelCapabilityCatalog.options || [])).filter(option => (
+    const catalog=capabilityPickerCatalog();
+    const matches = (catalog.options || []).filter(option => (
         (option.capability_provider_id === capabilityProviderId || option.connection_id === providerId
             || (profileConnectionId && option.connection_id === profileConnectionId))
         && option.catalog_model_id === modelId
         && (!nodeType || option.node_type === nodeType)
-        && (!profile.operation || !option.operation || option.operation === profile.operation)
+        && (!profile.option_id || option.option_id === profile.option_id)
+        && (!profile.operation || option.operation === profile.operation)
     ));
-    const option = matches.find(item => !profile.region || !item.region_id || item.region_id === profile.region) || matches[0];
+    const region=String(profile.region_id||profile.region||'').trim().toLowerCase();
+    const regionalMatches=region?matches.filter(item=>!item.region_id||String(item.region_id).toLowerCase()===region):matches;
+    const option = regionalMatches.length===1?regionalMatches[0]:null;
+    if(nodeType === 'image_generation' && reviewedLaohuGptImageIds.has(normalizedModelId)) return {
+        canonical_family_id:'series-image-gpt-image',
+        canonical_family_label:{zh:'GPT Image',en:'GPT Image'},
+        display_mode:option?.display_mode || option?.display_label?.zh || ''
+    };
+    if(nodeType === 'image_generation' && providerId === 'ai-money' && /^laohu-image-gk(?:[-_]|$)/.test(normalizedModelId)) return {
+        canonical_family_id:'series-image-grok-image',
+        canonical_family_label:{zh:'Grok Image',en:'Grok Image'},
+        display_mode:option?.display_mode || option?.display_label?.zh || ''
+    };
     if(option?.canonical_family_id && !option.canonical_family_id.startsWith('provider-local:')) return {
         canonical_family_id:option.canonical_family_id,
         canonical_family_label:option.canonical_family_label || null,
@@ -3511,7 +4821,10 @@ function capabilitySelectionIdentity(profile, nodeType=''){
         if(/nano[-_ ]?banana|全能图片\s*g/i.test(normalizedModelId)){
             return {canonical_family_id:'series-image-nano-banana', canonical_family_label:{zh:'Nano Banana',en:'Nano Banana'}, display_mode:''};
         }
-        if(/(^|[/_-])grok(?:[/_-]|$)|xai\/grok-imagine/.test(normalizedModelId) || /^laohu-image-g(?:2|[-_])/.test(normalizedModelId)){
+        if(reviewedLaohuGptImageIds.has(normalizedModelId)){
+            return {canonical_family_id:'series-image-gpt-image', canonical_family_label:{zh:'GPT Image',en:'GPT Image'}, display_mode:''};
+        }
+        if(/(^|[/_-])grok(?:[/_-]|$)|xai\/grok-imagine/.test(normalizedModelId) || /^laohu-image-gk(?:[-_]|$)/.test(normalizedModelId)){
             return {canonical_family_id:'series-image-grok-image', canonical_family_label:{zh:'Grok Image',en:'Grok Image'}, display_mode:''};
         }
         if(/qwen[-_/ ]?image|qwen\/qwen-image/.test(normalizedModelId)){
@@ -3539,11 +4852,12 @@ function capabilitySelectionIdentity(profile, nodeType=''){
     if(nodeType === 'text_generation' && /(^|[/_-])qwen(?:[/_-]|$)/.test(normalizedModelId)){
         return {canonical_family_id:'series-text-qwen', canonical_family_label:{zh:'Qwen',en:'Qwen'}, display_mode:''};
     }
-    // Grok image IDs exist on several providers and must never inherit a provider-local
-    // GPT Image family merely because both use the same image operation.
-    // laohu-image-g / grok-* are the same Grok Image family. Check this
-    // before GPT Image aliases so the provider prefix cannot misclassify it.
-    if(nodeType === 'image_generation' && (/(^|[/_-])grok([/_-]|$)/.test(normalizedModelId) || /^laohu-image-g(?:2|[-_])/.test(normalizedModelId))){
+    // 仅按已确认的 laohu 模型 ID 映射 GPT Image；未审核的 g-v9 等保留原家族。
+    if(nodeType === 'image_generation' && reviewedLaohuGptImageIds.has(normalizedModelId)){
+        return {canonical_family_id:'series-image-gpt-image', canonical_family_label:{zh:'GPT Image',en:'GPT Image'}, display_mode:''};
+    }
+    // Grok image aliases remain independent; gk is part of its stable provider ID.
+    if(nodeType === 'image_generation' && (/(^|[/_-])grok([/_-]|$)/.test(normalizedModelId) || /^laohu-image-gk(?:[-_]|$)/.test(normalizedModelId))){
         return {canonical_family_id:'series-image-grok-image', canonical_family_label:{zh:'Grok Image',en:'Grok Image'}, display_mode:''};
     }
     if(nodeType === 'image_generation' && /(^|[/_-])gpt[-_]?image([/_-]|$)/.test(normalizedModelId)){
@@ -3650,7 +4964,7 @@ function capabilitySelectionIdentity(profile, nodeType=''){
     } : null;
 }
 function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, region=''){
-    const provider = (modelCapabilityCatalog.providers || []).find(item => item.id === providerId) || null;
+    const provider = (capabilityPickerCatalog().providers || []).find(item => item.id === providerId) || null;
     const scopedRegion = region || capabilityRegionForProvider(providerId, settings);
     const families = capabilityFamiliesForProvider(providerId, nodeType, inputCounts, operation, inputRoles, parameters, scopedRegion);
     const requestedModelId = String(legacyModelId || '').trim();
@@ -3677,8 +4991,8 @@ function resolveCapabilityFamilySelection(providerId, nodeType, inputCounts, fam
     };
 }
 function capabilityPickerVariantKey(variant){
-    // Run modes are shared across platforms. Keep distinct operation/mode/
-    // version combinations, but don't create duplicate rows per provider ID.
+    // 运行模式按 operation/mode/version 区分；精确 option 也纳入 key，避免
+    // 同 model_id 的不同 endpoint/region 契约被折叠成一个可见选项。
     const operation = String(variant?.operation || '').trim().toLowerCase();
     const mode = String(variant?.display_mode || variant?.variant_name || variant?.variant_name_en || '').trim().toLowerCase();
     let version = String(variant?.model_version || variant?.version || '').trim().toLowerCase();
@@ -3689,7 +5003,8 @@ function capabilityPickerVariantKey(variant){
             || id.match(/(?:suno[-_](?:custom|single))[-_]?((?:v)?\d+(?:\.\d+)?)/i);
         if(match) version = match[1];
     }
-    const stable = [operation, mode, version].filter(Boolean).join('::');
+    const optionId=String(variant?.option_id||'').trim();
+    const stable = [operation, mode, version, optionId ? `option:${optionId}` : ''].filter(Boolean).join('::');
     return stable || window.SmartModelCapabilities?.variantSelectionKey?.(variant)
         || [variant?.variant_id, variant?.model_id].filter(Boolean).join('::');
 }
@@ -3724,15 +5039,17 @@ function capabilityPickerPlatformEntries(profiles=[], nodeType=''){
         const provider = capabilityProviderConfig(providerId);
         if(!provider || provider.enabled === false) return;
         const regions = providerId === 'runninghub'
-            ? runningHubEnabledRegions(provider).filter(region => {
+            ? (isCanvasSettingsMode
+                ? runningHubEnabledRegions(provider).filter(region=>!profile.region_id||String(profile.region_id)===region)
+                : runningHubEnabledRegions(provider).filter(region => {
                 const scoped = window.SmartModelCapabilities?.profileForRegion?.(profile, region);
                 return Boolean(scoped) && (!nodeType || configuredCapabilityModelIds(providerId, nodeType, region).has(String(scoped.model_id || '').trim()));
-            })
+            }))
             : [''];
         regions.forEach(region => {
             const key = `${providerId}::${region || 'default'}`;
             if(seen.has(key)) return;
-            const scopedProfile = providerId === 'runninghub'
+            const scopedProfile = providerId === 'runninghub' && !isCanvasSettingsMode
                 ? window.SmartModelCapabilities?.profileForRegion?.(profile, region)
                 : profile;
             if(!scopedProfile) return;
@@ -3751,7 +5068,15 @@ function capabilityProfileMatchesCurrentInput(profile, nodeType, inputCounts={})
     if(nodeType === 'text_generation' && !['chat', 'chat_or_agent_text', 'multimodal_chat', 'prompt_enhancement'].includes(operation)) return false;
     const count = type => Math.max(0, Number(inputCounts?.[type]) || 0);
     // 混合模式由能力档案的可选输入决定，不能因名称含 image_to_image 就要求先接图片。
-    if(nodeType === 'image_generation' && /^(text_to_image_or_image_to_image|text_or_image_to_image)$/.test(operation)) return true;
+    const imageInputs = Object.entries(profile?.inputs || {}).filter(([, spec]) => spec?.media_type === 'image');
+    const optionalReferenceTextMode = operation === 'text_or_reference_to_image'
+        && imageInputs.length > 0
+        && imageInputs.every(([key, spec]) => (
+            String(spec?.role || key).trim().toLowerCase().replace(/-/g, '_') === 'reference'
+            && Math.max(0, Number(spec?.min) || 0) === 0
+        ));
+    if(nodeType === 'image_generation'
+        && (/^(text_to_image_or_image_to_image|text_or_image_to_image)$/.test(operation) || optionalReferenceTextMode)) return true;
     if(nodeType === 'video_generation' && /^(text_to_video_or_image_to_video|text_or_image_to_video)$/.test(operation)) return true;
     // Operation names are part of the execution contract. Do not expose an edit/reference mode
     // when the node does not currently contain the input that mode requires.
@@ -3760,6 +5085,17 @@ function capabilityProfileMatchesCurrentInput(profile, nodeType, inputCounts={})
     if(nodeType === 'video_generation' && /video_to_video/.test(operation)) return count('video') > 0;
     if(nodeType === 'audio_generation' && /audio_to_audio|voice_clone/.test(operation)) return count('audio') > 0;
     return true;
+}
+function capabilityProfileVisibleInPicker(profile,nodeType,inputCounts={}){
+    if(isCanvasSettingsMode){
+        // 管理目录已按 provider/site、严格 Schema 和可运行状态过滤；浏览候选不依赖
+        // 测试节点当前的素材数量或角色，真正试跑仍由普通执行预检检查输入契约。
+        return Boolean(profile
+            &&String(profile.node_type||'')===String(nodeType||'')
+            &&capabilityProviderEnabled(profile.provider_id||profile.connection_id)
+            &&managementOptionForProfile(profile));
+    }
+    return capabilityProfileMatchesCurrentInput(profile,nodeType,inputCounts);
 }
 function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId='', legacyModelId='', operation='', inputRoles={}, parameters={}, preferredProviderId='', preferredVariantKey='', preferredRegionOverride=''){
     const families = capabilityFamiliesAcrossEnabledProviders(nodeType, inputCounts, operation, inputRoles, parameters);
@@ -3785,10 +5121,25 @@ function resolveCapabilityFamilyPickerSelection(nodeType, inputCounts, familyId=
     let profile = null;
     let invalidVariant = false;
     if(requestedModelId){
-        profile = compatibleVariants.find(item => item.model_id === requestedModelId) || null;
-        if(profile && preferredProviderId && preferredVariantKey && profile.provider_id !== preferredProviderId){
-            profile = compatibleVariants.find(item => item.provider_id === preferredProviderId && capabilityPickerVariantKey(item) === preferredVariantKey) || profile;
+        let matches=compatibleVariants.filter(item=>item.model_id===requestedModelId);
+        const node=activeSettingsSubject();
+        const saved=node?.modelSelection&&typeof node.modelSelection==='object'?node.modelSelection:{};
+        const savedMatchesCurrent=String(node?.runSettings?.[executionSelectionDescriptor(node)?.modelKey]||'')===requestedModelId
+            &&(!preferredProviderId||String(saved.connection_id||'')===preferredProviderId);
+        const exactOptionId=savedMatchesCurrent?String(saved.option_id||''):'';
+        const exactOperation=savedMatchesCurrent?String(saved.operation||''):'';
+        if(exactOptionId)matches=matches.filter(item=>String(item.option_id||'')===exactOptionId);
+        if(exactOperation)matches=matches.filter(item=>String(item.operation||'')===exactOperation);
+        if(!exactOptionId&&!exactOperation&&preferredVariantKey){
+            const keyed=matches.filter(item=>capabilityPickerVariantKey(item)===preferredVariantKey
+                &&(!preferredProviderId||item.provider_id===preferredProviderId));
+            if(keyed.length)matches=keyed;
         }
+        if(!exactOptionId&&!exactOperation&&!preferredVariantKey&&preferredProviderId){
+            const providerMatches=matches.filter(item=>item.provider_id===preferredProviderId);
+            if(providerMatches.length)matches=providerMatches;
+        }
+        profile=matches.length===1?matches[0]:null;
         if(!profile && family) invalidVariant = true;
     } else if(family){
         const preferredVariants = preferredProviderId
@@ -3856,21 +5207,37 @@ function executionSelectionInputState(node, descriptor){
     };
 }
 function executionCompatibleProviderIds(descriptor, inputCounts, inputRoles, parameters={}, region=''){
+    if(isCanvasSettingsMode)return capabilityEnabledProviderIds(descriptor.nodeType,region);
+    const catalog=capabilityPickerCatalog();
     if(descriptor.kind === 'text'){
         return [...new Set((window.SmartModelCapabilities?.modelsForVerifiedInputs(
-            modelCapabilityCatalog,
+            catalog,
             descriptor.nodeType,
             inputCounts,
             inputRoles,
             parameters,
             region
-        ) || []).filter(model => configuredCapabilityModelIds(model.provider_id, descriptor.nodeType, region).has(String(model.model_id || '').trim())).map(model => model.provider_id))];
+        ) || []).filter(model => capabilityProviderEnabled(model.provider_id)
+            && (isCanvasSettingsMode
+                ? Boolean(managementOptionForProfile(model))
+                : configuredCapabilityModelIds(model.provider_id, descriptor.nodeType, region).has(String(model.model_id || '').trim())))
+            .map(model => model.provider_id))];
     }
     return capabilityProvidersFor(descriptor.nodeType, inputCounts, [], inputRoles, parameters, region).map(provider => provider.id);
 }
 function ensureExecutionSelectionDefaults(target, node, {resetSelection=false}={}){
     const descriptor = executionSelectionDescriptor(node);
     if(!descriptor || !target || typeof target !== 'object') return false;
+    if(isCanvasSettingsMode){
+        // 管理画布不应用正式画布的启用白名单，也不替用户自动换成另一模型。
+        // 这里仅确认当前精确选择仍在管理目录中；输入是否满足契约由运行预检判断。
+        const profile=capabilityProfileFor(target[descriptor.providerKey],target[descriptor.modelKey],descriptor.nodeType,capabilityRegionForProvider(target[descriptor.providerKey],target));
+        if(!profile||profile.validation_mode!=='strict'||profile.runnable===false)return false;
+        const previousFamily=String(target[descriptor.familyKey]||'');
+        const nextFamily=String(profile.family_id||profile.canonical_family_id||target[descriptor.familyKey]||'');
+        target[descriptor.familyKey]=nextFamily;
+        return previousFamily!==nextFamily;
+    }
     if(descriptor.kind !== 'text' && !['api',''].includes(String(target.engine || 'api'))) return false;
     const {inputCounts, inputRoles} = executionSelectionInputState(node, descriptor);
     // 候选模型按输入筛选；当前模型的参数不能排除其他模型。运行前仍校验全部提交值。
@@ -4131,20 +5498,24 @@ function renderCapabilityPickerOption(stage, value, label, searchText, active=fa
     const badgeMarkup = badges.length
         ? `<span class="capability-picker-option-badges">${badges.map(badge => `<span class="capability-picker-option-badge">${escapeHtml(badge)}</span>`).join('')}</span>`
         : '';
-    // 三栏都在左侧统一放置拖动手柄；运行模式不再把手柄挤到标题右侧。
-    const scope = smartPreferenceScopeKey('picker', stage);
+    const exactSelectionAttrs=data.optionId
+        ? `data-capability-picker-option-id="${escapeAttr(data.optionId)}" data-capability-picker-operation="${escapeAttr(data.operation||'')}"`
+        : '';
     // 不把完整搜索串放进浏览器原生 title，避免悬停时弹出重复且过长的技术提示。
-    return `<button type="button" class="capability-picker-option ${active ? 'active' : ''}" data-capability-picker-option data-preference-id="${escapeAttr(value)}" data-capability-picker-search-text="${escapeAttr(searchText)}" ${attributes} aria-label="${escapeAttr(label)}">${renderPreferenceHandle(scope, value)}<span class="capability-picker-option-main"><span class="capability-picker-option-label">${escapeHtml(label)}</span></span>${badgeMarkup}</button>`;
+    const preferenceId=data.preferenceId||value;
+    const preferenceHandle=data.preferenceScope?renderPreferenceHandle(data.preferenceScope,preferenceId):'';
+    return `<button type="button" class="capability-picker-option ${active ? 'active' : ''}" data-capability-picker-option data-preference-id="${escapeAttr(preferenceId)}" data-capability-picker-search-text="${escapeAttr(searchText)}" ${attributes} ${exactSelectionAttrs} aria-label="${escapeAttr(label)}">${preferenceHandle}<span class="capability-picker-option-main"><span class="capability-picker-option-label">${escapeHtml(label)}</span></span>${badgeMarkup}</button>`;
 }
-function renderCapabilityPickerStage(stage, index, label, options, emptyText){
+function renderCapabilityPickerStage(stage, index, label, options, emptyText, orderInfo=null){
     return `<section class="capability-picker-stage capability-picker-stage-${escapeAttr(stage)}" data-capability-picker-stage="${escapeAttr(stage)}">
         <div class="capability-picker-stage-title"><span>${escapeHtml(String(index))}</span><strong>${escapeHtml(label)}</strong></div>
-        <div class="capability-picker-stage-options" data-capability-picker-options="${escapeAttr(stage)}">${options || `<div class="capability-picker-empty">${escapeHtml(emptyText)}</div>`}</div>
+        <div class="capability-picker-stage-options" data-capability-picker-options="${escapeAttr(stage)}" data-capability-picker-order-scope="${escapeAttr(orderInfo?.scope||'')}">${options || `<div class="capability-picker-empty">${escapeHtml(emptyText)}</div>`}</div>
     </section>`;
 }
 function renderCapabilityModelPicker(selection, descriptor=null){
     selection = selection || {};
-    descriptor = descriptor || executionSelectionDescriptor(activeSettingsSubject());
+    const pickerSubject=activeSettingsSubject();
+    descriptor = descriptor || executionSelectionDescriptor(pickerSubject);
     const nodeType = descriptor?.nodeType || '';
     const pickerInputState = executionSelectionInputState(activeSettingsSubject(), descriptor);
     const familyScope = smartPreferenceScopeKey('families', nodeType);
@@ -4178,7 +5549,7 @@ function renderCapabilityModelPicker(selection, descriptor=null){
         family => family.family_id
     );
     const usableFamilies = families.filter(family => {
-        const profiles = (family.compatible_variants || family.variants || []).filter(profile => capabilityProfileMatchesCurrentInput(profile, nodeType, pickerInputState.inputCounts));
+        const profiles = (family.compatible_variants || family.variants || []).filter(profile => capabilityProfileVisibleInPicker(profile, nodeType, pickerInputState.inputCounts));
         if(!profiles.length) return false;
         // A family with no configured provider/region must not appear as a selectable model.
         const platforms = capabilityPickerPlatformEntries(profiles, nodeType);
@@ -4187,12 +5558,12 @@ function renderCapabilityModelPicker(selection, descriptor=null){
     const familyOptions = usableFamilies.map(family => {
         const label = capabilityFamilyLabel(family);
         const searchText = [label, family.family_id, family.family_name, family.display_name_en, (family.providers || []).map(item => item.name).join(' ')].filter(Boolean).join(' · ');
-        return renderCapabilityPickerOption('family', family.family_id, label, searchText, family.family_id === selectedFamily?.family_id, {family:family.family_id});
+        return renderCapabilityPickerOption('family', family.family_id, label, searchText, family.family_id === selectedFamily?.family_id, {family:family.family_id,preferenceScope:familyScope});
     }).join('');
     const variants = smartOrderedItems(
         (selection.variantGroups || []).map(variant => ({
             ...variant,
-            profiles:(variant.profiles || []).filter(profile => capabilityProfileMatchesCurrentInput(profile, nodeType, pickerInputState.inputCounts))
+            profiles:(variant.profiles || []).filter(profile => capabilityProfileVisibleInPicker(profile, nodeType, pickerInputState.inputCounts))
         })).filter(variant => variant.profiles.length),
         variantScope,
         variant => variant.key || variant.model_id
@@ -4210,6 +5581,9 @@ function renderCapabilityModelPicker(selection, descriptor=null){
             const searchText = [label, variant.variant_id, variant.variant_name, variant.variant_name_en, variant.model_id, ...profiles.flatMap(item => [item.model_id, item.provider_id, item.provider_name])].filter(Boolean).join(' · ');
             return renderCapabilityPickerOption('variant', value, label, searchText, variant.key === selectedVariantKey, {
                 family:selectedFamily?.family_id || '', model:value, provider:profile.provider_id || '', variantKey:variant.key, region:profile.region || selectedRegion,
+                optionId:profile.option_id||'',operation:profile.operation||'',
+                preferenceId:variant.key,
+                preferenceScope:variantScope,
                 // 标签从当前运行模式的合并档案读取；平台筛选仍由 profiles 决定。
                 badges:capabilityPickerBadgeLabels(variant, nodeType)
             });
@@ -4217,7 +5591,7 @@ function renderCapabilityModelPicker(selection, descriptor=null){
     // 平台段提前到第二级：展示整个家族在所有已启用平台上的可选渠道，而非仅当前运行模式对应的平台。
     const platformSourceProfiles = ((selection.allCompatibleVariants && selection.allCompatibleVariants.length)
         ? selection.allCompatibleVariants
-        : (selection.platformProfiles || [])).filter(profile => capabilityProfileMatchesCurrentInput(profile, nodeType, pickerInputState.inputCounts));
+        : (selection.platformProfiles || [])).filter(profile => capabilityProfileVisibleInPicker(profile, nodeType, pickerInputState.inputCounts));
     const platforms = capabilityPickerPlatformEntries(platformSourceProfiles, nodeType).filter(entry => {
         const scopedProfiles = platformSourceProfiles.filter(profile => {
             if(profile.provider_id !== entry.id) return false;
@@ -4227,6 +5601,7 @@ function renderCapabilityModelPicker(selection, descriptor=null){
         });
         return capabilityPickerVariantGroups({...selection.family, compatible_variants:scopedProfiles}, entry.id).length > 0;
     });
+    const platformPreferenceScope=smartPreferenceScopeKey('platforms',nodeType);
     const platformOptions = platforms.map(entry => {
         const providerId = entry.id || entry.provider?.id || '';
         const region = providerId === 'runninghub' ? (entry.region || 'global') : '';
@@ -4236,21 +5611,45 @@ function renderCapabilityModelPicker(selection, descriptor=null){
             : (entry.provider?.name || providerId);
         const searchText = [label, providerId, region, entry.provider?.protocol, profile?.model_id, capabilityVariantLabel(profile)].filter(Boolean).join(' · ');
         return renderCapabilityPickerOption('platform', providerId, label, searchText, providerId === selectedProviderId && region === selectedRegion, {
-            family:selectedFamily?.family_id || '', model:profile?.model_id || '', provider:providerId, variantKey:selectedVariantKey, region
+            family:selectedFamily?.family_id || '', model:profile?.model_id || '', provider:providerId, variantKey:selectedVariantKey, region,
+            preferenceId:providerId==='runninghub'?`${providerId}@${region||'global'}`:providerId,
+            preferenceScope:platformPreferenceScope
         });
     }).join('');
-    const emptyText = capabilityUiText('当前输入下没有可用选项','No compatible options for the current inputs');
+    const emptyText = isCanvasSettingsMode
+        ? capabilityUiText('当前类型没有可管理的可运行选项','No manageable runnable options for this type')
+        : capabilityUiText('当前输入下没有可用选项','No compatible options for the current inputs');
     const title = tr('smart.modelPicker') || capabilityUiText('模型选择','Model selection');
     const searchLabel = tr('smart.modelPickerSearch') || capabilityUiText('搜索模型、平台或运行模式','Search model, platform, or mode');
-    return `<div class="smart-control capability-model-picker capability-model-picker-control" data-capability-model-picker data-control-key="capability-model-picker-control">
+    let managementMarkup='';
+    if(isCanvasSettingsMode){
+        const managementOption=(canvasModelManagementCatalog.options||[]).find(option=>
+            option.node_type===nodeType
+            && option.connection_id===selectedProviderId
+            && option.catalog_model_id===selectedProfile?.model_id
+            && (!selectedProfile?.operation||!option.operation||option.operation===selectedProfile.operation)
+            && (!selectedRegion||!option.region_id||option.region_id===selectedRegion)
+        );
+        const enabled=managementOption?.enabled===true;
+        const label=enabled?capabilityUiText('已启用','Enabled'):capabilityUiText('未启用','Not enabled');
+        const selectedSummary=[selectedFamilyLabel,selectedProviderLabel,selectedVariantLabel].join(' · ');
+        const body=canvasModelManagementCatalogError
+            ? `<div class="capability-picker-management-error" role="alert">${escapeHtml(capabilityUiText('读取管理目录失败：','Could not load management catalog: ')+canvasModelManagementCatalogError)}</div>`
+            : managementOption
+                ? `<div class="capability-picker-management-option" data-model-enablement-summary="${escapeAttr(selectedSummary)}"><strong class="capability-picker-management-selection" title="${escapeAttr(selectedSummary)}">${escapeHtml(selectedSummary)}</strong><label class="capability-picker-enable-toggle"><input type="checkbox" data-model-enablement-toggle data-model-enablement-option-id="${escapeAttr(managementOption.option_id)}" data-catalog-revision="${escapeAttr(canvasModelManagementCatalog.catalog_revision)}" aria-label="${escapeAttr(capabilityUiText(`启用 ${selectedVariantLabel}`,`Enable ${selectedVariantLabel}`))}" ${enabled?'checked':''}><span class="rh-switch-track" aria-hidden="true"></span><span class="capability-picker-enable-label">${escapeHtml(label)}</span></label><small>${escapeHtml(capabilityUiText('控制各模块的节点候选；当前设置节点仍可单独试跑。','Controls node candidates across modules; the current settings node can still be tested.'))}</small></div>`
+                : `<div class="capability-picker-empty">${escapeHtml(capabilityUiText('先在前三栏选择模型、平台和运行模式。','Choose a model, platform, and run mode in the first three columns.'))}</div>`;
+        managementMarkup=`<section class="capability-picker-stage capability-picker-stage-management" data-capability-picker-stage="management"><div class="capability-picker-stage-title"><span>4</span><strong>${escapeHtml(capabilityUiText('启用状态','Enablement'))}</strong></div><div class="capability-picker-stage-options">${body}</div></section>`;
+    }
+    return `<div class="smart-control capability-model-picker capability-model-picker-control" data-capability-model-picker data-capability-subject-id="${escapeAttr(pickerSubject?.id||'')}" data-control-key="capability-model-picker-control">
         <button class="smart-pill capability-model-picker-pill" type="button" title="${escapeAttr(summaryTitle)}" aria-label="${escapeAttr(title)}"><i data-lucide="boxes"></i><span class="capability-model-picker-value">${summaryParts.map((part, index) => `${index ? '<span class="capability-model-picker-separator" aria-hidden="true">·</span>' : ''}<span>${escapeHtml(part)}</span>`).join('')}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
         <div class="smart-popover capability-model-picker-popover">
             <div class="capability-model-picker-head"><strong>${escapeHtml(title)}</strong><code class="capability-picker-selected-id" data-capability-picker-selected-id title="${escapeAttr(selectedProfile?.model_id || '')}">${escapeHtml(selectedProfile?.model_id || '')}</code><span>${escapeHtml(tr('smart.modelPickerFiltered') || capabilityUiText('按能力筛选','Filtered by capability'))}</span></div>
             <label class="capability-model-picker-search"><i data-lucide="search"></i><input type="search" data-capability-picker-search aria-label="${escapeAttr(searchLabel)}" placeholder="${escapeAttr(searchLabel)}" autocomplete="off"></label>
             <div class="capability-model-picker-stages">
-                ${renderCapabilityPickerStage('family', 1, capabilityUiText('模型','Model'), familyOptions, emptyText)}
-                ${renderCapabilityPickerStage('platform', 2, capabilityUiText('平台','Platform'), platformOptions, emptyText)}
-                ${renderCapabilityPickerStage('variant', 3, capabilityUiText('运行模式','Run mode'), variantOptions, emptyText)}
+                ${renderCapabilityPickerStage('family', 1, capabilityUiText('模型','Model'), familyOptions, emptyText,{scope:familyScope})}
+                ${renderCapabilityPickerStage('platform', 2, capabilityUiText('平台','Platform'), platformOptions, emptyText,{scope:smartPreferenceScopeKey('platforms',nodeType)})}
+                ${renderCapabilityPickerStage('variant', 3, capabilityUiText('运行模式','Run mode'), variantOptions, emptyText,{scope:variantScope})}
+                ${managementMarkup}
             </div>
             <div class="capability-model-picker-no-match" data-capability-picker-no-match hidden>${escapeHtml(tr('smart.modelPickerNoMatch') || capabilityUiText('没有匹配的模型、模式或平台','No matching family, mode, or provider'))}</div>
         </div>
@@ -4280,7 +5679,110 @@ function resolveCapabilityForRun(providerId, nodeType, inputCounts, familyId='',
 }
 function capabilityProfileFor(providerId, modelId, nodeType, region=''){
     const scopedRegion = region || capabilityRegionForProvider(providerId, settings);
+    const subject=activeSettingsSubject();
+    const descriptor=executionSelectionDescriptor(subject);
+    const selected=subject?.modelSelection&&typeof subject.modelSelection==='object'?subject.modelSelection:{};
+    const current=subject?.runSettings&&typeof subject.runSettings==='object'?subject.runSettings:settings;
+    const selectionApplies=Boolean(descriptor?.nodeType===nodeType
+        &&String(current[descriptor.providerKey]||'')===String(providerId||'')
+        &&String(current[descriptor.modelKey]||'')===String(modelId||''));
+    const selectedOptionId=selectionApplies?String(selected.option_id||''):'';
+    const selectedOperation=selectionApplies?String(selected.operation||''):'';
+    if(isCanvasSettingsMode){
+        const matches=(canvasModelManagementCatalog.options||[]).filter(option=>
+            option.node_type===nodeType
+            && String(option.connection_id||'')===String(providerId||'')
+            && String(option.catalog_model_id||'')===String(modelId||'')
+            && (!scopedRegion||!option.region_id||String(option.region_id)===String(scopedRegion))
+            && (!selectedOptionId||String(option.option_id||'')===selectedOptionId)
+            && (!selectedOperation||String(option.operation||'')===selectedOperation)
+        );
+        if(matches.length===1)return canvasManagementProfileForOption(matches[0]);
+        return null;
+    }
+    const provider=(modelCapabilityCatalog.providers||[]).find(item=>String(item.id||'')===String(providerId||''));
+    const profiles=(provider?.models||[]).map(model=>window.SmartModelCapabilities?.profileForRegion?.(model,scopedRegion)||model)
+        .filter(model=>String(model?.provider_id||providerId||'')===String(providerId||'')
+            &&String(model?.model_id||'')===String(modelId||'')
+            &&String(model?.node_type||'')===String(nodeType||'')
+            &&(!scopedRegion||!model.region||String(model.region)===String(scopedRegion))
+            &&(!selectedOptionId||String(model.option_id||'')===selectedOptionId)
+            &&(!selectedOperation||String(model.operation||'')===selectedOperation));
+    if(profiles.length===1)return profiles[0];
+    if(profiles.length||selectedOptionId||selectedOperation)return null;
     return window.SmartModelCapabilities?.findModel(modelCapabilityCatalog, providerId, modelId, nodeType, scopedRegion) || null;
+}
+function capabilityProfileForPickerChoice(nodeType,providerId,modelId,region,optionId,operation){
+    const provider=String(providerId||'').trim();
+    const model=String(modelId||'').trim();
+    const exactOption=String(optionId||'').trim();
+    const exactOperation=String(operation||'').trim();
+    const exactRegion=String(region||'').trim();
+    if(!provider||!model||!nodeType)return null;
+    if(isCanvasSettingsMode){
+        const matches=(canvasModelManagementCatalog.options||[]).filter(option=>
+            String(option.node_type||'')===nodeType
+            &&String(option.connection_id||'')===provider
+            &&String(option.catalog_model_id||'')===model
+            &&(!exactRegion||!option.region_id||String(option.region_id)===exactRegion)
+            &&(!exactOption||String(option.option_id||'')===exactOption)
+            &&(!exactOperation||String(option.operation||'')===exactOperation)
+            &&option.validation_mode==='strict'&&option.runnable!==false);
+        return matches.length===1?canvasManagementProfileForOption(matches[0]):null;
+    }
+    const providerEntry=(modelCapabilityCatalog.providers||[]).find(item=>String(item.id||'')===provider);
+    const profiles=(providerEntry?.models||[]).map(candidate=>
+        window.SmartModelCapabilities?.profileForRegion?.(candidate,exactRegion)||candidate)
+        .filter(candidate=>String(candidate?.provider_id||provider)===provider
+            &&String(candidate?.model_id||'')===model
+            &&String(candidate?.node_type||'')===nodeType
+            &&(!exactRegion||!candidate.region||String(candidate.region)===exactRegion)
+            &&(!exactOption||String(candidate.option_id||'')===exactOption)
+            &&(!exactOperation||String(candidate.operation||'')===exactOperation));
+    return profiles.length===1?profiles[0]:null;
+}
+function commitCapabilityPickerSelectionIdentity(node,profile,optionId){
+    if(!node||!profile)return false;
+    const exactOption=String(optionId||profile.option_id||'').trim();
+    const provider=String(profile.provider_id||profile.connection_id||'').trim();
+    const region=String(profile.region_id||profile.region||'').trim();
+    const operation=String(profile.operation||'').trim();
+    if(!provider||!profile.model_id)return false;
+    if(isCanvasSettingsMode&&(!exactOption||!operation))return false;
+    // 旧正式目录可能没有 option_id；有 operation 时仍记录精确 operation，
+    // 没有任一稳定身份字段时保留旧正式选择行为，不因新管理身份约束阻断它。
+    if(!exactOption&&!operation)return !isCanvasSettingsMode;
+    const previous=node.modelSelection&&typeof node.modelSelection==='object'?node.modelSelection:{};
+    const sameContract=String(previous.option_id||'')===exactOption
+        &&String(previous.connection_id||'')===provider
+        &&String(previous.region_id||'')===region
+        &&String(previous.operation||'')===operation;
+    // 同一个 model_id 也可能有不同 operation/schema；切换精确 option 时不能
+    // 把旧参数值套到新契约，只恢复新契约中经过验证的明确默认值。
+    if(!sameContract){
+        const reset=capabilityDefaultsForReset(profile,settings);
+        if(!reset)return false;
+        settings=reset;
+    }
+    const parameters=capabilityParameterSubmissionValues(profile,settings);
+    const same=String(previous.option_id||'')===exactOption
+        &&String(previous.connection_id||'')===provider
+        &&String(previous.region_id||'')===region
+        &&String(previous.operation||'')===operation
+        &&JSON.stringify(previous.parameters||{})===JSON.stringify(parameters||{});
+    if(same)return true;
+    pushUndo();
+    node.modelSelection={
+        schema_version:2,
+        option_id:exactOption,
+        connection_id:provider,
+        region_id:region,
+        operation,
+        parameters:{...(parameters||{})},
+        parameter_origins:previous.parameter_origins||{},
+        revision:Number(previous.revision||0)+1
+    };
+    return true;
 }
 function capabilityModelLabel(model, fallback=''){
     const profile = typeof model === 'string' ? null : model;
@@ -4323,17 +5825,47 @@ function renderCapabilityParameters(profile, apiKind){
 }
 const CAPABILITY_PARAMETER_UNSET = '__canvas_unset__';
 function capabilityParameterIsOptional(spec){
+    // 显式必填优先于高级/隐藏展示标签，避免参数被收进齿轮后无法满足运行契约。
+    if(window.ModelConfigCore?.parameterRequired?.(spec)) return false;
     return ['optional', 'advanced'].includes(String(spec?.level || '').toLowerCase());
 }
+function capabilityParameterMustStayVisible(spec){
+    if(typeof window.ModelConfigCore?.parameterMustStayVisible === 'function'){
+        return window.ModelConfigCore.parameterMustStayVisible(spec);
+    }
+    const required = spec?.required === true || spec?.ui?.required === true || String(spec?.level || '').toLowerCase() === 'required';
+    if(!required) return false;
+    return !capabilitySchemaDefaultIsValid(spec);
+}
+function capabilityParameterOptionId(profile){
+    const direct = String(profile?.option_id || profile?.profile_ref || '').trim();
+    if(direct) return direct;
+    const candidates = isCanvasSettingsMode
+        ? (canvasModelManagementCatalog.options || [])
+        : (modelCapabilityCatalog.options || []);
+    const providerId = String(profile?.provider_id || '').trim();
+    const modelId = String(profile?.model_id || '').trim();
+    const nodeType = String(profile?.node_type || '').trim();
+    const region = String(profile?.region || '').trim();
+    const match = candidates.find(option => (
+        String(option?.node_type || '') === nodeType
+        && String(option?.catalog_model_id || option?.model_id || '') === modelId
+        && [option?.connection_id, option?.provider_id, option?.capability_provider_id].some(id => String(id || '') === providerId)
+        && (!region || !option?.region_id || String(option.region_id) === region)
+    ));
+    return String(match?.option_id || '');
+}
 function capabilityParameterDefaultValue(profile, key, spec={}){
+    if(capabilityParameterMustStayVisible(spec)) return undefined;
     if(spec.ui_hidden === true && capabilityParameterIsOptional(spec)) return CAPABILITY_PARAMETER_UNSET;
-    if(spec.default !== undefined && spec.default !== null && spec.default !== '') return spec.default;
+    if(capabilitySchemaDefaultIsValid(spec)) return spec.default;
     // 契约没有声明默认值时保持未设置；不能擅自选第一项、最小值或 false。
     return capabilityParameterIsOptional(spec) ? CAPABILITY_PARAMETER_UNSET : undefined;
 }
 function capabilityProfileHasParameterDefaults(profile){
     return Object.entries(profile?.parameters || {}).every(([key, spec]) => (
-        spec?.ui_hidden === true || capabilityParameterDefaultValue(profile, key, spec) !== undefined
+        (spec?.ui_hidden === true && !capabilityParameterMustStayVisible(spec))
+        || capabilityParameterDefaultValue(profile, key, spec) !== undefined
     ));
 }
 function capabilitySafeDefaultProfileForFamily(family){
@@ -4371,7 +5903,7 @@ function capabilityParameterSubmissionValues(profile, source=settings){
     const specs = profile?.parameters || {};
     return Object.fromEntries(Object.entries(capabilityParameterValues(profile, source)).filter(([key, value]) => (
         Object.prototype.hasOwnProperty.call(specs, key)
-        && specs[key]?.ui_hidden !== true
+        && (specs[key]?.ui_hidden !== true || capabilityParameterMustStayVisible(specs[key]))
         && value !== CAPABILITY_PARAMETER_UNSET
         && value !== undefined
         && value !== null
@@ -4494,7 +6026,9 @@ function capabilityRunValue(profile, key, fallback, source=settings){
         const values = capabilityParameterValues(profile, source);
         const value = values[key];
         if(value === CAPABILITY_PARAMETER_UNSET || value === undefined){
-            return capabilityParameterIsOptional(spec) ? undefined : (spec.default ?? fallback);
+            // 有明确契约却没有有效默认时必须保持空值，让既有参数校验阻止
+            // 运行；旧节点映射只能在档案根本没有该字段时继续提供兼容值。
+            return capabilitySchemaDefaultIsValid(spec) ? spec.default : undefined;
         }
         return value;
     }
@@ -4818,7 +6352,7 @@ function capabilityParameterPreview(key, spec, value, unset){
 function capabilityParameterControlClass(key){
     return `capability-${String(key || 'parameter').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'parameter'}-control`;
 }
-function renderCapabilityParameterControl(key, label, spec, profile, value, unset, body, extraClass=''){
+function renderCapabilityParameterControl(key, label, spec, profile, value, unset, body, extraClass='', requiredGuard=false){
     const type = String(spec?.type || 'text').toLowerCase();
     const controlClass = capabilityParameterControlClass(key);
     const triggerText = unset
@@ -4826,7 +6360,8 @@ function renderCapabilityParameterControl(key, label, spec, profile, value, unse
         : value === undefined || value === ''
             ? label
             : capabilityParameterPreview(key, spec, value, false);
-    return `<div class="smart-control capability-param-control ${controlClass} ${escapeAttr(extraClass)}" data-control-key="${escapeAttr(controlClass)}" data-param-key="${escapeAttr(key)}">
+    const optionId = capabilityParameterOptionId(profile);
+    return `<div class="smart-control capability-param-control ${controlClass} ${escapeAttr(extraClass)}" data-control-key="${escapeAttr(controlClass)}" data-param-key="${escapeAttr(key)}" data-parameter-option-id="${escapeAttr(optionId)}" data-parameter-key="${escapeAttr(key)}" ${requiredGuard ? 'data-required-parameter-guard="visible"' : ''}>
         <button class="smart-pill capability-param-pill" type="button" title="${escapeAttr(`${label} · ${triggerText}`)}"><i data-lucide="${capabilityParameterIcon(key, type)}"></i><span class="capability-param-label">${escapeHtml(triggerText)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
         <div class="smart-popover capability-param-popover"><div class="smart-popover-title">${escapeHtml(label)}</div>${body}</div>
     </div>`;
@@ -4976,17 +6511,22 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
     const semantic = capabilityParameterSemantic(key, spec);
     const type = String(spec?.type || 'text').toLowerCase();
     const optional = capabilityParameterIsOptional(spec);
+    const requiredGuard = capabilityParameterMustStayVisible(spec);
+    const optionId = capabilityParameterOptionId(profile);
     const storedValue = values[key];
     const unset = optional && (storedValue === undefined || storedValue === CAPABILITY_PARAMETER_UNSET);
-    const value = unset ? CAPABILITY_PARAMETER_UNSET : (storedValue ?? spec?.default ?? '');
+    const defaultIsValid = typeof window.ModelConfigCore?.parameterDefaultIsValid === 'function'
+        ? window.ModelConfigCore.parameterDefaultIsValid(spec)
+        : spec?.default !== undefined && spec?.default !== null && spec?.default !== '';
+    const value = unset ? CAPABILITY_PARAMETER_UNSET : (storedValue ?? (defaultIsValid ? spec?.default : ''));
     const controlKind = capabilityParameterControlKind(key, spec);
     const choices = capabilityParameterChoiceOptions(key, spec);
     const optionScope = capabilityOptionOrderScope(profile, key);
     if(type === 'enum' && !choices.length){
         const body = `<div class="capability-text-field" role="status">${escapeHtml(capabilityUiText('此参数的可选值尚未核实，请更新平台模型资料。','The allowed values are unverified. Refresh the platform model information.'))}</div>`;
-        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value, unset, body, extraClass:'capability-unavailable-control'};
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, requiredGuard, optionId, value, unset, body, extraClass:'capability-unavailable-control'};
     }
-    const optionButton = option => `<button type="button" class="capability-option ${semantic === 'aspect_ratio' ? 'capability-aspect-option' : ''} ${String(option) === String(value) ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" data-capability-value="${escapeAttr(option)}" title="${escapeAttr(capabilityOptionLabel(key, option))}">${capabilityChoiceContent(key, option, semantic, spec)}</button>`;
+    const optionButton = option => `<button type="button" class="capability-option ${isCanvasSettingsMode?'capability-option-sortable':''} ${semantic === 'aspect_ratio' ? 'capability-aspect-option' : ''} ${String(option) === String(value) ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" data-capability-value="${escapeAttr(option)}" title="${escapeAttr(capabilityOptionLabel(key, option))}">${renderCapabilityOptionOrderHandle()}${capabilityChoiceContent(key, option, semantic, spec)}</button>`;
     const continuousRange = ['integer','number'].includes(type) && !spec?.options?.length && Number.isFinite(Number(spec?.min)) && Number.isFinite(Number(spec?.max));
     if(!continuousRange && (controlKind === 'segments' || controlKind === 'select') && choices.length){
         const gridClass = semantic === 'aspect_ratio'
@@ -4997,12 +6537,12 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
                     ? 'capability-resolution-options'
                     : (controlKind === 'select' ? 'is-list' : '');
         const body = `<div class="capability-option-grid ${gridClass}" data-capability-option-sort data-capability-option-scope="${escapeAttr(optionScope)}">${optional ? renderCapabilityUnsetChoice(key, unset, semantic !== 'resolution') : ''}${choices.map(optionButton).join('')}</div>`;
-        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value, unset, body, extraClass:`capability-choice-control capability-${semantic || 'standard'}-picker`};
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, requiredGuard, optionId, value, unset, body, extraClass:`capability-choice-control capability-${semantic || 'standard'}-picker`};
     }
     if(type === 'boolean'){
         const checked = value === true || ['true','1'].includes(String(value).toLowerCase());
-        const body = `<div class="capability-option-grid ${optional ? 'three-options' : 'two-options'}" data-capability-option-sort data-capability-option-scope="${escapeAttr(optionScope)}">${optional ? renderCapabilityUnsetChoice(key, unset, true) : ''}<button type="button" class="capability-option ${!unset && checked ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="boolean" data-capability-value="true"><span>${escapeHtml(capabilityUiText('是','Yes'))}</span></button><button type="button" class="capability-option ${!unset && !checked ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="boolean" data-capability-value="false"><span>${escapeHtml(capabilityUiText('否','No'))}</span></button></div>`;
-        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value, unset, body, extraClass:'capability-boolean-control'};
+        const body = `<div class="capability-option-grid ${optional ? 'three-options' : 'two-options'}" data-capability-option-sort data-capability-option-scope="${escapeAttr(optionScope)}">${optional ? renderCapabilityUnsetChoice(key, unset, true) : ''}<button type="button" class="capability-option ${isCanvasSettingsMode?'capability-option-sortable':''} ${!unset && checked ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="boolean" data-capability-value="true">${renderCapabilityOptionOrderHandle()}<span>${escapeHtml(capabilityUiText('是','Yes'))}</span></button><button type="button" class="capability-option ${isCanvasSettingsMode?'capability-option-sortable':''} ${!unset && !checked ? 'active' : ''}" data-capability-option data-capability-param="${escapeAttr(key)}" data-capability-type="boolean" data-capability-value="false">${renderCapabilityOptionOrderHandle()}<span>${escapeHtml(capabilityUiText('否','No'))}</span></button></div>`;
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, requiredGuard, optionId, value, unset, body, extraClass:'capability-boolean-control'};
     }
     if(type === 'integer' || type === 'number'){
         const step = spec?.step ?? (type === 'integer' ? 1 : 'any');
@@ -5013,17 +6553,36 @@ function renderCapabilityParameterEditor(key, spec, profile, values){
         if(hasRange){
             const rangeValue = unset ? (spec?.default ?? '') : value;
             const body = `<div class="capability-range-field"><div class="capability-range-value"><span>${escapeHtml(capabilityUiText('当前值','Current'))}</span><input class="capability-number-value" type="number" aria-label="${escapeAttr(label)}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(rangeValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<input type="range" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(rangeValue)}" min="${escapeAttr(minimum)}" max="${escapeAttr(maximum)}" step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}></div>`;
-            return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:rangeValue, unset, body, extraClass:'capability-range-control'};
+            return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, requiredGuard, optionId, value:rangeValue, unset, body, extraClass:'capability-range-control'};
         }
         const stepValue = unset ? (spec?.default ?? '') : value;
         const body = `${optional ? `<div class="capability-optional-mode">${renderCapabilityUnsetChoice(key, unset, true)}<button type="button" class="capability-option ${unset ? '' : 'active'}" data-capability-enable data-capability-param="${escapeAttr(key)}" data-capability-value="${escapeAttr(stepValue)}"><span>${escapeHtml(capabilityUiText('自定义','Custom'))}</span></button></div>` : ''}<div class="capability-stepper ${unset ? 'is-disabled' : ''}"><button type="button" data-capability-step="-1" data-capability-delta="${escapeAttr(delta)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('减少','Decrease'))}" ${unset ? 'disabled' : ''}>−</button><input class="capability-number-value" type="number" aria-label="${escapeAttr(label)}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" value="${escapeAttr(stepValue)}" ${spec?.min !== undefined ? `min="${escapeAttr(spec.min)}"` : ''} ${spec?.max !== undefined ? `max="${escapeAttr(spec.max)}"` : ''} step="${escapeAttr(step)}" ${unset ? 'disabled' : ''}><button type="button" data-capability-step="1" data-capability-delta="${escapeAttr(delta)}" data-capability-min="${spec?.min !== undefined ? escapeAttr(spec.min) : ''}" data-capability-param="${escapeAttr(key)}" data-capability-type="${escapeAttr(type)}" aria-label="${escapeAttr(capabilityUiText('增加','Increase'))}" ${unset ? 'disabled' : ''}>+</button></div>`;
-        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:stepValue, unset, body, extraClass:'capability-stepper-control'};
+        return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, requiredGuard, optionId, value:stepValue, unset, body, extraClass:'capability-stepper-control'};
     }
     const isLongText = spec.ui_multiline === true || ['lyrics','prompt','instructions','negative_prompt','negativePrompt'].includes(key);
     const textValue = value === CAPABILITY_PARAMETER_UNSET ? '' : value;
     const placeholder = optional ? capabilityUiText('可选，留空不发送','Optional; leave blank to omit') : capabilityUiText('请输入内容','Enter content');
     const body = `<div class="capability-text-field ${isLongText ? 'is-long' : ''}">${isLongText ? `<textarea data-capability-param="${escapeAttr(key)}" data-capability-type="text" placeholder="${escapeAttr(placeholder)}">${escapeHtml(textValue)}</textarea>` : `<input type="text" data-capability-param="${escapeAttr(key)}" data-capability-type="text" value="${escapeAttr(textValue)}" placeholder="${escapeAttr(placeholder)}">`}</div>`;
-    return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, value:textValue, unset, body, extraClass:`capability-text-control ${isLongText ? 'is-long' : ''}`};
+    return {key, label, description:capabilityParameterDescription(key, spec, profile), semantic, optional, requiredGuard, optionId, value:textValue, unset, body, extraClass:`capability-text-control ${isLongText ? 'is-long' : ''}`};
+}
+function renderCapabilityParameterPresentationControls(entry){
+    if(!isCanvasSettingsMode || !entry?.optionId) return '';
+    const width = entry.presentation?.width === 'half' ? 'half' : 'full';
+    const key = escapeAttr(entry.key);
+    const optionId = escapeAttr(entry.optionId);
+    const orderLabel=capabilityUiText(`拖动调整${entry.label}顺序；也可按 Alt+上/下箭头移动`,`Drag to reorder ${entry.label}, or press Alt+Up/Down`);
+    return `<div class="capability-parameter-presentation" data-parameter-presentation-controls data-parameter-option-id="${optionId}" data-parameter-key="${key}" ${entry.requiredGuard ? 'data-required-parameter-guard="visible"' : ''}>
+        <button type="button" class="model-order-handle capability-parameter-order-handle" data-parameter-presentation-order-handle data-parameter-presentation-option-id="${optionId}" data-parameter-presentation-key="${key}" aria-label="${escapeAttr(orderLabel)}" title="${escapeAttr(orderLabel)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"><i data-lucide="grip-vertical" aria-hidden="true"></i></button>
+        <span class="capability-parameter-width-control" role="group" aria-label="${escapeAttr(capabilityUiText(`${entry.label}显示宽度`,`${entry.label} display width`))}">
+            <button type="button" class="capability-parameter-width-button" data-parameter-presentation-width="half" data-parameter-presentation-option-id="${optionId}" data-parameter-presentation-key="${key}" aria-pressed="${width === 'half' ? 'true' : 'false'}" aria-label="${escapeAttr(capabilityUiText(`${entry.label}半行显示`,`${entry.label} half-width`))}" title="${escapeAttr(capabilityUiText('半行','Half width'))}"><span class="capability-width-icon capability-width-icon-half" aria-hidden="true"></span></button>
+            <button type="button" class="capability-parameter-width-button" data-parameter-presentation-width="full" data-parameter-presentation-option-id="${optionId}" data-parameter-presentation-key="${key}" aria-pressed="${width === 'full' ? 'true' : 'false'}" aria-label="${escapeAttr(capabilityUiText(`${entry.label}整行显示`,`${entry.label} full-width`))}" title="${escapeAttr(capabilityUiText('整行','Full width'))}"><span class="capability-width-icon capability-width-icon-full" aria-hidden="true"></span></button>
+        </span>
+    </div>`;
+}
+function renderCapabilityOptionOrderHandle(){
+    if(!isCanvasSettingsMode)return '';
+    const label=capabilityUiText('拖动排序；也可按 Alt+方向键移动','Drag to reorder, or press Alt+Arrow keys');
+    return `<span class="capability-option-drag-handle" data-capability-option-sort-handle role="button" tabindex="0" aria-label="${escapeAttr(label)}" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight" title="${escapeAttr(label)}"><i data-lucide="grip-vertical" aria-hidden="true"></i></span>`;
 }
 function renderCapabilitySettingsControl(entries, extraSettings=''){
     if(!entries.length && !extraSettings) return '';
@@ -5031,7 +6590,7 @@ function renderCapabilitySettingsControl(entries, extraSettings=''){
     const itemCount = entries.length + (extraSettings ? 1 : 0);
     return `<div class="smart-control capability-settings-control" data-capability-settings data-control-key="capability-settings-control">
         <button class="smart-pill capability-settings-pill" type="button" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}"><i data-lucide="settings-2"></i></button>
-        <div class="smart-popover capability-settings-popover"><div class="capability-settings-head"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(capabilityUiText(`${itemCount} 项`,` ${itemCount} items`))}</span></div><div class="capability-settings-list">${extraSettings}${entries.map(entry => `<section class="capability-setting-row ${entry.extraClass.includes('is-long') ? 'is-long' : ''}"><div class="capability-setting-label"><span>${escapeHtml(entry.label)}</span>${renderCapabilityParameterHelp(entry.label, entry.description)}${entry.optional ? `<small>${escapeHtml(capabilityUiText('可选','Optional'))}</small>` : ''}</div>${entry.body}</section>`).join('')}</div></div>
+        <div class="smart-popover capability-settings-popover"><div class="capability-settings-head"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(capabilityUiText(`${itemCount} 项`,`${itemCount} items`))}</span></div><div class="capability-settings-list">${extraSettings}${entries.map(entry => `<section class="capability-setting-row ${entry.extraClass.includes('is-long') ? 'is-long' : ''}" data-parameter-option-id="${escapeAttr(entry.optionId)}" data-parameter-key="${escapeAttr(entry.key)}" data-parameter-width="${escapeAttr(entry.presentation?.width || '')}" ${entry.requiredGuard ? 'data-required-parameter-guard="visible"' : ''}><div class="capability-setting-label"><span>${escapeHtml(entry.label)}</span>${renderCapabilityParameterHelp(entry.label, entry.description)}${entry.requiredGuard ? `<small class="is-required">${escapeHtml(capabilityUiText('必填','Required'))}</small>` : entry.optional ? `<small>${escapeHtml(capabilityUiText('可选','Optional'))}</small>` : ''}</div>${entry.body}${renderCapabilityParameterPresentationControls(entry)}</section>`).join('')}</div></div>
     </div>`;
 }
 function renderJimengUpscaleSetting(){
@@ -5047,20 +6606,30 @@ function renderCapabilityParameterBundleForSource(profile, source, excluded=[], 
     if(!profile || profile.validation_mode !== 'strict') return '';
     const excludedKeys = new Set(excluded || []);
     const values = capabilityParameterValues(profile, source);
+    const optionId = capabilityParameterOptionId(profile);
     const rawEntries = Object.entries(profile.parameters || {})
-        .filter(([key, spec]) => !excludedKeys.has(key) && spec?.ui_hidden !== true)
-        .map(([key, spec]) => ({...renderCapabilityParameterEditor(key, spec, profile, values), advanced:capabilityParameterIsAdvanced(spec)}));
+        .filter(([key, spec]) => !excludedKeys.has(key) && (spec?.ui_hidden !== true || capabilityParameterMustStayVisible(spec)))
+        .map(([key, spec], index) => {
+            const presentation=capabilityParameterPresentation(optionId,key);
+            const requiredGuard=capabilityParameterMustStayVisible(spec);
+            return {...renderCapabilityParameterEditor(key,spec,profile,values),optionId,advanced:capabilityParameterIsAdvanced(spec),requiredGuard,presentation,sourceOrder:index};
+        });
     const shortcutOrder = {resolution:0, duration:1, aspect_ratio:2};
     const shortcutPriority = entry => entry.semantic === 'quality' ? 1 : (shortcutOrder[entry.semantic] ?? 99);
     const orderByShortcut = list => [
         ...list.filter(entry => entry.semantic).sort((left, right) => shortcutPriority(left) - shortcutPriority(right)),
         ...list.filter(entry => !entry.semantic)
     ];
+    const hasCustomOrder=rawEntries.some(entry=>Number.isInteger(entry.presentation?.order)&&entry.presentation.order>=0);
+    const orderEntries=list=>hasCustomOrder
+        ? [...list].sort((left,right)=>(Number.isInteger(left.presentation?.order)?left.presentation.order:left.sourceOrder*1000)-(Number.isInteger(right.presentation?.order)?right.presentation.order:right.sourceOrder*1000))
+        : orderByShortcut(list);
     // 常用参数（分辨率 / 时长 / 画幅 / 生成音频 / 画质等非高级项）直接铺在参数面板上；
     // 仅 level=advanced 的冷门参数收进右侧齿轮，避免常用调节被藏起来。
-    const inlineEntries = orderByShortcut(rawEntries.filter(entry => !entry.advanced));
-    const advancedEntries = orderByShortcut(rawEntries.filter(entry => entry.advanced));
-    const inlineMarkup = inlineEntries.map(entry => `<section class="capability-summary-field ${entry.extraClass.includes('is-long') ? 'is-long' : ''}"><div class="capability-setting-label"><span>${escapeHtml(entry.label)}</span>${renderCapabilityParameterHelp(entry.label, entry.description)}${entry.optional ? `<small>${escapeHtml(capabilityUiText('可选','Optional'))}</small>` : ''}</div>${entry.body}</section>`).join('');
+    const inlineEntries = orderEntries(rawEntries.filter(entry => !entry.advanced || entry.requiredGuard));
+    const advancedEntries = orderEntries(rawEntries.filter(entry => entry.advanced && !entry.requiredGuard));
+    const parameterDataAttributes = entry => `data-parameter-option-id="${escapeAttr(entry.optionId)}" data-parameter-key="${escapeAttr(entry.key)}" ${entry.requiredGuard ? 'data-required-parameter-guard="visible"' : ''}`;
+    const inlineMarkup = inlineEntries.map(entry => `<section class="capability-summary-field ${entry.extraClass.includes('is-long') ? 'is-long' : ''}" ${parameterDataAttributes(entry)} data-parameter-width="${escapeAttr(entry.presentation?.width||'')}" data-parameter-source-order="${entry.sourceOrder}"><div class="capability-setting-label"><span>${escapeHtml(entry.label)}</span>${renderCapabilityParameterHelp(entry.label, entry.description)}${entry.requiredGuard ? `<small class="is-required">${escapeHtml(capabilityUiText('必填','Required'))}</small>` : entry.optional ? `<small>${escapeHtml(capabilityUiText('可选','Optional'))}</small>` : ''}</div>${entry.body}${isCanvasSettingsMode?renderCapabilityParameterPresentationControls(entry):''}</section>`).join('');
     const summaryParts = inlineEntries.slice(0, 6).map(entry => {
         const missing = entry.value === undefined || entry.value === CAPABILITY_PARAMETER_UNSET || entry.value === '';
         return missing ? entry.label : capabilityOptionLabel(entry.key, entry.value);
@@ -5076,7 +6645,7 @@ function renderCapabilityParameterBundleForSource(profile, source, excluded=[], 
             <div class="smart-popover capability-summary-popover"><div class="capability-summary-head"><strong>${escapeHtml(capabilityUiText('常用参数','Common parameters'))}</strong><span>${escapeHtml(capabilityUiText('按模型契约提供','From model contract'))}</span></div><div class="capability-summary-grid">${inlineMarkup}</div></div>
         </div>`
         : '';
-    const orderedEntries = [...inlineEntries, ...advancedEntries];
+    const orderedEntries = orderEntries([...inlineEntries, ...advancedEntries]);
     return {
         markup,
         settingsControl:renderCapabilitySettingsControl(advancedEntries, extraSettings),
@@ -5575,6 +7144,9 @@ function syncJimengVideoModelPillForRefs(){
 }
 function sanitizeSmartApiSelection(target=settings){
     if(!target || typeof target !== 'object') return target;
+    // 管理画布允许挑选尚未加入正式候选的严格可运行模型；不能用用户启用清单
+    // 把这个管理节点的精确选择静默改回另一个模型。
+    if(isCanvasSettingsMode) return target;
     if(target.engine === 'volcengine'){
         if(target.apiKind === 'video'){
             target.videoProvider = 'volcengine';
@@ -5819,6 +7391,11 @@ function updateProviderModels(){ renderDynamicParams(); }
 let dynamicParamsRefreshTimer = 0;
 let dynamicParamsRefreshIdle = 0;
 let dynamicParamsRefreshSeq = 0;
+function cancelDynamicParamsRefresh(){
+    if(dynamicParamsRefreshTimer){clearTimeout(dynamicParamsRefreshTimer);dynamicParamsRefreshTimer=0;}
+    if(dynamicParamsRefreshIdle&&window.cancelIdleCallback){window.cancelIdleCallback(dynamicParamsRefreshIdle);dynamicParamsRefreshIdle=0;}
+    dynamicParamsRefreshSeq++;
+}
 function scheduleDynamicParamsRefresh(delay=120){
     if(dynamicParamsRefreshTimer){
         clearTimeout(dynamicParamsRefreshTimer);
@@ -5913,6 +7490,14 @@ function capabilityPickerDraft(node, descriptor){
 function capabilityPickerDraftKey(node, descriptor){
     return String(node?.id || descriptor?.nodeType || 'active');
 }
+function capabilityPickerMatchesActiveSubject(picker){
+    const owner=String(picker?.dataset.capabilitySubjectId||'');
+    const active=String(activeSettingsSubject()?.id||'');
+    if(!owner||!active||owner===active)return true;
+    // 过渡期间若有旧 DOM 事件到达，只刷新当前 subject，不把旧选项写入新节点。
+    renderDynamicParams({preserveState:false});
+    return false;
+}
 function canvasSelectionNodeType(subject){
     if(subject?.type === SMART_NODE_TYPES.textGenerator) return 'text_generation';
     if(settings.apiKind === 'music') return 'music_generation';
@@ -5922,7 +7507,9 @@ function canvasSelectionNodeType(subject){
 }
 function canvasModelOptionsForNode(subject){
     const nodeType = canvasSelectionNodeType(subject);
-    return (modelCapabilityCatalog.options || []).filter(option => option.node_type === nodeType);
+    const context = hypitModelSlotContext(subject);
+    return (modelCapabilityCatalog.options || []).filter(option => option.node_type === nodeType
+        && hypitOptionAllowedForContext(option, context));
 }
 // 已选读取：交给宿主做确定性解析；歧义或下线时不猜、不换模型（§15.2、§15.6）
 function canvasSelectionForNode(subject){
@@ -5974,7 +7561,8 @@ function mountCanvasModelConfigPickers(subject){
     if(canvasModelConfigInstance){ canvasModelConfigInstance.destroy(); canvasModelConfigInstance = null; }
     canvasModelConfigInstance = window.mountModelConfigControl(container, {
         context:{
-            host:'canvas', moduleId:'canvas', slotId:canvasSelectionNodeType(subject), phase:'live',
+            host:'canvas', moduleId:isSettingsCanvasMode?(isArticleSettingsMode?'article':'hypit'):'canvas',
+            slotId:isSettingsCanvasMode?(hypitModelSlotContext(subject)?.slots?.[0] || canvasSelectionNodeType(subject)):canvasSelectionNodeType(subject), phase:'live',
             nodeId:String(subject.id || '')
         },
         catalog:{options, profiles:[]},
@@ -5982,9 +7570,9 @@ function mountCanvasModelConfigPickers(subject){
         onCommit:payload => canvasCommitModelSelection(subject, payload)
     });
 }
-function renderDynamicParams(){
-    const editableState = captureCanvasEditableState(document.activeElement);
-    renderDynamicParamsContent();
+function renderDynamicParams({preserveState=true}={}){
+    const editableState = preserveState ? captureCanvasEditableState(document.activeElement) : null;
+    renderDynamicParamsContent({preserveState});
     if(editableState) restoreCanvasEditableState(editableState);
 }
 const capabilityPickerScrollMemory = {};
@@ -6014,22 +7602,38 @@ function restoreCapabilityPickerScroll(snapshot){
         });
     });
 }
-function renderDynamicParamsContent(){
+function renderDynamicParamsContent({preserveState=true}={}){
     if(!dynamicParams) return;
-    const keepOpen = openControlState();
-    const pickerScroll = capabilityPickerScrollSnapshot();
-    const scrollState = dynamicParamsScrollSnapshot();
+    const keepOpen = preserveState ? openControlState() : null;
+    const pickerScroll = preserveState ? capabilityPickerScrollSnapshot() : null;
+    const scrollState = preserveState ? dynamicParamsScrollSnapshot() : null;
     const subject = activeSettingsSubject();
     if(!subject){
         dynamicParams.innerHTML = '';
         dynamicParams.hidden = true;
+        dynamicParams.dataset.smartNodeId='';
         return;
     }
+    dynamicParams.dataset.smartNodeId=String(subject.id||'');
     dynamicParams.hidden = false;
     settings.engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(settings.engine) ? settings.engine : 'api';
     settings = SMART_NODE_CONTRACT.normalizeExecutionSettings(subject, settings);
     clearVolcengineSelectionOutsideVolcengine(settings);
     syncApiKindToggleVisibility();
+    const hypitModelContext = hypitModelSlotContext(subject);
+    const hypitModelState = hypitModelOptionState(hypitModelContext);
+    if(hypitModelState.status === 'loading'){
+        dynamicParams.innerHTML = `<div class="smart-capability-note" role="status">${escapeHtml(capabilityUiText('正在核对当前用途可用模型…','Checking models available for this use…'))}</div>`;
+        return;
+    }
+    if(hypitModelState.status === 'error'){
+        dynamicParams.innerHTML = `<div class="smart-capability-note warning" role="alert"><span>${escapeHtml(capabilityUiText('读取当前用途模型失败','Could not load models for this use'))}${hypitModelState.error ? ` · ${escapeHtml(hypitModelState.error)}` : ''}</span><button type="button" class="smart-inline-retry" data-hypit-model-options-retry>${escapeHtml(capabilityUiText('重试','Retry'))}</button></div>`;
+        dynamicParams.querySelector('[data-hypit-model-options-retry]')?.addEventListener('click',()=>{
+            (hypitModelContext?.slots || []).forEach(slot=>hypitSlotModelOptions.delete(slot));
+            renderDynamicParams();
+        });
+        return;
+    }
     if(subject?.type === SMART_NODE_TYPES.textGenerator) renderTextGenerationParams(subject);
     else if(settings.engine === 'api'){
         if(settings.apiKind === 'music') renderApiMusicParams();
@@ -6093,17 +7697,23 @@ function verifiedTextGenerationModels(node=activeSettingsSubject()){
     const inputCounts = textGenerationCandidateInputCounts(request);
     const sourceSettings = node?.runSettings || settings;
     const region = capabilityRegionForProvider(sourceSettings?.textProvider || '', sourceSettings);
-    const models = window.SmartModelCapabilities?.modelsForVerifiedInputs(
-        modelCapabilityCatalog,
-        'text_generation',
-        inputCounts,
-        request.inputRoles,
-        {},
-        region
-    ) || [];
+    const models = isCanvasSettingsMode
+        ? capabilityEnabledProviderIds('text_generation',region).flatMap(providerId=>canvasManagementProfilesForProvider(providerId,'text_generation',region))
+        : (window.SmartModelCapabilities?.modelsForVerifiedInputs(
+            capabilityPickerCatalog(),
+            'text_generation',
+            inputCounts,
+            request.inputRoles,
+            {},
+            region
+        ) || []);
     return models.filter(model => {
+        if(isCanvasSettingsMode){
+            return Boolean(managementOptionForProfile(model));
+        }
         const enabledIds = configuredCapabilityModelIds(model.provider_id, 'text_generation', region);
-        return enabledIds.has(String(model.model_id || '').trim());
+        return enabledIds.has(String(model.model_id || '').trim())
+            && hypitProfileAllowedForCurrentUse(model, 'text_generation');
     });
 }
 function renderTextGenerationParams(node=activeSettingsSubject()){
@@ -6471,11 +8081,27 @@ function connectImageCompareInput(fromId, toId, options={}){
     }
     return connectInputNode(fromId, toId, {...options, targetFieldKey:slot, imageCompareResolved:true});
 }
+function hypitUnmatchedRunningHubFieldPlan(fields, connections=[], targetId=''){
+    const choices=(fields||[]).filter(field=>rhInputFieldKind(field)).map(field=>({
+        key:`${field?.nodeId??''}::${field?.fieldName??''}`,
+        label:String(field?.label||field?.description||field?.fieldName||field?.key||'').trim(),
+        kind:rhInputFieldKind(field)
+    })).filter(choice=>choice.key);
+    if(!choices.length)return {mode:'none',choices:[]};
+    const occupied=new Set((connections||[])
+        .filter(connection=>!targetId||connection?.to===targetId)
+        .map(connection=>connectionTargetFieldKey(connection))
+        .filter(Boolean));
+    const available=choices.filter(choice=>!occupied.has(choice.key));
+    if(available.length)return {mode:'choose',choices:available};
+    return {mode:'replace',choices:choices.map(choice=>({...choice,occupied:true}))};
+}
 function connectInputNodeWithTargetField(fromId, toId, options={}, event=null){
     const from = nodes.find(node => node.id === fromId);
     const to = nodes.find(node => node.id === toId);
     if(to?.type === SMART_NODE_TYPES.imageCompare) return connectImageCompareInput(fromId, toId, options);
     if(!from || !to || to.type !== SMART_NODE_TYPES.aiApp) return connectInputNode(fromId, toId, options);
+    const allowHypitUnmatchedInput=isSettingsCanvasMode;
     const fields = rhActiveFields(smartSettingsForNode(to));
     const sourceRefs = runningHubSourceRefs(from, options);
     if(!sourceRefs.length && (isSmartImageNode(from) || isSmartMaterialNode(from) || isSmartResultGroupNode(from))){
@@ -6485,15 +8111,20 @@ function connectInputNodeWithTargetField(fromId, toId, options={}, event=null){
             return sourceUrl || SMART_NODE_CONTRACT.textContentForMediaItem(ref);
         }));
     }
-    if(!sourceRefs.length) return false;
     const compatibleRefs = sourceRefs.filter(ref => fields.some(field => rhInputFieldKind(field) === mediaKindForItem(ref)));
-    if(!compatibleRefs.length) return false;
+    const unmatchedHypitInput=allowHypitUnmatchedInput&&compatibleRefs.length===0;
+    if(!compatibleRefs.length&&!unmatchedHypitInput) return false;
     if(sourceRefs.length > 1 && !options?.sourceMediaKey){
         return startRunningHubConnectionQueue([fromId], toId, {[fromId]:options?.sourceResultId || ''}, '', event) ? 'pending' : false;
     }
     const kind = runningHubSourceKind(from, options);
-    const plan = SMART_NODE_CONTRACT.runningHubTargetFieldPlan(fields, kind, canvas?.connections || [], toId);
-    if(plan.mode === 'none') return false;
+    const plan = unmatchedHypitInput
+        ? hypitUnmatchedRunningHubFieldPlan(fields, canvas?.connections || [], toId)
+        : SMART_NODE_CONTRACT.runningHubTargetFieldPlan(fields, kind, canvas?.connections || [], toId);
+    if(plan.mode === 'none'){
+        if(unmatchedHypitInput)toast(capabilityUiText('此 AI 应用没有可绑定的输入字段，请先配置应用输入','This AI app has no bindable input fields. Configure an app input first.'),{tone:'error'});
+        return false;
+    }
     if(plan.mode === 'auto'){
         const connected = connectInputNode(fromId, toId, {...options, targetFieldKey:plan.targetFieldKey});
         if(connected) syncRunningHubInputBindings(to);
@@ -6502,9 +8133,11 @@ function connectInputNodeWithTargetField(fromId, toId, options={}, event=null){
     closeRunningHubFieldPicker();
     const picker = document.createElement('div');
     picker.className = 'smart-rh-field-picker';
-    const kindLabel = kind === 'text' ? capabilityUiText('文本','text') : kind === 'video' ? capabilityUiText('视频','video') : kind === 'audio' ? capabilityUiText('音频','audio') : capabilityUiText('图片','image');
-    const sourceName = String(sourceRefs[0]?.name || rhMediaKindLabel(kind, Number(options?.sourceMediaIndex) || 0)).trim();
-    const pickerTitle = capabilityUiText(`选择“${sourceName}”对应的${kindLabel}输入`, `Choose the ${kindLabel} input for “${sourceName}”`);
+    const kindLabel = kind === 'text' ? capabilityUiText('文本','text') : kind === 'video' ? capabilityUiText('视频','video') : kind === 'audio' ? capabilityUiText('音频','audio') : kind === 'image' ? capabilityUiText('图片','image') : capabilityUiText('未知类型','unknown type');
+    const sourceName = String(sourceRefs[0]?.name || from.title || from.label || SMART_NODE_CONTRACT.titleForType(from.type)).trim();
+    const pickerTitle = unmatchedHypitInput
+        ? capabilityUiText(`为“${sourceName}”明确选择输入字段；实际输入类型由流程测试校验`, `Choose an input field for “${sourceName}”; the flow test will validate the actual input type`)
+        : capabilityUiText(`选择“${sourceName}”对应的${kindLabel}输入`, `Choose the ${kindLabel} input for “${sourceName}”`);
     picker.innerHTML = `<div class="smart-rh-field-picker-title">${escapeHtml(pickerTitle)}</div>${plan.choices.map(choice => `<button type="button" data-rh-target-field="${escapeAttr(choice.key)}"><i data-lucide="${kind === 'text' ? 'file-text' : kind === 'video' ? 'film' : kind === 'audio' ? 'audio-lines' : 'image'}"></i><span>${escapeHtml(choice.label)}</span>${choice.occupied ? `<small>${escapeHtml(capabilityUiText('替换','Replace'))}</small>` : ''}</button>`).join('')}`;
     const point = event ? {x:event.clientX + 10, y:event.clientY + 10} : {x:window.innerWidth / 2, y:window.innerHeight / 2};
     picker.style.left = `${Math.max(12, Math.min(window.innerWidth - 250, point.x))}px`;
@@ -7058,7 +8691,7 @@ function renderExternalParameterControl(field,engine){
     const random=engine==='rh'?rhRandomEnabled(field):comfyRandomEnabledField(field);
     const active=engine==='rh'?smartRhRandomActive(key):smartComfyRandomActive(key);
     const dice=random?`<button type="button" class="dice-btn ${active?'active':''}" data-${engine}-random="${escapeAttr(key)}" title="${escapeAttr(active?tr('smart.diceOn'):tr('smart.diceOff'))}"><i data-lucide="dice-5"></i></button>`:'';
-    return renderCapabilityParameterControl(key,entry.label,spec,profile,value,false,entry.body+dice,entry.extraClass)
+    return renderCapabilityParameterControl(key,entry.label,spec,profile,value,false,entry.body+dice,entry.extraClass,entry.requiredGuard)
         .replace('data-control-key=',`data-external-engine="${engine}" data-control-key=`);
 }
 function renderComfySettingField(field){
@@ -7804,8 +9437,14 @@ function positionPinnedSmartPopover(control){
     const viewportBottom = viewportTop + viewportHeight;
     const margin = 10;
     const gap = 8;
-    const scale = control.closest('.composer.screen-ui') ? 1 : safeScale(viewport?.scale);
     const controlRect = control.getBoundingClientRect();
+    // 节点参数位于经过画布缩放的 .world 内。viewport.scale 只覆盖浏览器
+    // 视口缩放，另需计入 control 自身从布局尺寸到屏幕尺寸的变换比例。
+    const layoutWidth=Number(control.offsetWidth)||controlRect.width||1;
+    const layoutHeight=Number(control.offsetHeight)||controlRect.height||1;
+    const screenUi=Boolean(control.closest('.composer.screen-ui'));
+    const scaleX=screenUi?1:safeScale(viewport?.scale)*safeScale(controlRect.width/layoutWidth);
+    const scaleY=screenUi?1:safeScale(viewport?.scale)*safeScale(controlRect.height/layoutHeight);
     const popoverRect = popover.getBoundingClientRect();
     const availableAbove = Math.max(0, controlRect.top - viewportTop - margin - gap);
     const availableBelow = Math.max(0, viewportBottom - controlRect.bottom - margin - gap);
@@ -7814,12 +9453,12 @@ function positionPinnedSmartPopover(control){
     const openBelow = forceBelow || (desiredHeight > availableAbove && (desiredHeight <= availableBelow || availableBelow > availableAbove));
     const available = openBelow ? availableBelow : availableAbove;
     control.classList.toggle('popover-below', openBelow);
-    control.style.setProperty('--smart-popover-available', `${Math.max(24, Math.floor(available / scale))}px`);
+    control.style.setProperty('--smart-popover-available', `${Math.max(24, Math.floor(available / scaleY))}px`);
     const positionedRect = popover.getBoundingClientRect();
     let shiftX = 0;
     if(positionedRect.left < viewportLeft + margin) shiftX = viewportLeft + margin - positionedRect.left;
     if(positionedRect.right + shiftX > viewportRight - margin) shiftX += viewportRight - margin - (positionedRect.right + shiftX);
-    control.style.setProperty('--smart-popover-shift-x', `${shiftX / scale}px`);
+    control.style.setProperty('--smart-popover-shift-x', `${shiftX / scaleX}px`);
 }
 function capabilityOptionButtons(container){
     return [...(container?.children || [])].filter(item => item.matches?.('.capability-option:not([data-capability-unset])'));
@@ -7942,10 +9581,12 @@ function cleanupCapabilityOptionDrag(commit){
     document.body.classList.remove('capability-option-reordering');
     if(!commit){
         state.originalOrder.forEach(item => state.container.appendChild(item));
+        flushDeferredCapabilityControlRefresh();
         return;
     }
     const nextItems = capabilityOptionButtons(state.container);
     saveCapabilityOptionOrder(state.container.dataset.capabilityOptionScope, nextItems.map(capabilityOptionId));
+    flushDeferredCapabilityControlRefresh();
 }
 function applyCapabilityOptionDragPosition(state, clientX, clientY){
     if(!state) return;
@@ -8043,11 +9684,18 @@ function bindCapabilityOptionSort(){
             buttons.sort((left, right) => (positions.get(capabilityOptionId(left)) ?? Number.MAX_SAFE_INTEGER) - (positions.get(capabilityOptionId(right)) ?? Number.MAX_SAFE_INTEGER));
             buttons.forEach(button => container.appendChild(button));
         }
-        // 仍恢复用户已经保存的选项顺序，但参数弹层不再注入默认拖拽手柄，避免短选项被挤窄。
+        // 正式画布只读取管理端的选项顺序；只有管理画布渲染拖拽柄并允许调整。
     });
+    if(isCanvasSettingsMode){
+        dynamicParams.querySelectorAll('[data-capability-option-sort-handle]').forEach(handle=>{
+            handle.addEventListener('pointerdown',event=>startCapabilityOptionDrag(event,handle));
+            handle.addEventListener('keydown',event=>moveCapabilityOptionByKeyboard(event,handle));
+            handle.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();});
+        });
+    }
     dynamicParams.querySelectorAll('[data-capability-picker-options]').forEach(container => {
         const stage = container.dataset.capabilityPickerOptions || '';
-        const scope = smartPreferenceScopeKey('picker', stage);
+        const scope = container.dataset.capabilityPickerOrderScope || smartPreferenceScopeKey('picker', stage);
         const stored = smartCanvasPersonalizationStore().modelOrder[scope];
         const buttons = preferenceListButtons(container);
         if(Array.isArray(stored) && stored.length){
@@ -8102,11 +9750,9 @@ function cleanupPreferencePointerDrag(commit){
         state.originalOrder.forEach(item => state.list.appendChild(item));
     } else {
         saveSmartPreferenceOrder(state.scope, preferenceListButtons(state.list).map(button => button.dataset.preferenceId));
+        smartPreferenceDragClickSuppression={button:state.button,expiresAt:performance.now()+500};
     }
-    if(state.moved){
-        smartPreferenceDragMoved = true;
-        setTimeout(() => { smartPreferenceDragMoved = false; }, 0);
-    }
+    flushDeferredCapabilityControlRefresh();
 }
 function movePreferencePointerDrag(event){
     const state = smartPreferencePointerDragState;
@@ -8182,15 +9828,191 @@ function startPreferencePointerDrag(event, handle){
     window.addEventListener('blur', cancelPreferencePointerDrag, true);
 }
 function bindPreferenceSortDrag(){
+    if(!isCanvasSettingsMode)return;
     dynamicParams.querySelectorAll('[data-preference-sort-handle]').forEach(handle => {
         handle.addEventListener('pointerdown', event => startPreferencePointerDrag(event, handle));
+        handle.addEventListener('keydown', event => movePreferenceByKeyboard(event, handle));
         handle.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
         });
     });
+    // 个别浏览器的 grip 子 SVG 命中会落到父按钮；仍只在 grip 的实际
+    // 矩形内启动拖动，不把整行点击变成排序手势。
+    dynamicParams.querySelectorAll('button[data-preference-id]').forEach(button=>{
+        const handle=button.querySelector('[data-preference-sort-handle]');
+        if(!handle)return;
+        button.addEventListener('pointerdown',event=>{
+            if(smartPreferencePointerDragState||handle.contains(event.target))return;
+            const rect=handle.getBoundingClientRect();
+            if(event.clientX>=rect.left&&event.clientX<=rect.right&&event.clientY>=rect.top&&event.clientY<=rect.bottom){
+                startPreferencePointerDrag(event,handle);
+            }
+        });
+    });
+}
+function movePreferenceByKeyboard(event, handle){
+    if(!isCanvasSettingsMode||!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key))return;
+    const button=handle.closest('button[data-preference-id]');
+    const list=button?.closest('.model-list, [data-capability-picker-options]');
+    const rows=preferenceListButtons(list);
+    const index=rows.indexOf(button);
+    const target=rows[index+(event.key==='ArrowUp'?-1:1)];
+    event.preventDefault();event.stopPropagation();
+    if(!button||!list||index<0||!target)return;
+    if(event.key==='ArrowUp')list.insertBefore(button,target);
+    else list.insertBefore(target,button);
+    saveSmartPreferenceOrder(handle.dataset.preferenceScope,preferenceListButtons(list).map(item=>item.dataset.preferenceId));
+    handle.focus({preventScroll:true});
+}
+function capabilityPresentationRows(container, optionId){
+    return [...(container?.children||[])].filter(row=>
+        row?.matches?.('.capability-summary-field[data-parameter-option-id][data-parameter-key], .capability-setting-row[data-parameter-option-id][data-parameter-key]')
+        &&row.dataset.parameterOptionId===optionId&&String(row.dataset.parameterKey||'').trim()
+    );
+}
+function persistCapabilityPresentationRowOrder(optionId, rows){
+    const option=(canvasModelManagementCatalog.options||[]).find(item=>String(item.option_id||'')===optionId);
+    const profile=canvasManagementProfileForOption(option);
+    const allKeys=Object.keys(profile?.parameters||{});
+    if(!allKeys.length)return false;
+    const saved=smartCanvasPersonalizationStore().parameterPresentation[optionId]||{};
+    const fullOrder=[...allKeys].sort((left,right)=>{
+        const leftOrder=Number.isInteger(saved[left]?.order)?saved[left].order:allKeys.indexOf(left)*1000;
+        const rightOrder=Number.isInteger(saved[right]?.order)?saved[right].order:allKeys.indexOf(right)*1000;
+        return leftOrder-rightOrder;
+    });
+    const visibleKeys=rows.map(row=>String(row.dataset.parameterKey||'')).filter(key=>allKeys.includes(key));
+    const visibleSet=new Set(visibleKeys);
+    let nextIndex=0;
+    const merged=fullOrder.map(key=>visibleSet.has(key)?visibleKeys[nextIndex++]:key);
+    return saveCapabilityParameterPresentationOrder(optionId,merged);
+}
+function applyCapabilityPresentationDragPosition(state, clientX, clientY){
+    if(!state)return;
+    const rows=capabilityPresentationRows(state.container,state.optionId).filter(row=>row!==state.row);
+    const before=rows.find(row=>{
+        const rect=row.getBoundingClientRect();
+        const centerY=rect.top+rect.height/2;
+        return clientY<centerY-2||(Math.abs(clientY-centerY)<=rect.height*.55&&clientX<rect.left+rect.width/2);
+    })||null;
+    if(before)state.container.insertBefore(state.row,before);else state.container.appendChild(state.row);
+    state.moved=state.originalOrder.indexOf(state.row)!==capabilityPresentationRows(state.container,state.optionId).indexOf(state.row);
+}
+function cleanupCapabilityPresentationDrag(commit){
+    const state=smartParameterPresentationDragState;
+    if(!state)return;
+    smartParameterPresentationDragState=null;
+    window.removeEventListener('pointermove',moveCapabilityPresentationDrag,true);
+    window.removeEventListener('pointerup',finishCapabilityPresentationDrag,true);
+    window.removeEventListener('pointercancel',cancelCapabilityPresentationDrag,true);
+    window.removeEventListener('blur',cancelCapabilityPresentationDrag,true);
+    try{state.handle.releasePointerCapture?.(state.pointerId);}catch(e){}
+    state.preview?.remove();state.row.classList.remove('capability-parameter-drop-placeholder');
+    state.container.classList.remove('is-parameter-reordering');
+    document.body.classList.remove('capability-parameter-reordering');
+    if(!commit||!state.moved){state.originalOrder.forEach(row=>state.container.appendChild(row));flushDeferredCapabilityControlRefresh();return;}
+    persistCapabilityPresentationRowOrder(state.optionId,capabilityPresentationRows(state.container,state.optionId));
+    flushDeferredCapabilityControlRefresh();
+}
+function moveCapabilityPresentationDrag(event){
+    const state=smartParameterPresentationDragState;
+    if(!state||event.pointerId!==state.pointerId)return;
+    event.preventDefault();event.stopPropagation();
+    state.latestPoint={x:event.clientX,y:event.clientY};
+    const width=state.preview?.offsetWidth||state.row.getBoundingClientRect().width;
+    const height=state.preview?.offsetHeight||state.row.getBoundingClientRect().height;
+    state.preview.style.left=`${Math.max(8,Math.min(event.clientX-state.offsetX,window.innerWidth-width-8))}px`;
+    state.preview.style.top=`${Math.max(8,Math.min(event.clientY-state.offsetY,window.innerHeight-height-8))}px`;
+    applyCapabilityPresentationDragPosition(state,event.clientX,event.clientY);
+}
+function finishCapabilityPresentationDrag(event){
+    const state=smartParameterPresentationDragState;
+    if(!state||event.pointerId!==state.pointerId)return;
+    event.preventDefault();event.stopPropagation();
+    applyCapabilityPresentationDragPosition(state,event.clientX,event.clientY);
+    cleanupCapabilityPresentationDrag(true);
+}
+function cancelCapabilityPresentationDrag(event){
+    const state=smartParameterPresentationDragState;
+    if(!state||(event?.pointerId!==undefined&&event.pointerId!==state.pointerId))return;
+    cleanupCapabilityPresentationDrag(false);
+}
+function startCapabilityPresentationDrag(event,handle){
+    if(!isCanvasSettingsMode||event.button!==0||smartParameterPresentationDragState)return;
+    const row=handle.closest('.capability-summary-field[data-parameter-option-id][data-parameter-key], .capability-setting-row[data-parameter-option-id][data-parameter-key]');
+    const optionId=String(handle.dataset.parameterPresentationOptionId||'');
+    const container=row?.parentElement;
+    const originalOrder=capabilityPresentationRows(container,optionId);
+    if(!row||!optionId||!originalOrder.includes(row)||originalOrder.length<2)return;
+    event.preventDefault();event.stopPropagation();
+    const rect=row.getBoundingClientRect();
+    const preview=row.cloneNode(true);preview.classList.remove('capability-parameter-drop-placeholder');
+    preview.classList.add('capability-parameter-drag-preview');preview.setAttribute('aria-hidden','true');
+    preview.querySelectorAll('[id]').forEach(child=>child.removeAttribute('id'));
+    preview.style.width=`${Math.max(1,rect.width)}px`;preview.style.height=`${Math.max(1,rect.height)}px`;
+    document.body.appendChild(preview);
+    smartParameterPresentationDragState={row,container,handle,optionId,preview,pointerId:event.pointerId,
+        offsetX:event.clientX-rect.left,offsetY:event.clientY-rect.top,originalOrder,moved:false};
+    row.classList.add('capability-parameter-drop-placeholder');container.classList.add('is-parameter-reordering');
+    document.body.classList.add('capability-parameter-reordering');
+    preview.style.left=`${rect.left}px`;preview.style.top=`${rect.top}px`;
+    try{handle.setPointerCapture?.(event.pointerId);}catch(e){}
+    window.addEventListener('pointermove',moveCapabilityPresentationDrag,{capture:true,passive:false});
+    window.addEventListener('pointerup',finishCapabilityPresentationDrag,{capture:true,passive:false});
+    window.addEventListener('pointercancel',cancelCapabilityPresentationDrag,true);
+    window.addEventListener('blur',cancelCapabilityPresentationDrag,true);
+}
+function moveCapabilityPresentationByKeyboard(event,handle){
+    if(!isCanvasSettingsMode||!event.altKey||!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key))return;
+    event.preventDefault();event.stopPropagation();
+    const row=handle.closest('.capability-summary-field[data-parameter-option-id][data-parameter-key], .capability-setting-row[data-parameter-option-id][data-parameter-key]');
+    const optionId=String(handle.dataset.parameterPresentationOptionId||'');
+    const container=row?.parentElement;
+    const rows=capabilityPresentationRows(container,optionId);
+    const index=rows.indexOf(row);
+    const delta=['ArrowUp','ArrowLeft'].includes(event.key)?-1:1;
+    const target=rows[index+delta];
+    if(!row||index<0||!target)return;
+    if(delta<0)container.insertBefore(row,target);else container.insertBefore(target,row);
+    persistCapabilityPresentationRowOrder(optionId,capabilityPresentationRows(container,optionId));
+    handle.focus({preventScroll:true});
+}
+function moveCapabilityOptionByKeyboard(event,handle){
+    if(!isCanvasSettingsMode||!event.altKey||!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(event.key))return;
+    event.preventDefault();event.stopPropagation();
+    const item=handle.closest('.capability-option');
+    const container=item?.parentElement?.closest?.('[data-capability-option-sort]');
+    const rows=capabilityOptionButtons(container);
+    const index=rows.indexOf(item);
+    const delta=['ArrowUp','ArrowLeft'].includes(event.key)?-1:1;
+    const target=rows[index+delta];
+    if(!item||index<0||!target)return;
+    if(delta<0)container.insertBefore(item,target);else container.insertBefore(target,item);
+    saveCapabilityOptionOrder(container.dataset.capabilityOptionScope,capabilityOptionButtons(container).map(capabilityOptionId));
+    handle.focus({preventScroll:true});
 }
 function bindDynamicParams(){
+    dynamicParams.querySelectorAll('[data-model-enablement-toggle]').forEach(input=>{
+        input.addEventListener('change',()=>{
+            const optionId=input.dataset.modelEnablementOptionId||'';
+            input.disabled=true;
+            void updateCanvasModelEnablement(optionId,input.checked,input);
+        });
+    });
+    dynamicParams.querySelectorAll('.capability-parameter-width-button[data-parameter-presentation-width]').forEach(button=>{
+        button.addEventListener('click',event=>{
+            event.preventDefault();
+            event.stopPropagation();
+            const optionId=button.dataset.parameterPresentationOptionId||'';
+            const key=button.dataset.parameterPresentationKey||'';
+            if(saveCapabilityParameterPresentation(optionId,key,{width:button.dataset.parameterPresentationWidth}))renderDynamicParams();
+        });
+    });
+    dynamicParams.querySelectorAll('[data-parameter-presentation-order-handle]').forEach(handle=>{
+        handle.addEventListener('pointerdown',event=>startCapabilityPresentationDrag(event,handle));
+        handle.addEventListener('keydown',event=>moveCapabilityPresentationByKeyboard(event,handle));
+    });
     dynamicParams.querySelector('[data-smart-price-jump]')?.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
@@ -8215,7 +10037,7 @@ function bindDynamicParams(){
     });
     dynamicParams.querySelectorAll('[data-execution-platform-option]').forEach(button => {
         button.onclick = event => {
-            if(smartPreferenceDragMoved) return;
+            if(ignoreSyntheticPreferenceDragClick(event)) return;
             event.preventDefault();
             event.stopPropagation();
             closeAllSmartPopovers();
@@ -8254,9 +10076,11 @@ function bindDynamicParams(){
     });
     dynamicParams.querySelectorAll('[data-capability-picker-option]').forEach(button => {
         button.onclick = event => {
-            if(smartPreferenceDragMoved) return;
+            if(ignoreSyntheticPreferenceDragClick(event)) return;
             event.preventDefault();
             event.stopPropagation();
+            const picker=button.closest('[data-capability-model-picker]');
+            if(picker&&!capabilityPickerMatchesActiveSubject(picker))return;
             const node = activeSettingsSubject();
             const descriptor = executionSelectionDescriptor(node);
             if(!descriptor) return;
@@ -8265,25 +10089,28 @@ function bindDynamicParams(){
             const stage = button.dataset.capabilityPickerStage || '';
             const value = button.dataset.capabilityPickerValue || '';
             if(stage === 'family'){
-                const state = executionSelectionInputState(node, descriptor);
-                const selection = resolveCapabilityFamilyPickerSelection(
-                    descriptor.nodeType,
-                    state.inputCounts,
-                    value,
-                    '',
-                    '',
-                    state.inputRoles,
-                    {},
-                    settings[descriptor.providerKey] || ''
-                );
                 draft.familyId = value;
                 draft.model = '';
             } else if(stage === 'variant'){
+                const chosenProvider=button.dataset.capabilityPickerProvider||draft.provider||settings[descriptor.providerKey]||'';
+                const chosenModel=button.dataset.capabilityPickerModel||value;
+                const chosenRegion=button.dataset.capabilityPickerRegion||draft.region||'';
+                const chosenProfile=capabilityProfileForPickerChoice(
+                    descriptor.nodeType,chosenProvider,chosenModel,chosenRegion,
+                    button.dataset.capabilityPickerOptionId||'',button.dataset.capabilityPickerOperation||''
+                );
+                if(!chosenProfile){
+                    toast(capabilityUiText('无法唯一确认此运行模式的精确参数契约，请刷新目录后重试。','Could not uniquely resolve this run mode contract. Refresh the catalog and try again.'));
+                    renderDynamicParams();
+                    return;
+                }
                 settings[descriptor.familyKey] = button.dataset.capabilityPickerFamily || draft.familyId || settings[descriptor.familyKey] || '';
-                settings[descriptor.modelKey] = button.dataset.capabilityPickerModel || value;
-                if(button.dataset.capabilityPickerProvider) settings[descriptor.providerKey] = button.dataset.capabilityPickerProvider;
-                if(button.dataset.capabilityPickerRegion && button.dataset.capabilityPickerProvider === 'runninghub'){
-                    settings.rhRegion = normalizeRunningHubRegion(button.dataset.capabilityPickerRegion, runningHubRegion(settings));
+                settings[descriptor.modelKey] = chosenProfile.model_id||chosenModel;
+                settings[descriptor.providerKey] = chosenProfile.provider_id||chosenProvider;
+                if(chosenProvider === 'runninghub') settings.rhRegion = normalizeRunningHubRegion(chosenProfile.region||chosenRegion, runningHubRegion(settings));
+                if(!commitCapabilityPickerSelectionIdentity(node,chosenProfile,button.dataset.capabilityPickerOptionId||chosenProfile.option_id||'')){
+                    toast(capabilityUiText('无法保存精确运行模式身份，请刷新目录后重试。','Could not save the exact run mode identity. Refresh the catalog and try again.'));
+                    return;
                 }
                 capabilityPickerDrafts.delete(draftKey);
             } else if(stage === 'platform'){
@@ -8344,7 +10171,7 @@ function bindDynamicParams(){
     })();
     dynamicParams.querySelectorAll('[data-execution-family-option]').forEach(button => {
         button.onclick = event => {
-            if(smartPreferenceDragMoved) return;
+            if(ignoreSyntheticPreferenceDragClick(event)) return;
             event.preventDefault();
             event.stopPropagation();
             const key = button.dataset.executionSetting;
@@ -8380,7 +10207,7 @@ function bindDynamicParams(){
     });
     dynamicParams.querySelectorAll('[data-execution-variant-option]').forEach(button => {
         button.onclick = event => {
-            if(smartPreferenceDragMoved) return;
+            if(ignoreSyntheticPreferenceDragClick(event)) return;
             event.preventDefault();
             event.stopPropagation();
             const node = activeSettingsSubject();
@@ -8402,7 +10229,7 @@ function bindDynamicParams(){
     });
     dynamicParams.querySelectorAll('[data-text-provider-option]').forEach(button => {
         button.onclick = event => {
-            if(smartPreferenceDragMoved) return;
+            if(ignoreSyntheticPreferenceDragClick(event)) return;
             event.preventDefault();
             event.stopPropagation();
             settings.textProvider = button.dataset.textProviderOption || '';
@@ -8445,12 +10272,15 @@ function bindDynamicParams(){
             event.stopPropagation();
             if(pill.disabled) return;
             const ctrl = pill.parentElement;
+            const ownerPicker=ctrl.closest('[data-capability-model-picker]');
+            if(ownerPicker&&!capabilityPickerMatchesActiveSubject(ownerPicker))return;
             const wasPinned = ctrl.classList.contains('pinned');
             closeAllSmartPopovers();
             if(!wasPinned){
                 ctrl.classList.add('pinned');
                 pill.setAttribute('aria-expanded', 'true');
                 requestAnimationFrame(() => positionPinnedSmartPopover(ctrl));
+                refreshCanvasPickerWhenOpened(ctrl);
             }
         };
     });
@@ -8772,6 +10602,7 @@ async function loadConfig(){
             ? cfg.api_providers.map(provider => SMART_NODE_CONTRACT.hydrateRunningHubProviderApps(provider))
             : [];
         modelCapabilityCatalog = Array.isArray(catalog?.providers) ? catalog : {schema_version:0, providers:[]};
+        updateHypitModelOptionCatalogRevision(modelCapabilityCatalog.catalog_revision);
         window.dispatchEvent(new Event('canvas-capabilities-ready'));
         modelPricingCatalog = pricing && typeof pricing === 'object' ? pricing : {schema_version:0, default_status:'pending', entries:{}, unit_definitions:{}};
         if(smartPriceComparisonPanel?.classList.contains('open')){
@@ -8782,6 +10613,7 @@ async function loadConfig(){
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
         updateProviderModels();
+        if(isCanvasSettingsMode) await loadCanvasModelManagementCatalog();
         const wf = await fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows:[]}));
         comfyWorkflows = Array.isArray(wf.workflows) ? wf.workflows : [];
         runningHubWorkflowCache = {};
@@ -9755,6 +11587,16 @@ function canvasSyncNormalizeConnections(connections){
 }
 function canvasSyncIncomingSnapshot(source){
     const snapshot = CANVAS_SYNC.clone(source || {});
+    if(isSettingsCanvasMode){
+        if(Object.prototype.hasOwnProperty.call(snapshot,'test_statuses')||Object.prototype.hasOwnProperty.call(snapshot,'testStatuses')){
+            const statuses=snapshot.test_statuses||snapshot.testStatuses;
+            hypitTestStatuses=statuses&&typeof statuses==='object'?statuses:{};
+            // 保存未剥离的服务端原图；后面的canvas snapshot会删除投影字段，不能让该删除连带抹掉权威来源。
+            hypitServerSignatureSnapshot=CANVAS_SYNC.clone(snapshot);
+            hypitServerSignaturesNeedSeed=true;
+        }
+        delete snapshot.test_statuses;delete snapshot.testStatuses;
+    }
     snapshot.connections = canvasSyncNormalizeConnections(snapshot.connections);
     return CANVAS_SYNC.assignDisplayNumbers(snapshot);
 }
@@ -9809,6 +11651,9 @@ function canvasSyncApplySnapshot(snapshot){
     if(!snapshot || !canvas) return false;
     const localViewport = {...viewport};
     const normalized = canvasSyncIncomingSnapshot(snapshot);
+    // 选择器中尚未提交的 family/provider 草稿不能覆盖已接受的服务器快照。
+    // 重新打开时从节点当前 modelSelection 与 runSettings 恢复精确叶子。
+    capabilityPickerDrafts.clear();
     canvas = {...canvas, ...normalized, viewport:localViewport};
     nodes = (Array.isArray(normalized.nodes) ? normalized.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
     canvas.nodes = nodes;
@@ -9904,6 +11749,15 @@ function mergeSmartConnections(localConns=[], remoteConns=[], nodeIds=new Set())
     return merged.filter(connection => !nodeIds.size || (nodeIds.has(connection.from) && nodeIds.has(connection.to)));
 }
 function smartNodeInFlight(node){
+    if(isSettingsCanvasMode&&isSmartExecutionNode(node)){
+        if(hypitNodeRunOperations.has(node.id))return true;
+        const activeServerTask=(node.creationTasks||[]).some(task=>{
+            const id=String(task?.id||'');
+            const status=String(task?.runStatus||task?.status||'').toLowerCase();
+            return id.startsWith('studio_')&&!['succeeded','partially_succeeded','failed','cancelled','recoverable'].includes(status);
+        });
+        if(activeServerTask)return true;
+    }
     if(smartNodeHasCompletedResult(node)) return false;
     return Boolean(node && (node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
 }
@@ -10092,6 +11946,17 @@ async function reviewCanvasSyncConflicts(state){
 }
 function applyMergedServerCanvas(serverCanvas, options={}){
     if(!serverCanvas || !canvas) return null;
+    const incomingRevision = Number(serverCanvas.revision);
+    const knownServerRevision = Math.max(
+        Number.isFinite(Number(canvas?.revision)) ? Number(canvas.revision) : 0,
+        Number.isFinite(Number(canvasSyncBase?.revision)) ? Number(canvasSyncBase.revision) : 0,
+        Number.isFinite(Number(canvasSyncRetryBase?.revision)) ? Number(canvasSyncRetryBase.revision) : 0
+    );
+    if(Number.isFinite(incomingRevision) && incomingRevision > 0 && incomingRevision < knownServerRevision){
+        // Ignore only an older server snapshot. Equal revisions can still carry
+        // independent fields from another tab and must continue through merge.
+        return {stale:true, conflicts:[]};
+    }
     const remote = canvasSyncIncomingSnapshot(serverCanvas);
     const local = options.localSnapshot || canvasSyncCurrentSnapshot() || remote;
     const base = options.base || canvasSyncRetryBase || canvasSyncBase || local;
@@ -10157,7 +12022,7 @@ function startCanvasMetaPoll(){
     }, 8000);
 }
 function connectAssetLibrarySyncSocket(){
-    if(window.parent && window.parent !== window) return;
+    if(window.parent && window.parent !== window && !isSettingsCanvasMode) return;
     const host = window.location.host;
     if(!host) return;
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -10851,6 +12716,10 @@ function smartRunRecordedReferences(run){
 async function loadCanvas(){
     if(!canvasId) return;
     try {
+        // Hypit API 页在挂载 iframe 前已通过单例 bootstrap 取得专用画布地址；
+        // 画布本体随后只走标准 GET/PUT，避免在 iframe 内再重复 get-or-create。
+        if(isSettingsCanvasMode)updateHypitModeUi();
+        if(isCanvasSettingsMode)updateCanvasSettingsModeUi();
         const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
         if(!res.ok) return;
         const data = await res.json();
@@ -10860,6 +12729,7 @@ async function loadCanvas(){
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvasDocumentTitle();
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
+        if(isCanvasSettingsMode)updateCanvasSettingsModeUi();
     const legacyMigration = SMART_NODE_CONTRACT.migrateLegacyCanvas(canvas.nodes, canvas.connections);
     const migration = CanvasCreation.migrate(legacyMigration.nodes, legacyMigration.connections);
     nodes = migration.nodes.map(normalizeLegacySmartNode).filter(Boolean);
@@ -10871,6 +12741,12 @@ async function loadCanvas(){
         canvas.connections = Array.isArray(canvas.connections) ? canvas.connections : [];
         const numberedCanvas = CANVAS_SYNC.assignDisplayNumbers({...canvas, nodes});
         nodes = numberedCanvas.nodes;
+        if(isSettingsCanvasMode){
+            hypitServerPassedSignatures.clear();
+            hypitObservedRecipeSignatures.clear();
+            updateHypitModeUi();
+        }
+        if(isCanvasSettingsMode)updateCanvasSettingsModeUi();
         canvas.nextNodeNumber = numberedCanvas.nextNodeNumber;
         nodes.forEach(n => {
             if(isSmartDirectorNode(n)) n.timelinePlaying = false;
@@ -10915,6 +12791,9 @@ async function loadCanvas(){
             const snapshot = manualExecutionSettingsSnapshot(node, node.runSettings || {});
             if(snapshot) manualNodeSettingsFingerprints.set(node.id, JSON.stringify(snapshot));
         });
+        if(isSettingsCanvasMode){
+            hypitObserveRecipeChanges();
+        }
         applyViewport();
         render();
     if(smartNodeMigrationPending || migratedMusicNodes || initializedRunningHubRegions || initializedExecutionDefaults || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers || hydratedTextResults) scheduleSave();
@@ -10945,7 +12824,8 @@ function migrateLegacyMusicGeneratorNodes(){
     return changed;
 }
 function scheduleSave(){
-    if(canvasSyncSaveBlocked) return;
+    if(canvasSyncSaveBlocked||hypitResetPending) return;
+    if(isSettingsCanvasMode)updateHypitOutputStatuses();
     CanvasCreation.reconcile(nodes, undefined, canvas?.connections || []);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
@@ -10981,7 +12861,7 @@ function syncServerNodeNumbers(serverNodes){
     return changed;
 }
 async function saveCanvas(options={}){
-    if(!canvasId || !canvas || canvasSyncSaveBlocked) return false;
+    if(!canvasId || !canvas || canvasSyncSaveBlocked || hypitResetPending) return false;
     if(canvasSyncInFlight){ canvasSyncSaveQueued = true; return false; }
     savePromptDraftForCurrent();
     const storageCanvas = canvasSyncCurrentSnapshot();
@@ -10990,6 +12870,7 @@ async function saveCanvas(options={}){
     storageCanvas.revision = Number(base.revision || storageCanvas.revision || canvas.revision || 0);
     storageCanvas.updated_at = Number(base.updated_at || storageCanvas.updated_at || canvas.updated_at || 0);
     const retryCount = Math.max(0, Number(options.retryCount) || 0);
+    const refreshHypitProjectionAfterSave=isSettingsCanvasMode&&hypitRecipeGraphChanged(base,storageCanvas);
     canvasSyncSaveQueued = false;
     canvasSyncInFlight = true;
     try {
@@ -11026,6 +12907,14 @@ async function saveCanvas(options={}){
             canvasSyncSaveBlocked = false;
             canvasSyncConflictState = null;
             canvasSyncClearDraft();
+            if(isSettingsCanvasMode){
+                hypitObserveRecipeChanges();
+                if(hypitServerSignaturesNeedSeed){
+                    recordHypitServerPassedSignatures();
+                    hypitServerSignaturesNeedSeed=false;
+                }
+                updateHypitOutputStatuses();
+            }
             if(smartNodeMigrationPending){
                 const migrationConfirmed = Number(data.canvas?.node_schema_version || 0) >= SMART_NODE_SCHEMA_VERSION;
                 if(migrationConfirmed){
@@ -11043,8 +12932,13 @@ async function saveCanvas(options={}){
         if(res.status === 409){
             const serverCanvas = data.detail?.canvas;
             if(serverCanvas){
-                canvas.revision = Math.max(1, Number(serverCanvas.revision || canvas.revision || 1));
                 const merged = applyMergedServerCanvas(serverCanvas, {base, localSnapshot:canvasSyncCurrentSnapshot(), prompt:true});
+                if(merged?.stale){
+                    const current = canvasSyncCurrentSnapshot();
+                    const latestBase = canvasSyncRetryBase || canvasSyncBase;
+                    if(!canvasSyncSaveQueued && canvasSyncHasLocalChanges(current, latestBase)) scheduleSave();
+                    return false;
+                }
                 if(merged?.conflicts?.length) return false;
                 if(retryCount < 1){
                     clearTimeout(saveTimer);
@@ -11067,6 +12961,8 @@ async function saveCanvas(options={}){
         if(canvasSyncSaveQueued && !canvasSyncSaveBlocked){
             canvasSyncSaveQueued = false;
             scheduleSave();
+        } else if(refreshHypitProjectionAfterSave&&!canvasSyncSaveBlocked){
+            void refreshHypitCanvasProjectionAfterSave().catch(error=>canvasSyncReportError(error?.message||canvasSyncText('Hypit 输出状态同步失败','Could not synchronize Hypit output status')));
         }
     }
 }
@@ -14402,6 +16298,7 @@ function smartMinimaxBodyHtml(node){
 }
 
 function nodeBodyHtml(node, layout){
+    if(isHypitOutputNode(node)) return '';
     if(isSmartDirectorNode(node)) return smartMinimaxBodyHtml(node);
     if(node.type === SMART_NODE_TYPES.angleControl) return angleControlBodyHtml(node);
     if(node.type === SMART_NODE_TYPES.imageCompare) return imageCompareBodyHtml(node);
@@ -14504,7 +16401,7 @@ function smartExecutionNodeMeta(node){
 function fusedCreationBodyHtml(node, layout){
     const shared = nodes.filter(n => n.creationId && n.creationId === node.creationId).length;
     const tasks = CanvasCreation.tasks(nodes).filter(task => task.creationId === node.creationId && !['succeeded','partially_succeeded','cancelled'].includes(task.runStatus));
-    const activeTask = tasks.find(task=>task.runStatus!=='failed');
+    const activeTask = tasks.find(task=>!['failed','recoverable'].includes(String(task.runStatus||'').toLowerCase()));
     const generating = Boolean(activeTask);
     const preview = node.images?.length
         ? nodeBodyHtml({...node, type:SMART_NODE_TYPES.material}, layout)
@@ -14513,7 +16410,14 @@ function fusedCreationBodyHtml(node, layout){
         const recoverable=smartRecoverableImageTask(task);
         const query=task.jimengPending ? `<button type="button" data-jimeng-query="${escapeAttr(task.id)}">${escapeHtml(capabilityUiText('查询结果','Check result'))}</button>`
             : recoverable && !recoverable.recoveryBlocked ? `<button type="button" data-image-task-query="${escapeAttr(task.id)}" data-task-id="${escapeAttr(recoverable.taskId)}">${escapeHtml(capabilityUiText('查询结果','Check result'))}</button>` : '';
-        return `<div class="creation-task ${task.runStatus === 'failed' ? 'is-failed' : ''}"><span>${escapeHtml(task.runStatus === 'failed' ? task.runError || capabilityUiText('运行失败','Run failed') : recoverable?.recoveryBlocked ? capabilityUiText('缺少上游任务编号，未自动重提','Missing upstream task ID; not resubmitted') : capabilityUiText('生成中','Generating'))}</span>${runTimePillHtml(task)}${query}${task.runStatus === 'failed' ? '' : cancelRunButtonHtml(task)}</div>`;
+        const statusText=task.runStatus==='failed'
+            ? task.runError||capabilityUiText('运行失败','Run failed')
+            : String(task.runStatus||'').toLowerCase()==='recoverable'
+            ? capabilityUiText('状态待恢复；重试查询原任务','Needs recovery; retry checks the existing task')
+            : recoverable?.recoveryBlocked
+            ? capabilityUiText('缺少上游任务编号，未自动重提','Missing upstream task ID; not resubmitted')
+            : capabilityUiText('生成中','Generating');
+        return `<div class="creation-task ${task.runStatus === 'failed' ? 'is-failed' : ''}"><span>${escapeHtml(statusText)}</span>${runTimePillHtml(task)}${query}${task.runStatus === 'failed' ? '' : cancelRunButtonHtml(task)}</div>`;
     }).join('');
     return `<div class="creation-preview ${generating ? 'is-generating' : ''}"><div class="creation-preview-media">${preview}</div>${generating ? `<div class="creation-running-glass ${node.images?.length ? 'has-media' : ''}" data-running-effect="${escapeAttr(activeTask.id)}" data-running-started="${Number(activeTask.runStartedAt)||0}" aria-hidden="true"></div>` : ''}${shared > 1 ? `<span class="creation-shared">${escapeHtml(capabilityUiText(`${shared} 处共用` ,`Shared in ${shared} places`))}</span>` : ''}${status ? `<div class="creation-tasks" role="status">${status}</div>` : ''}</div>`;
 }
@@ -14600,7 +16504,7 @@ function imageTaskRecoverBodyHtml(node, task, layout){
 }
 function cancelRunButtonHtml(node){
     if(!node || (!node.isRunPlaceholder && !node.sourceExecutionNodeId)) return '';
-    const cancelling = Boolean(node.cancelInProgress);
+    const cancelling = Boolean(node.cancelInProgress || (isSettingsCanvasMode&&hypitNodeCancelOperations.has(node.id)));
     return `<button class="run-placeholder-cancel" type="button" data-cancel-run="${escapeAttr(node.id)}" ${cancelling ? 'disabled' : ''}><i data-lucide="${cancelling ? 'loader-2' : 'square'}"></i><span>${escapeHtml(tr(cancelling ? 'smart.cancellingRun' : 'smart.cancelRun'))}</span></button>`;
 }
 function runPlaceholderOverlayHtml(node){
@@ -15332,6 +17236,9 @@ async function rerunSmartGeneratedMaterial(nodeId, draft=null){
     }
 }
 function smartNodeHeaderHtml(node, fallback){
+    if(isHypitOutputNode(node)){
+        return `<div class="node-head"><span class="hypit-output-title">${escapeHtml(hypitSlotLabel(node.hypitSlot))}</span><div class="node-actions" role="toolbar"><button class="mini-x node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}" aria-label="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div></div>`;
+    }
     const modern=isSmartExecutionNode(node)||isSmartMaterialNode(node);
     const displayNumber = canvasNodeDisplayNumber(node?.displayNumber);
     const numberMarkup = displayNumber
@@ -15342,7 +17249,13 @@ function smartNodeHeaderHtml(node, fallback){
     const hasMedia=!!(item&&(item.url||isTextMediaItem(item)));
     const action=(key,icon,label)=>`<button type="button" class="node-header-action" data-smart-node-action="${key}" data-node-id="${escapeAttr(node.id)}" title="${escapeAttr(label)}"><i data-lucide="${icon}"></i><span>${escapeHtml(label)}</span></button>`;
     const tools=hasMedia?smartNodeToolbarHtml(node).replace('class="smart-node-floating-menu"','class="node-inline-tools"'):'';
-    return `<div class="node-head">${numberMarkup}${canvasTitleEditor.markup(node,node.images?.[0]?.name||capabilityUiText('素材','Material'))}<div class="node-actions" role="toolbar" aria-label="${escapeAttr(capabilityUiText('素材操作','Material actions'))}">${hasMedia?action('preview','scan',capabilityUiText('预览 / 编辑','Preview / edit')):''}${tools}${item?.url?action('download','download',capabilityUiText('下载','Download')):''}<button class="node-header-action node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i><span>${escapeHtml(tr('smart.deleteNode'))}</span></button></div></div>`;
+    const resetTarget=canvasSettingsResetTargetForNode(node);
+    const resetLabel=capabilityUiText('重置设置','Reset settings');
+    const resetTitle=capabilityUiText('恢复该模型的已确认参数默认值，并重置同模型共用的显示顺序；不改变模型、输入或结果。','Restore verified defaults for this model and reset its shared display order; model, inputs, and results stay unchanged.');
+    const resetAction=resetTarget?`<button type="button" class="node-header-action canvas-settings-node-reset" data-canvas-settings-reset-node="1" data-node-id="${escapeAttr(node.id)}" title="${escapeAttr(resetTitle)}" aria-label="${escapeAttr(resetLabel)}"><i data-lucide="rotate-ccw"></i><span>${escapeHtml(resetLabel)}</span></button>`:'';
+    const hypitLock=isSettingsCanvasMode&&isSmartMaterialNode(node)&&String(node.sourceKind||'').toLowerCase()!=='result'
+        ? `<button type="button" class="hypit-input-lock" data-hypit-input-lock="1" data-node-id="${escapeAttr(node.id)}" aria-pressed="${node.hypitInputLocked===true?'true':'false'}" title="${escapeAttr(node.hypitInputLocked===true?capabilityUiText('Hypit 输入已锁定','Hypit input is locked'):capabilityUiText('锁定 Hypit 输入','Lock Hypit input'))}"><i data-lucide="${node.hypitInputLocked===true?'lock':'unlock'}"></i></button>`:'';
+    return `<div class="node-head">${numberMarkup}${canvasTitleEditor.markup(node,node.images?.[0]?.name||capabilityUiText('素材','Material'))}<div class="node-actions" role="toolbar" aria-label="${escapeAttr(capabilityUiText('节点操作','Node actions'))}">${hypitLock}${resetAction}${hasMedia?action('preview','scan',capabilityUiText('预览 / 编辑','Preview / edit')):''}${tools}${item?.url?action('download','download',capabilityUiText('下载','Download')):''}<button class="node-header-action node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i><span>${escapeHtml(tr('smart.deleteNode'))}</span></button></div></div>`;
 }
 function smartNodeToolbarHtml(node){
     const isImageNode = isSmartImageNode(node) || isSmartExecutionNode(node);
@@ -15713,8 +17626,16 @@ function rememberInlineVideoActivations(){
     });
 }
 function render(){
+    if(isSettingsCanvasMode)updateHypitModeUi();
     if(canvas){canvas.connections=canvas.connections||[];if(CanvasProduction.migrateRelations(nodes,canvas.connections))scheduleSave();}
     CanvasCreation.reconcile(nodes, undefined, canvas?.connections || []);
+    if(isSettingsCanvasMode){
+        hypitObserveRecipeChanges();
+        if(hypitServerSignaturesNeedSeed){
+            recordHypitServerPassedSignatures();
+            hypitServerSignaturesNeedSeed=false;
+        }
+    }
     canvasProductionView?.refresh();
     const editableState = captureCanvasEditableState(document.activeElement);
     if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
@@ -15738,7 +17659,8 @@ function render(){
         .sort((a, b) => (isSmartGroupNode(a) ? 0 : 1) - (isSmartGroupNode(b) ? 0 : 1))
         .map(node => {
         const imgs = node.images || [];
-        const title = escapeHtml(node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : isSmartResultGroupNode(node) ? (node.title || '结果组') : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : isSmartDirectorNode(node) ? (node.title || (isMiniMaxDirectorNode(node) ? 'MiniMax H3 导演台' : '通用导演台')) : node.type === SMART_NODE_TYPES.angleControl ? (tr('smart.createAngleControl') || '角度控制') : node.type === SMART_NODE_TYPES.imageCompare ? (tr('smart.createImageCompare') || '图像对比') : isSmartExecutionNode(node) ? (node.title || SMART_NODE_CONTRACT.titleForType(node.type)) : (node.title ? node.title : imgs.length > 1 ? '素材组' : imgs[0]?.name || (tr('smart.createMaterial') || '素材')));
+        const isHypitOutput = isHypitOutputNode(node);
+        const title = escapeHtml(isHypitOutput ? hypitSlotLabel(node.hypitSlot) : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : isSmartResultGroupNode(node) ? (node.title || '结果组') : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : isSmartDirectorNode(node) ? (node.title || (isMiniMaxDirectorNode(node) ? 'MiniMax H3 导演台' : '通用导演台')) : node.type === SMART_NODE_TYPES.angleControl ? (tr('smart.createAngleControl') || '角度控制') : node.type === SMART_NODE_TYPES.imageCompare ? (tr('smart.createImageCompare') || '图像对比') : isSmartExecutionNode(node) ? (node.title || SMART_NODE_CONTRACT.titleForType(node.type)) : (node.title ? node.title : imgs.length > 1 ? '素材组' : imgs[0]?.name || (tr('smart.createMaterial') || '素材')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -15760,11 +17682,14 @@ function render(){
         const isHistory = isHistoryGroupNode(node);
         const isGroup = isImageNode && imgs.length > 1;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
-        const body = nodeBodyHtml(node, node.creationId ? {...layout,height:layout.height} : layout);
+        const body = isHypitOutput ? '' : nodeBodyHtml(node, node.creationId ? {...layout,height:layout.height} : layout);
         const deleteBtn = (isGroup || isMinimax) ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '双击添加 · 拖入归组 · 选中后生成' : isMinimax ? 'Timeline editing' : isPending ? escapeHtml(tr('smart.hintPending')) : (imgs.length > 1 ? escapeHtml(tr('smart.hintMulti')) : imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const hasResultVersions = smartGenerationVersions(node).length > 1;
-        const html = `<div class="image-node ${node.creationId ? 'creation-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isGroup || isResultGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isAngleControl ? 'angle-control-node' : ''} ${isImageCompare ? 'image-compare-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartGroup && openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''} ${isResultGroup ? 'smart-result-group-node' : ''} ${isExecution ? 'smart-execution-node' : ''} ${failedRunPlaceholder ? 'node-run-failed' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${hasResultVersions ? 'has-result-versions' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const hypitStatus = isHypitOutput ? hypitOutputPresentation(node).status : '';
+        const hypitStateLabel = isHypitOutput ? hypitOutputPresentation(node).label : '';
+        const hypitAriaLabel = isHypitOutput ? hypitOutputAccessibleLabel(node) : '';
+        const html = `<div class="image-node ${isHypitOutput ? 'hypit-output-node' : ''} ${node.creationId ? 'creation-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isGroup || isResultGroup ? 'group-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isMinimax ? 'minimax-smart-node' : ''} ${isAngleControl ? 'angle-control-node' : ''} ${isImageCompare ? 'image-compare-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartGroup && openSmartGroupArrangeMenuId === node.id ? 'arrange-menu-open' : ''} ${isResultGroup ? 'smart-result-group-node' : ''} ${isExecution ? 'smart-execution-node' : ''} ${failedRunPlaceholder ? 'node-run-failed' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${hasResultVersions ? 'has-result-versions' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" ${isHypitOutput ? `data-hypit-slot="${escapeAttr(node.hypitSlot)}" data-hypit-status="${escapeAttr(hypitStatus)}" title="${escapeAttr(hypitStateLabel)}" aria-label="${escapeAttr(hypitAriaLabel)}" role="group"` : ''} style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
 
             ${executionFailureBadge}
             ${smartNodeHeaderHtml(node,title)}
@@ -15775,10 +17700,10 @@ function render(){
             <div class="node-body">${body}</div>
             ${generationRerunOverlayHtml(node)}
             ${isCompactMember && (isPrompt || isLoop) ? '<div class="smart-group-member-grab" title="拖动移出分组"></div>' : ''}
-            <div class="node-hint">${isResultGroup ? escapeHtml(tr('smart.resultGroupHint')) : isAngleControl ? escapeHtml(tr('smart.angleHint')) : isImageCompare ? escapeHtml(tr('smart.compareConnectImages')) : hint}</div>
-            ${isSmartGroup ? '<div class="node-resize-handle" data-resize="1" data-resize-corner="nw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="ne"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="sw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="se"></div>' : canResize && (isExecution || isSmartMaterialNode(node) || imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || isImageCompare) ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
+            ${isHypitOutput ? '' : `<div class="node-hint">${isResultGroup ? escapeHtml(tr('smart.resultGroupHint')) : isAngleControl ? escapeHtml(tr('smart.angleHint')) : isImageCompare ? escapeHtml(tr('smart.compareConnectImages')) : hint}</div>`}
+            ${isSmartGroup ? '<div class="node-resize-handle" data-resize="1" data-resize-corner="nw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="ne"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="sw"></div><div class="node-resize-handle" data-resize="1" data-resize-corner="se"></div>' : canResize && (isHypitOutput || isExecution || isSmartMaterialNode(node) || imgs.length || node.pending || isQueued || isJimengPending || isPrompt || isLoop || isMinimax || isImageCompare) ? '<div class="node-resize-handle" data-resize="1"></div>' : ''}
             <div class="node-port port-in" data-port="in" title="input"></div>
-            ${isImageCompare ? '' : `<div class="node-port port-out" data-port="out" title="${isResultGroup ? escapeAttr(tr('smart.resultGroupConnectAll')) : 'output'}"></div>`}
+            ${isHypitOutput || isImageCompare ? '' : `<div class="node-port port-out" data-port="out" title="${isResultGroup ? escapeAttr(tr('smart.resultGroupConnectAll')) : 'output'}"></div>`}
         </div>`;
         return {node, html};
     });
@@ -15823,6 +17748,7 @@ function render(){
     measureSmartNodeImages();
     refreshRunTimerPills();
     if(editableState) restoreCanvasEditableState(editableState);
+    if(isSettingsCanvasMode)updateHypitOutputStatuses();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -17559,6 +19485,7 @@ function handlePortDrop(drag, e){
         return {targetId:id, targetPort:port, targetSourceResultId:sourceResultId, hit:hitEl};
     })();
     if(drag.kind==='story'){
+        if(targetId&&isHypitOutputNode(nodes.find(node=>node.id===targetId))){discardPendingUndo();render();return;}
         if(targetId){
             (drag.fromIds||[drag.fromId]).filter(id=>id!==targetId).forEach(id=>addConnection(id,targetId,'story'));
             commitPendingUndo();render();scheduleSave();
@@ -17714,6 +19641,19 @@ function bindNodeEvents(){
             }
             render();
         };
+        if(isSettingsCanvasMode){
+            el.querySelector('[data-hypit-input-lock]')?.addEventListener('click',event=>{
+                event.preventDefault();event.stopPropagation();
+                toggleHypitInputLock(id);
+            });
+        }
+        el.querySelector('[data-canvas-settings-reset-node]')?.addEventListener('mousedown',event=>{
+            event.preventDefault();event.stopPropagation();
+        },true);
+        el.querySelector('[data-canvas-settings-reset-node]')?.addEventListener('click',event=>{
+            event.preventDefault();event.stopPropagation();
+            void resetCanvasSettingsNodeParameters(event.currentTarget?.dataset?.nodeId||id);
+        });
         if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => {
             e.stopPropagation();
             if(isSmartExecutionNode(nodeForControls)){
@@ -18094,6 +20034,7 @@ function dragConnectTargetFor(sourceNode, point=lastMouseWorld){
 function canAutoConnectDraggedNode(sourceNode, targetNode){
     if(!sourceNode || !targetNode || sourceNode.id === targetNode.id) return false;
     if(isHistoryGroupNode(sourceNode) || isHistoryGroupNode(targetNode)) return false;
+    if(isHypitOutputNode(targetNode))return hypitConnectionAllowed(sourceNode,targetNode);
     return SMART_NODE_CONTRACT.canConnectNodes(sourceNode, targetNode);
 }
 function restoreDraggedNodePosition(){
@@ -21717,6 +23658,9 @@ function updateComposer(){
     const hasPromptInput = promptInputNodesFor(node).length > 0;
     if(switchedNode){
         settings = smartSettingsForNode(subject);
+        // 节点参数面板属于当前节点。切换节点时同步重绘，避免旧 picker 在
+        // 延迟刷新窗口内仍可点选并把上一节点的 leaf 应用到新节点。
+        capabilityPickerDrafts.delete(String(subject.id||''));
         // 查看节点不算编辑，也不能让 Agent 新建节点覆盖手动创建记忆。
         if(!manualNodeSettingsFingerprints.has(subject.id)){
             const snapshot = manualExecutionSettingsSnapshot(subject, settings);
@@ -21731,7 +23675,12 @@ function updateComposer(){
     promptInput.style.setProperty('--prompt-h', `${ph}px`);
     renderInputThumbsRow(node);
     syncCascadeRunButton(node);
-    scheduleDynamicParamsRefresh(140);
+    if(switchedNode){
+        cancelDynamicParamsRefresh();
+        renderDynamicParams({preserveState:false});
+    } else {
+        scheduleDynamicParamsRefresh(140);
+    }
 }
 function inputThumbLabel(kind, count){
     const keys = {
@@ -22723,8 +24672,10 @@ function connectInputNode(fromId, toId, options={}){
     const from = nodes.find(n => n.id === fromId);
     const to = nodes.find(n => n.id === toId);
     if(!from || !to || from.id === to.id) return false;
+    if(isHypitOutputNode(to))return connectInputToHypitOutput(fromId,toId,options);
     if(to.type === SMART_NODE_TYPES.imageCompare && !options?.imageCompareResolved) return connectImageCompareInput(fromId, toId, options);
-    if(!SMART_NODE_CONTRACT.canConnectNodes(from, to)) return false;
+    const hypitDynamicAppInput=isSettingsCanvasMode&&to.type===SMART_NODE_TYPES.aiApp&&!isHypitOutputNode(from)&&!isHistoryGroupNode(from);
+    if(!hypitDynamicAppInput&&!SMART_NODE_CONTRACT.canConnectNodes(from, to)) return false;
     if(to.type === 'smart-loop'){
         const groupImages = isSmartGroupNode(from) || isSmartResultGroupNode(from) ? imagesForNode(from).filter(img => img?.url) : [];
         const groupPrompts = isSmartGroupNode(from) ? promptTextItemsForNode(from).filter(Boolean) : [];
@@ -23794,6 +25745,34 @@ async function cancelExecutionResultRun(resultNodeId){
     const resultNode = CanvasCreation.tasks(nodes).find(node => node.id === resultNodeId) || nodes.find(node => node.id === resultNodeId);
     if(!resultNode || resultNode.cancelInProgress) return;
     const executionNode = executionNodeForRunSubject(resultNode);
+    if(isSettingsCanvasMode&&executionNode&&String(resultNode.id||'').startsWith('studio_')){
+        if(hypitNodeCancelOperations.has(resultNode.id))return hypitNodeCancelOperations.get(resultNode.id);
+        const sourceNode=nodes.find(node=>node.id===executionNode.id);
+        const sourceTask=(sourceNode?.creationTasks||[]).find(task=>task?.id===resultNode.id);
+        const operation=(async()=>{
+            await Promise.resolve();
+            resultNode.cancelInProgress=true;
+            if(sourceTask)sourceTask.cancelInProgress=true;
+            render();
+            try{
+                await submitHypitAgentCommand('cancel_run',{node_id:executionNode.id,task_id:resultNode.id},createCanvasOperationId(`${executionNode.id}-cancel`));
+                const terminal=await waitForHypitStudioTasks([resultNode.id]);
+                if(terminal.recoverable.length)throw new Error(canvasSyncText('原任务仍未确认终态，保留原运行请求；请稍后重查','The original task is still unconfirmed; its run request was kept. Check again shortly.'));
+                await refreshHypitCanvasAfterAgentCommand();
+                hypitStoreRunRequestId(executionNode.id,'');
+                toast(tr('smart.runCancelledNotice'),{duration:3200});
+                return true;
+            }catch(error){
+                errorToast((error?.message||canvasSyncText('取消运行失败','Could not cancel the run')).slice(0,180));
+                return false;
+            }finally{
+                if(sourceTask)sourceTask.cancelInProgress=false;
+                render();
+            }
+        })();
+        hypitNodeCancelOperations.set(resultNode.id,operation);
+        try{return await operation;}finally{hypitNodeCancelOperations.delete(resultNode.id);}
+    }
     const taskIds = [...new Set([
         ...smartPendingTasks(resultNode).map(task => task.taskId),
         resultNode.jimengPending?.taskId || ''
@@ -25287,6 +27266,10 @@ async function runGeneration(){
         toast(tr('smart.toastNeedPrompt'));
         return;
     }
+    if(isSettingsCanvasMode&&isSmartExecutionNode(node)){
+        settings=previousSettings;
+        return runHypitExecutionNode(node,clientOperationId);
+    }
     const outpaintSize = node?.outpaintSize && Number(node.outpaintSize.width) > 0 && Number(node.outpaintSize.height) > 0
         ? {width:Math.round(Number(node.outpaintSize.width)), height:Math.round(Number(node.outpaintSize.height))}
         : null;
@@ -25512,6 +27495,7 @@ async function runPromptLLMNode(nodeId){
         : null;
     const message = (isTextGenerator ? request.message : promptNodeLLMInputText(node)).trim();
     if(!message){ toast(tr('smart.promptLlmNeedText')); return; }
+    if(isSettingsCanvasMode&&isTextGenerator)return runHypitExecutionNode(node,clientOperationId);
     const systemPrompt = String(isTextGenerator ? runSettings.textSystemPrompt : node.llmSystemPrompt || '').trim();
     let textCapabilitySelection = null;
     if(isTextGenerator){
@@ -29460,7 +31444,6 @@ window.addEventListener('resize', () => {
     const active = activeComposerNode();
     if(active && composer?.classList?.contains('open')) positionComposerForNode(active);
 });
-window.addEventListener('studio-theme-change', event => applyTheme(event.detail?.theme || 'light'));
 try {
     const apiChannel = new BroadcastChannel('studio-api');
     apiChannel.onmessage = async event => {
@@ -29482,8 +31465,7 @@ window.addEventListener('storage', event => {
     }).catch(() => {});
 });
 window.addEventListener('message', event => {
-    if(event.origin && event.origin !== location.origin) return;
-    if(event.data?.type === 'studio-theme') applyTheme(event.data.theme || 'light');
+    if(event.origin !== location.origin || event.source !== window.parent) return;
     if(event.data?.type === 'providers-changed' || event.data?.type === 'workflows-changed' || event.data?.type === 'comfy-instances-changed') refreshSmartConfigFromSettings();
     if(event.data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(event.data);
     if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
@@ -29492,6 +31474,7 @@ window.addEventListener('message', event => {
     }
 });
 window.addEventListener('studio-lang-change', () => {
+    updateHypitModeUi();
     document.title = canvasDocumentTitle();
     renderDynamicParams();
     renderInputThumbsRow(selectedNode());
@@ -29503,7 +31486,6 @@ window.addEventListener('studio-lang-change', () => {
     render();
 });
 window.onload = async () => {
-    applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light');
     loadPromptPresets();
     loadPromptTemplateGroups();
     loadPromptTemplateOverrides();
