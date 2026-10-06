@@ -268,14 +268,28 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
             diagnostics = {"evaluationError": str(error), "lastState": last_state}
         self.fail(f"主题页面未在12秒内完成目标文档初始化：期望={url!r}，最近状态={last_state!r}，诊断={diagnostics!r}")
 
+    def prepare_local_storage(self, values):
+        """在不加载应用脚本的同源页准备存储，再单次导航到被测页面。"""
+        url = f"http://127.0.0.1:{self.http_port}/theme-probe?storage-prepare=1"
+        navigation = self.cdp("Page.navigate", {"url": url})
+        self.assertFalse(navigation.get("errorText"), f"主题存储准备页导航失败：{navigation}")
+        deadline = time.monotonic() + 12
+        last_state = None
+        while time.monotonic() < deadline:
+            last_state = self.evaluate("({url:location.href,readyState:document.readyState})")
+            if last_state.get("url") == url and last_state.get("readyState") == "complete":
+                self.set_local_storage(values)
+                return
+            time.sleep(0.05)
+        self.fail(f"主题存储准备页未完成：期望={url!r}，最近状态={last_state!r}")
+
     def set_local_storage(self, values):
         items = json.dumps(values, ensure_ascii=False)
         return self.evaluate(f"(() => {{ localStorage.clear(); for (const [k,v] of Object.entries({items})) localStorage.setItem(k,v); return true; }})()")
 
     def test_legacy_mode_migrates_to_default_identity_and_bootstrap_attributes(self):
+        self.prepare_local_storage({"studio_theme": "dark", "canvas_theme": "light"})
         self.navigate()
-        self.set_local_storage({"studio_theme": "dark", "canvas_theme": "light"})
-        self.cdp("Page.reload", {"ignoreCache": True})
         self.assertTrue(self.evaluate("(async()=>{for(let i=0;i<100;i++){if(window.StudioTheme?.getPreference)return true;await new Promise(r=>setTimeout(r,20));}return false;})()"), "偏好接口缺失，不能迁移旧主题")
         state = self.evaluate("({preference:StudioTheme.getPreference(),identity:document.documentElement.dataset.studioTheme,appearance:document.documentElement.dataset.studioAppearance,dark:document.documentElement.classList.contains('studio-theme-dark')})")
         self.assertEqual(state["preference"], {"version": 1, "themeId": "studio-violet", "appearance": "dark"}, state)

@@ -169,11 +169,15 @@ class UpgradeTests(unittest.TestCase):
 
     def test_equivalent_requirements_do_not_reinstall(self):
         job=self.job({'requirements.txt':b'# explanation\nfastapi\n\n'})
-        python=self.root/'.venv'/'bin'/'python'
+        python=updater.venv_python(self.root/'.venv')
         python.parent.mkdir(parents=True);python.touch()
+        self.assertEqual(updater.requirements_key(self.root/'requirements.txt'),
+                         updater.requirements_key(job/'program/requirements.txt'))
         with patch.object(updater,'interpreter_version',return_value='3.14.5'), \
              patch.object(updater,'run_checked') as run,patch.object(updater,'probe_program'):
             updater.prepare_job(self.root,job)
+        with patch.object(updater,'interpreter_version',return_value='3.14.5'):
+            self.assertEqual(updater.find_runtime_python(self.root,'3.14.5'),str(python))
         self.assertEqual(run.call_count,1)
         self.assertEqual(run.call_args.args[0][-2:],['pip','check'])
 
