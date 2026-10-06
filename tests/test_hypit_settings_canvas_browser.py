@@ -668,6 +668,27 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.open_hypit_canvas()
         self.cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": False})
         self.addCleanup(lambda: self.cdp("Emulation.clearDeviceMetricsOverride"))
+        resize_state = self.frame_evaluate("""(async()=>{
+          const shell=document.getElementById('shell');
+          const drawer=document.getElementById('hypitOutputDrawer');
+          const sample=()=>{const rect=shell.getBoundingClientRect();const style=getComputedStyle(drawer);return {
+            viewport:innerWidth,documentWidth:document.documentElement.clientWidth,shellWidth:rect.width,
+            media900:matchMedia('(max-width:900px)').matches,drawerRight:style.right,drawerWidth:style.width
+          };};
+          const aligned=value=>value.viewport>=300&&value.viewport<=390&&Math.abs(value.shellWidth-value.viewport)<1&&value.media900&&value.drawerRight==='8px';
+          for(let attempt=0;attempt<120;attempt++){
+            const first=sample();
+            if(aligned(first)){
+              await new Promise(requestAnimationFrame);
+              await new Promise(requestAnimationFrame);
+              const second=sample();
+              if(aligned(second)&&Math.abs(first.shellWidth-second.shellWidth)<0.5)return {ready:true,first,second};
+            }
+            await new Promise(resolve=>setTimeout(resolve,16));
+          }
+          return {ready:false,layout:sample(),parentWidth:parent.innerWidth,documentReady:document.readyState};
+        })()""")
+        self.assertTrue(resize_state["ready"], f"窄屏 iframe 尚未完成视口布局更新：{json.dumps(resize_state, ensure_ascii=False)}")
         state = self.frame_evaluate("JSON.stringify((()=>{const button=document.getElementById('hypitOutputDrawerToggle').getBoundingClientRect();const progress=document.getElementById('canvasProductionToggle').getBoundingClientRect();const title=document.getElementById('smartTitle').getBoundingClientRect();const minimap=document.getElementById('minimap').getBoundingClientRect();const composer=document.getElementById('composer');const c=composer.classList.contains('open')?composer.getBoundingClientRect():null;return {button:{left:button.left,right:button.right,top:button.top,bottom:button.bottom},progress:{left:progress.left,right:progress.right,top:progress.top,bottom:progress.bottom},title:{left:title.left,right:title.right,top:title.top,bottom:title.bottom},minimap:{left:minimap.left,right:minimap.right,top:minimap.top,bottom:minimap.bottom},composer:c&&{left:c.left,right:c.right,top:c.top,bottom:c.bottom},width:innerWidth,parentWidth:parent.innerWidth,height:innerHeight};})())")
         observed = json.loads(state)
         self.assertEqual(observed["parentWidth"], 390, state)
