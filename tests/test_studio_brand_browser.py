@@ -82,6 +82,10 @@ class StudioBrandBrowserTests(unittest.TestCase):
                 parsed = urlsplit(self.path)
                 path = parsed.path
                 query = parse_qs(parsed.query)
+                if path == "/fixture/brand-storage-ready.html":
+                    # 只用于建立同源 localStorage；不加载任何产品脚本，避免预热导航启动画布。
+                    self._html("<!doctype html><html><head><meta charset='utf-8'><title>fixture ready</title></head><body></body></html>")
+                    return
                 if path == "/api/studio/projects":
                     module = query.get("module", ["canvas"])[0]
                     project_id = "safe-hypit" if module == "hypit" else "safe-canvas"
@@ -252,6 +256,29 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
             raise unittest.SkipTest("未能建立持久 CDP 会话")
         cls.cdp("Page.enable")
         cls.cdp("Runtime.enable")
+        cls.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": r"""(() => {
+          const state = window.__brandBrowserDiagnostics = {errors:[], apiFetches:[]};
+          const pathOf = value => { try { return new URL(value, location.href).pathname; } catch (_) { return String(value || ''); } };
+          addEventListener('error', event => {
+            state.errors.push({type:'error', message:String(event.message || ''), source:pathOf(event.filename || event.target?.src || ''), line:Number(event.lineno || 0)});
+          });
+          addEventListener('unhandledrejection', event => {
+            const reason=event.reason;
+            state.errors.push({type:'unhandledrejection', message:String(reason?.stack || reason?.message || reason || '')});
+          });
+          const originalFetch=window.fetch;
+          if(typeof originalFetch==='function') window.fetch=function(input, init){
+            const path=pathOf(typeof input==='string' ? input : input?.url || '');
+            if(!path.startsWith('/api/')) return originalFetch.apply(this, arguments);
+            const entry={path, state:'pending', status:null};
+            state.apiFetches.push(entry);
+            return originalFetch.apply(this, arguments).then(response=>{
+              entry.state='complete'; entry.status=response.status; return response;
+            }, error=>{
+              entry.state='error'; entry.error=String(error?.message || error); throw error;
+            });
+          };
+        })();"""})
 
     @classmethod
     def tearDownClass(cls):
@@ -304,6 +331,22 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
             raise AssertionError(f"页面断言脚本异常：{result['exceptionDetails']}")
         return result.get("result", {}).get("value")
 
+    def wait_for_document(self, url, timeout=12):
+        """等指定 URL 的文档本身完成，忽略前一次导航留下的 complete 状态。"""
+        deadline = time.monotonic() + timeout
+        last_state = None
+        while time.monotonic() < deadline:
+            try:
+                last_state = self.evaluate("({url:location.href,readyState:document.readyState})")
+            except AssertionError:
+                # 导航切换期间旧执行上下文可能被销毁；继续读取新文档。
+                time.sleep(0.05)
+                continue
+            if last_state and last_state.get("url") == url and last_state.get("readyState") == "complete":
+                return last_state
+            time.sleep(0.05)
+        self.fail(f"文档未在期限内完成导航：期望={url!r}，最近状态={last_state!r}")
+
     def set_viewport(self, width, height=1000):
         # 持久 CDP 会话保留设备仿真视口，使 390px 真正通过窄屏断点。
         self.cdp("Emulation.setDeviceMetricsOverride", {
@@ -320,21 +363,21 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
         elif page in ("projects",):
             page_path += "?id=safe-canvas"
         url = f"http://127.0.0.1:{self.http_port}{page_path}"
-        self.cdp("Page.navigate", {"url": url})
-        self.assertEqual(self.evaluate(f"""(async()=>{{
-          for(let i=0;i<100;i++){{
-            if(location.origin==='http://127.0.0.1:{self.http_port}'){{
-              localStorage.setItem('studio_theme',{json.dumps(theme)});
-              localStorage.setItem('canvas_theme',{json.dumps(theme)});
-              return true;
-            }}
-            await new Promise(r=>setTimeout(r,20));
-          }}
-          return false;
+        prep_url = f"http://127.0.0.1:{self.http_port}/fixture/brand-storage-ready.html"
+        prep_navigation = self.cdp("Page.navigate", {"url": prep_url})
+        self.assertFalse(prep_navigation.get("errorText"), f"同源准备页导航失败：{prep_navigation}")
+        self.wait_for_document(prep_url)
+        self.assertEqual(self.evaluate(f"""(() => {{
+          if(location.origin!=='http://127.0.0.1:{self.http_port}') return false;
+          localStorage.setItem('studio_theme',{json.dumps(theme)});
+          localStorage.setItem('canvas_theme',{json.dumps(theme)});
+          return true;
         }})()"""), True, "隔离测试源站未就绪")
         delimiter = "&" if "?" in url else "?"
-        self.cdp("Page.navigate", {"url": url + f"{delimiter}brand-test=1&theme={theme}"})
-        self.evaluate("(async()=>{for(let i=0;i<80;i++){if(document.readyState==='complete')return true;await new Promise(r=>setTimeout(r,25));}return false;})()")
+        final_url = url + f"{delimiter}brand-test=1&theme={theme}"
+        final_navigation = self.cdp("Page.navigate", {"url": final_url})
+        self.assertFalse(final_navigation.get("errorText"), f"最终页面导航失败：{final_navigation}")
+        self.wait_for_document(final_url)
         ready_checks = {
             "shell": "(() => { const frame=document.querySelector('iframe.active'); const style=frame&&getComputedStyle(frame); return document.querySelectorAll('.side-pill').length >= 4 && getComputedStyle(document.body).visibility === 'visible' && frame?.contentDocument?.readyState === 'complete' && frame.contentDocument.querySelector('[data-project-id=\"safe-canvas\"]') && Number(style.opacity) >= .99 && style.filter === 'blur(0px)'; })()",
             "projects": "document.querySelector('[data-project-id=\"safe-canvas\"]') !== null",
@@ -353,8 +396,15 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
               readyState: document.readyState,
               title: document.title,
               smartTitle: document.getElementById('smartTitle')?.textContent?.trim() || null,
-              canvasId: document.documentElement.dataset.canvasId || null,
+              canvasId: typeof canvasId === 'string' ? canvasId : null,
               canvasMode: document.documentElement.dataset.canvasMode || null,
+              loadCanvasType: typeof loadCanvas,
+              onloadType: typeof window.onload,
+              navigation: performance.getEntriesByType('navigation').map(item=>({name:item.name,type:item.type,domComplete:Math.round(item.domComplete),loadEventEnd:Math.round(item.loadEventEnd)})),
+              scripts: performance.getEntriesByType('resource').filter(item=>item.initiatorType==='script'||item.name.split('?')[0].toLowerCase().endsWith('.js')).map(item=>({name:item.name,status:item.responseStatus,duration:Math.round(item.duration)})),
+              apiResources: performance.getEntriesByType('resource').filter(item=>item.name.includes('/api/')).map(item=>({name:item.name,status:item.responseStatus,duration:Math.round(item.duration)})),
+              apiFetches: window.__brandBrowserDiagnostics?.apiFetches || [],
+              browserErrors: window.__brandBrowserDiagnostics?.errors || [],
               canvasRoot: !!document.getElementById('world'),
               nodeCount: document.querySelectorAll('.smart-node').length,
               startupText: document.querySelector('.canvas-status,.canvas-empty-state,[role="alert"]')?.textContent?.trim() || null,

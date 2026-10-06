@@ -38,6 +38,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         cls.canvas_gets = 0
         cls.canvas_puts = []
         cls.canvas_put_attempts = 0
+        cls.canvas_put_attempt_log = []
         cls.fail_canvas_puts = 0
         cls.reset_posts = []
         cls.test_posts = []
@@ -159,6 +160,30 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                 cls.write_paths.append(path)
                 if path == "/api/canvases/hypit-settings":
                     cls.canvas_put_attempts += 1
+                    previous_nodes = {str(node.get("id") or ""): node for node in cls.canvas.get("nodes", [])
+                                      if isinstance(node, dict)}
+                    submitted_nodes = {str(node.get("id") or ""): node for node in body.get("nodes", [])
+                                       if isinstance(node, dict)}
+                    cls.canvas_put_attempt_log.append({
+                        "path": path,
+                        "base_revision": body.get("base_revision"),
+                        "server_revision": cls.canvas.get("revision"),
+                        "migration_version": body.get("migration_version"),
+                        "node_schema_version": cls.canvas.get("node_schema_version"),
+                        "nodes": [{"id": str(node.get("id") or ""), "type": str(node.get("type") or "")}
+                                  for node in body.get("nodes", []) if isinstance(node, dict)],
+                        "changed_canvas_keys": [key for key in set(cls.canvas) | set(body)
+                                                 if key not in {"revision", "updated_at", "base_revision",
+                                                                "base_updated_at", "client_id", "migration_version"}
+                                                 and cls.canvas.get(key) != body.get(key)],
+                        "changed_node_fields": [{"id": node_id,
+                                                 "keys": [key for key in set(previous_nodes.get(node_id, {}))
+                                                          | set(submitted_nodes.get(node_id, {}))
+                                                          if previous_nodes.get(node_id, {}).get(key)
+                                                          != submitted_nodes.get(node_id, {}).get(key)]}
+                                                for node_id in sorted(set(previous_nodes) | set(submitted_nodes))
+                                                if previous_nodes.get(node_id) != submitted_nodes.get(node_id)],
+                    })
                     if cls.fail_canvas_puts:
                         cls.fail_canvas_puts -= 1
                         self._json(503, {"detail": "fixture canvas save failed"})
@@ -168,9 +193,12 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                         return
                     cls.canvas_puts.append(body)
                     stored = {key: value for key, value in body.items()
-                              if key not in {"base_revision", "base_updated_at", "client_id", "migration_version"}}
+                              if key not in {"base_revision", "base_updated_at", "client_id", "migration_version",
+                                             "test_statuses"}}
                     cls.canvas = {**cls.canvas, **stored, "revision": cls.canvas["revision"] + 1, "updated_at": cls.canvas["updated_at"] + 1}
-                    self._json(200, {"canvas": cls.canvas})
+                    # test_statuses 是读取投影，不落入画布记录；GET 与成功 PUT
+                    # 的响应必须都返回同一投影，避免客户端误判启动状态为本地脏数据。
+                    self._json(200, {"canvas": {**cls.canvas, "test_statuses": cls.test_statuses}})
                 else:
                     self._json(403, {"detail": "隔离 fixture 禁止此 PUT"})
 
@@ -298,6 +326,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         type(self).canvas_gets = 0
         type(self).canvas_puts = []
         type(self).canvas_put_attempts = 0
+        type(self).canvas_put_attempt_log = []
         type(self).fail_canvas_puts = 0
         type(self).reset_posts = []
         type(self).test_posts = []
@@ -1286,9 +1315,32 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.wait_for(lambda: self.frame_evaluate("!!document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option][data-capability-picker-model=fixture-image-next]')"),
                       "目标运行模式没有显示")
         self.frame_evaluate("document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option][data-capability-picker-model=fixture-image-next]').click(); true")
-        self.wait_for(lambda: any(node.get("runSettings", {}).get("model") == "fixture-image-next"
-                                  for node in self.canvas.get("nodes", [])),
-                      "新模型没有保存到服务端")
+        def save_response_applied():
+            server_has_new_model = any(
+                node.get("runSettings", {}).get("model") == "fixture-image-next"
+                for node in self.canvas.get("nodes", [])
+            )
+            client_state = json.loads(self.frame_evaluate(
+                "JSON.stringify({"
+                "node:nodes.find(node=>node.id==='image-run')?.runSettings?.model,"
+                "settings:settings.model,"
+                "base:canvasSyncBase?.nodes?.find(node=>node.id==='image-run')?.runSettings?.model,"
+                "revision:canvas.revision,baseRevision:canvasSyncBase?.revision,"
+                "inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued"
+                "})"
+            ))
+            return (
+                server_has_new_model
+                and client_state["node"] == "fixture-image-next"
+                and client_state["settings"] == "fixture-image-next"
+                and client_state["base"] == "fixture-image-next"
+                and client_state["revision"] == client_state["baseRevision"]
+                and not client_state["inFlight"]
+                and not client_state["queued"]
+            )
+
+        self.wait_for(save_response_applied,
+                      "新模型 PUT 响应必须处理完成并同步服务端、客户端基线与 revision")
         saved_revision = self.canvas["revision"]
         saved_state = json.loads(self.frame_evaluate("JSON.stringify({local:nodes.find(node=>node.id==='image-run')?.runSettings?.model,base:canvasSyncBase?.nodes?.find(node=>node.id==='image-run')?.runSettings?.model,snapshot:canvasSyncCurrentSnapshot()?.nodes?.find(node=>node.id==='image-run')?.runSettings?.model,settings:settings.model,canvasSettings:canvas.settings?.model,revision:canvas.revision,baseRevision:canvasSyncBase?.revision})"))
         self.assertEqual(saved_state["base"], "fixture-image-next", f"PUT 成功后同步基线应包含新模型: {saved_state}")
@@ -1437,7 +1489,8 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
     def test_plain_canvas_image_picker_shows_enabled_gpt_image_25_models(self):
         self.seed_gpt_image_identity_catalog()
         self.seed_canvas([{
-            "id": "image-input", "type": "smart-image", "x": 80, "y": 360,
+            "id": "image-input", "type": "smart-material", "sourceKind": "input", "inputNodeIds": [],
+            "x": 80, "y": 360,
             "images": [{"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l3sAAAAASUVORK5CYII=",
                         "kind": "image", "name": "fixture reference"}],
         }, {
@@ -1451,10 +1504,167 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                             "model": "laohu-image-g-v2.5-flare", "imageFamilyId": "series-image-gpt-image"},
             "promptDraftText": "fixture prompt with reference",
         }], [{"id": "fixture-reference-edge", "from": "image-input", "to": "image-run-with-reference", "kind": "input"}])
+        # 本例只验候选浏览与输入过滤；使用当前 schema 的标准素材节点，
+        # 避免把旧 smart-image 迁移保存混入“浏览模型不写入”的基线。
+        type(self).canvas["node_schema_version"] = 7
         self.open_hypit_canvas()
-        self.evaluate("document.getElementById('hypitSettingsCanvasFrame').src='/static/smart-canvas.html?id=hypit-settings'; true")
-        self.wait_for(lambda: self.canvas_gets >= 2 and self.frame_evaluate("!isSettingsCanvasMode && !!document.getElementById('world')"),
-                      "普通画布界面没有加载")
+        # 页面切换会再次启动真实画布加载。先在新文档执行前安装事件标记，
+        # 这样不会把前一次 Hypit iframe 的旧窗口状态误当成普通模式已就绪。
+        ready_script = self.cdp("Page.addScriptToEvaluateOnNewDocument", {"source":
+            "window.addEventListener('canvas-ready',()=>{window.__plainCanvasReadyForTest=true;},{once:true});"})
+        try:
+            self.evaluate("document.getElementById('hypitSettingsCanvasFrame').src='/static/smart-canvas.html?id=hypit-settings'; true")
+
+            def plain_canvas_ready():
+                try:
+                    return bool(self.frame_evaluate(
+                        "window.__plainCanvasReadyForTest===true && !isSettingsCanvasMode && !isCanvasSettingsMode"))
+                except AssertionError:
+                    # iframe 导航切换执行上下文时会短暂不可读，继续等待新文档事件。
+                    return False
+
+            self.wait_for(plain_canvas_ready, "普通画布没有发出 canvas-ready 或仍处于模块配置模式", timeout=12)
+        finally:
+            if ready_script.get("identifier"):
+                self.cdp("Page.removeScriptToEvaluateOnNewDocument", {"identifier": ready_script["identifier"]})
+
+        # 先等页面自己的启动迁移/规范化写入收敛。成功 PUT 必须已经反映到
+        # 客户端同步基线；若启动状态被阻塞或仍有草稿，则失败并保留诊断，不能
+        # 通过清零请求计数把初始化写入藏掉。600ms 静默覆盖 450ms 保存防抖。
+        settle_deadline = time.monotonic() + 15
+        quiet_since = None
+        last_signature = None
+        settled_state = None
+        while time.monotonic() < settle_deadline:
+            try:
+                state = json.loads(self.frame_evaluate("JSON.stringify((()=>{"
+                    "const base=canvasSyncRetryBase||canvasSyncBase;"
+                    "return {ready:window.__plainCanvasReadyForTest===true,"
+                    "settingsMode:isSettingsCanvasMode,canvasSettingsMode:isCanvasSettingsMode,"
+                    "revision:Number(canvas?.revision||0),baseRevision:Number(base?.revision||0),"
+                    "dirty:base?canvasSyncHasLocalChanges(canvasSyncCurrentSnapshot(),base):true,"
+                    "inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued,blocked:canvasSyncSaveBlocked,"
+                    "saveTimer:Boolean(saveTimer)};})())"))
+            except AssertionError:
+                time.sleep(0.05)
+                continue
+            attempts = self.canvas_put_attempts
+            successes = len(self.canvas_puts)
+            server_revision = int(self.canvas.get("revision", 0))
+            signature = (attempts, successes, server_revision, state["revision"], state["baseRevision"],
+                         state["dirty"], state["inFlight"], state["queued"], state["blocked"])
+            now = time.monotonic()
+            if signature != last_signature:
+                last_signature = signature
+                quiet_since = now
+            synced = (
+                state["ready"] and not state["settingsMode"] and not state["canvasSettingsMode"]
+                and not state["dirty"]
+                and not state["inFlight"] and not state["queued"] and not state["blocked"]
+                and state["revision"] == state["baseRevision"] == server_revision
+            )
+            if synced and quiet_since is not None and now - quiet_since >= 0.65:
+                settled_state = state
+                break
+            if not synced:
+                quiet_since = None
+            time.sleep(0.05)
+        if settled_state is None:
+            try:
+                final_state = self.frame_evaluate("JSON.stringify((()=>{const base=canvasSyncRetryBase||canvasSyncBase;"
+                    "const local=canvasSyncComparableSnapshot(canvasSyncCurrentSnapshot()||{});"
+                    "const cleanBase=canvasSyncComparableSnapshot(base||{});"
+                    "const keys=[...new Set([...Object.keys(local),...Object.keys(cleanBase)])];"
+                    "const changedKeys=keys.filter(key=>JSON.stringify(local[key])!==JSON.stringify(cleanBase[key]));"
+                    "const localNodes=new Map((local.nodes||[]).map(node=>[node.id,node]));"
+                    "const baseNodes=new Map((cleanBase.nodes||[]).map(node=>[node.id,node]));"
+                    "const nodeChanges=[...new Set([...localNodes.keys(),...baseNodes.keys()])].map(id=>{"
+                    "const a=localNodes.get(id)||{},b=baseNodes.get(id)||{};"
+                    "return {id:String(id||''),keys:[...new Set([...Object.keys(a),...Object.keys(b)])].filter(key=>JSON.stringify(a[key])!==JSON.stringify(b[key]))};"
+                    "}).filter(item=>item.keys.length);"
+                    "return {ready:window.__plainCanvasReadyForTest===true,revision:Number(canvas?.revision||0),"
+                    "baseRevision:Number(base?.revision||0),dirty:base?canvasSyncHasLocalChanges(canvasSyncCurrentSnapshot(),base):true,"
+                    "changedKeys,nodeChanges,"
+                    "inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued,blocked:canvasSyncSaveBlocked,"
+                    "saveTimer:Boolean(saveTimer)};})())")
+            except AssertionError as error:
+                final_state = str(error)
+            safe_put_meta = [{"path": item.get("path"), "base_revision": item.get("base_revision"),
+                              "server_revision": item.get("server_revision"),
+                              "migration_version": item.get("migration_version"),
+                              "node_schema_version": item.get("node_schema_version"), "nodes": item.get("nodes")}
+                             for item in self.canvas_put_attempt_log]
+            self.fail(f"普通画布初始化未在限定时间内完成同步：state={final_state}; "
+                      f"fixture_revision={self.canvas.get('revision')}; paths={self.write_paths}; "
+                      f"attempts={self.canvas_put_attempts}; successes={len(self.canvas_puts)}; "
+                      f"attempt_metadata={safe_put_meta}")
+
+        browse_baseline = {
+            "attempts": self.canvas_put_attempts,
+            "successes": len(self.canvas_puts),
+            "revision": int(self.canvas.get("revision", 0)),
+        }
+
+        def assert_candidate_browsing_did_not_write():
+            # 保留候选操作后的 650ms 观察窗，覆盖 450ms 防抖以及迟到的同步写入。
+            # 一旦计数变化立即失败；只有同步状态稳定后才能结束等待。
+            check_deadline = time.monotonic() + 6
+            check_quiet_since = None
+            check_signature = None
+            observed_state = None
+            settled = False
+            while time.monotonic() < check_deadline:
+                try:
+                    state = json.loads(self.frame_evaluate("JSON.stringify((()=>{"
+                        "const base=canvasSyncRetryBase||canvasSyncBase;"
+                        "return {revision:Number(canvas?.revision||0),baseRevision:Number(base?.revision||0),"
+                        "dirty:base?canvasSyncHasLocalChanges(canvasSyncCurrentSnapshot(),base):true,"
+                        "inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued,blocked:canvasSyncSaveBlocked};})())"))
+                except AssertionError:
+                    time.sleep(0.05)
+                    continue
+                attempts = self.canvas_put_attempts
+                successes = len(self.canvas_puts)
+                server_revision = int(self.canvas.get("revision", 0))
+                observed_state = state
+                signature = (attempts, successes, server_revision, state["revision"], state["baseRevision"],
+                             state["dirty"], state["inFlight"], state["queued"], state["blocked"])
+                now = time.monotonic()
+                if signature != check_signature:
+                    check_signature = signature
+                    check_quiet_since = now
+                if attempts != browse_baseline["attempts"] or successes != browse_baseline["successes"]:
+                    observed_state = state
+                    break
+                # 选中节点后，composer 可产生尚未提交的本地草稿；本断言只
+                # 关心浏览是否发起保存，故要求同步队列空且 revision 对齐，
+                # 同时保留 650ms 观察窗捕获延迟防抖 PUT。
+                synced = (not state["inFlight"] and not state["queued"] and not state["blocked"]
+                          and state["revision"] == state["baseRevision"] == server_revision)
+                if synced and check_quiet_since is not None and now - check_quiet_since >= 0.65:
+                    observed_state = state
+                    settled = True
+                    break
+                if not synced:
+                    check_quiet_since = None
+                time.sleep(0.05)
+            safe_put_meta = [{"path": item.get("path"), "base_revision": item.get("base_revision"),
+                              "server_revision": item.get("server_revision"),
+                              "migration_version": item.get("migration_version"),
+                              "node_schema_version": item.get("node_schema_version"), "nodes": item.get("nodes")}
+                             for item in self.canvas_put_attempt_log]
+            if (self.canvas_put_attempts == browse_baseline["attempts"]
+                    and len(self.canvas_puts) == browse_baseline["successes"]):
+                self.assertTrue(settled, f"候选浏览后同步状态未在限定时间内稳定：baseline={browse_baseline}; "
+                                f"paths={self.write_paths}; safe_attempt_metadata={safe_put_meta}; "
+                                f"sync_state={observed_state}")
+            self.assertEqual(
+                {"attempts": self.canvas_put_attempts, "successes": len(self.canvas_puts),
+                 "revision": int(self.canvas.get("revision", 0))}, browse_baseline,
+                f"只浏览普通画布候选不应触发 PUT；基线={browse_baseline} 当前 attempts={self.canvas_put_attempts} "
+                f"successes={len(self.canvas_puts)} revision={self.canvas.get('revision')}; "
+                f"paths={self.write_paths}; safe_attempt_metadata={safe_put_meta}; sync_state={observed_state}")
+
         self.frame_evaluate("document.querySelector('.image-node[data-id=image-run]').click(); true")
         self.wait_for(lambda: self.frame_evaluate("!!document.querySelector('[data-capability-model-picker] .capability-model-picker-pill')"),
                       lambda: "普通画布图片节点模型选择器未挂载：" + str(json.loads(self.frame_evaluate("JSON.stringify((()=>{const node=canvas?.nodes?.find(item=>item.id==='image-run');return {mode:{hypit:isHypitSettingsMode,article:isArticleSettingsMode,canvas:isCanvasSettingsMode},node:{type:node?.type,runSettings:node?.runSettings,modelSelection:node?.modelSelection},settings:{engine:settings?.engine,apiKind:settings?.apiKind,provider:settings?.provider_id,model:settings?.model},composer:document.getElementById('composer')?.className,dynamic:{hidden:dynamicParams?.hidden,html:dynamicParams?.innerHTML?.slice(0,1600)},modelOptions:modelCapabilityCatalog?.options?.length,providers:modelCapabilityCatalog?.providers?.map(provider=>({id:provider.id,models:provider.models?.length,families:provider.families?.length}))}})())"))))
@@ -1485,7 +1695,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         }
         self.assertEqual(set(runninghub_models), expected_text_modes,
                          f"RunningHub Global 的文生图模式应出现在普通图片菜单；无参考图时图生图应按输入契约隐藏: {runninghub_models}")
-        self.assertEqual(self.canvas_put_attempts, 0, "只浏览普通画布候选不应保存或触发生成")
+        assert_candidate_browsing_did_not_write()
 
         self.frame_evaluate("document.querySelector('.image-node[data-id=image-run-with-reference]').click(); true")
         self.frame_evaluate("document.querySelector('[data-capability-model-picker] .capability-model-picker-pill').click(); true")
@@ -1500,6 +1710,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         }
         self.assertEqual(set(referenced_models), expected_reference_modes,
                          f"提供图片参考时应显示四个 RunningHub Global 图生图模式: {referenced_models}")
+        assert_candidate_browsing_did_not_write()
 
     def test_hypit_unconnected_audio_node_unions_voice_and_audio_slot_candidates(self):
         self.seed_audio_model_catalog()
