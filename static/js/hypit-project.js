@@ -41,12 +41,16 @@
     return data;
   }
   function labels(){
-    el('back').textContent=text('项目管理','Projects');
-    el('refresh').textContent=text('刷新作品','Refresh work');
+    const refreshLabel=text('刷新作品','Refresh work');
+    const languageLabel=text('切换语言','Switch language');
+    const themeLabel=text('切换主题','Switch theme');
+    el('refresh').title=refreshLabel;el('refresh').setAttribute('aria-label',refreshLabel);
+    el('language').textContent=window.StudioI18n?.lang?.()==='en'?'EN':'中';
+    el('language').title=languageLabel;el('language').setAttribute('aria-label',languageLabel);
+    el('theme').title=themeLabel;el('theme').setAttribute('aria-label',themeLabel);
     el('run').setAttribute('aria-label',text('制作方案','Production plan'));
     el('emptyTitle').textContent=text('尚无制作内容','No creative content yet');
     el('emptyCopy').textContent=text('此项目的制作内容准备好后，会自动显示在这里。','Your project content will appear here when it is ready.');
-    el('emptyBack').textContent=text('返回项目管理','Back to projects');
   }
   async function openSource(source){
     if(!source || source===openedSource || source===failedSource)return;
@@ -76,9 +80,11 @@
     finally{refreshing=false;}
   }
   el('refresh').onclick=()=>{failedSource='';if(openedSource){el('nativeStudio').src=el('nativeStudio').src;}refresh();};
+  el('language').onclick=()=>window.StudioI18n?.toggle?.();
+  el('theme').onclick=()=>{const appearance=window.StudioTheme?.get?.()||'light';window.StudioTheme?.set?.(appearance==='dark'?'light':'dark');};
   el('run').onchange=()=>{failedSource='';openSource(el('run').value).catch(error=>{el('status').textContent=error.message;});};
   el('nativeStudio').addEventListener('load', notifyNativeTheme);
-  labels();window.addEventListener('studio-lang-change',labels);
+  labels();window.lucide?.createIcons?.();window.addEventListener('studio-lang-change',labels);
   window.addEventListener('studio-theme-change', notifyNativeTheme);
   refresh();const timer=setInterval(()=>{if(!document.hidden)refresh();},5000);
   window.addEventListener('pagehide',()=>clearInterval(timer),{once:true});

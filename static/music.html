@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-studio-scale="off">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="/static/images/logo.png" type="image/png">
+    <title>音乐创作</title>
+    <script>
+        (function(){try{
+            var key='studio_theme_preference_v1', ids=['studio-violet','sunlit','vermilion','forest','classic'];
+            var raw=localStorage.getItem(key), pref=null; try{pref=raw?JSON.parse(raw):null;}catch(e){}
+            if(!pref||pref.version!==1||!['light','dark','system'].includes(pref.appearance)){
+                var old=localStorage.getItem('studio_theme'), legacy=localStorage.getItem('canvas_theme');
+                pref={version:1,themeId:'studio-violet',appearance:old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light'};
+                if(raw===null)localStorage.setItem(key,JSON.stringify(pref));
+            }
+            var theme=ids.includes(pref.themeId)?pref.themeId:'studio-violet';
+            var mode=['light','dark','system'].includes(pref.appearance)?pref.appearance:'light';
+            var appearance=mode==='system'&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':mode==='system'?'light':mode;
+            document.documentElement.dataset.studioTheme=theme;document.documentElement.dataset.studioAppearance=appearance;document.documentElement.dataset.studioAppearanceMode=mode;
+            document.documentElement.style.colorScheme=appearance;document.documentElement.classList.toggle('studio-theme-dark',appearance==='dark');document.documentElement.classList.toggle('theme-dark',appearance==='dark');
+        }catch(e){}})();
+    </script>
+    <script src="/static/vendor/js/lucide.js"></script>
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/i18n.js"></script>
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/studio-ui-polish.css">
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css">
+    <link rel="stylesheet" href="/static/css/studio-music.css">
+</head>
+<body>
+    <div class="music-app">
+        <header class="music-toolbar">
+            <div class="music-project-heading"><span class="music-kicker" id="musicKicker">音乐创作</span><h1 id="musicProjectName">正在读取作品…</h1></div>
+            <div class="music-toolbar-actions">
+                <button id="musicRefreshButton" class="music-icon-button compact" type="button" title="重新读取" aria-label="重新读取"><i data-lucide="refresh-cw" aria-hidden="true"></i></button>
+                <button id="musicLanguageButton" class="music-icon-button compact" type="button" title="切换语言" aria-label="切换语言">中</button>
+                <button id="musicThemeButton" class="music-icon-button compact" type="button" title="切换主题" aria-label="切换主题"><i data-lucide="sun-moon" aria-hidden="true"></i></button>
+            </div>
+        </header>
+
+        <main class="music-main">
+            <section id="musicStatus" class="music-status" role="status" aria-live="polite" hidden></section>
+            <div class="music-layout">
+                <div class="music-content-column">
+                    <section class="music-panel music-title-panel" aria-labelledby="musicTitleHeading">
+                        <div class="music-panel-heading"><div><span class="music-section-index">01 · SONG</span><h2 id="musicTitleHeading">歌曲</h2></div><span id="musicUpdatedAt" class="music-muted"></span></div>
+                        <h3 id="musicCurrentTitle" class="music-current-title">—</h3>
+                        <div id="musicTitleChoices" class="music-title-choices"></div>
+                    </section>
+
+                    <section class="music-panel music-work-panel" aria-label="歌曲内容">
+                        <div class="music-tabs" role="tablist" aria-label="歌曲内容分类">
+                            <button id="musicTabLyrics" class="music-tab active" role="tab" type="button" aria-selected="true" aria-controls="musicPanelLyrics" data-music-tab="lyrics"><i data-lucide="align-left" aria-hidden="true"></i><span>歌词与风格</span></button>
+                            <button id="musicTabScores" class="music-tab" role="tab" type="button" aria-selected="false" aria-controls="musicPanelScores" data-music-tab="scores"><i data-lucide="music-2" aria-hidden="true"></i><span>乐谱</span><b id="musicScoreCount" class="music-tab-count">0</b></button>
+                            <button id="musicTabNotes" class="music-tab" role="tab" type="button" aria-selected="false" aria-controls="musicPanelNotes" data-music-tab="notes"><i data-lucide="sticky-note" aria-hidden="true"></i><span>创作备注</span></button>
+                        </div>
+                        <section id="musicPanelLyrics" class="music-tab-panel" role="tabpanel" aria-labelledby="musicTabLyrics">
+                            <div class="music-text-block"><div class="music-field-label"><i data-lucide="quote" aria-hidden="true"></i><h3 id="musicLyricsLabel">歌词</h3></div><pre id="musicLyrics" class="music-readable-text">—</pre></div>
+                            <div class="music-text-block"><div class="music-field-label"><i data-lucide="sliders-horizontal" aria-hidden="true"></i><h3 id="musicStyleLabel">风格与编曲</h3></div><pre id="musicStyle" class="music-readable-text music-style-text">—</pre></div>
+                        </section>
+                        <section id="musicPanelScores" class="music-tab-panel" role="tabpanel" aria-labelledby="musicTabScores" hidden>
+                            <div class="music-score-layout"><nav id="musicScoreList" class="music-score-list" aria-label="乐谱文件"></nav><article id="musicScoreViewer" class="music-score-viewer"><div class="music-empty-inline">暂时没有乐谱文件</div></article></div>
+                        </section>
+                        <section id="musicPanelNotes" class="music-tab-panel" role="tabpanel" aria-labelledby="musicTabNotes" hidden>
+                            <div class="music-text-block"><div class="music-field-label"><i data-lucide="notebook-pen" aria-hidden="true"></i><h3 id="musicNotesLabel">创作备注</h3></div><pre id="musicNotes" class="music-readable-text">—</pre></div>
+                            <div id="musicReferencesBlock" class="music-reference-block" hidden><h3 id="musicReferencesLabel">参考音频</h3><div id="musicReferences" class="music-reference-list"></div></div>
+                        </section>
+                    </section>
+                </div>
+
+                <aside class="music-side-column">
+                    <section class="music-panel music-audio-panel" aria-labelledby="musicAudioHeading">
+                        <div class="music-panel-heading"><div><span class="music-section-index">02 · AUDIO</span><h2 id="musicAudioHeading">音频结果</h2></div><span id="musicAudioCount" class="music-count-pill">0</span></div>
+                        <div class="music-generate-row"><button id="musicGenerateButton" class="music-primary-button" type="button"><i data-lucide="audio-lines" aria-hidden="true"></i><span id="musicGenerateLabel">按配置生成音频</span></button><a id="musicConfigureLink" class="music-inline-link" href="/static/api-settings.html" target="_blank" rel="noopener"><span id="musicConfigureLabel">配置生成流程</span><i data-lucide="arrow-up-right" aria-hidden="true"></i></a></div>
+                        <div id="musicAudioState" class="music-empty-state"></div>
+                        <div id="musicAudioList" class="music-audio-list"></div>
+                    </section>
+                    <section class="music-panel music-cover-panel" aria-labelledby="musicCoverHeading">
+                        <div class="music-panel-heading"><div><span class="music-section-index">03 · COVER</span><h2 id="musicCoverHeading">封面</h2></div><span id="musicCoverCount" class="music-count-pill">0</span></div>
+                        <div class="music-generate-row cover-generate-row"><button id="musicGenerateCoverButton" class="music-secondary-button" type="button"><i data-lucide="image-plus" aria-hidden="true"></i><span id="musicGenerateCoverLabel">按配置生成封面</span></button></div>
+                        <div id="musicCoverState" class="music-empty-state"></div>
+                        <div id="musicCoverList" class="music-cover-list"></div>
+                    </section>
+                </aside>
+            </div>
+        </main>
+    </div>
+
+    <div id="musicMiniPlayer" class="music-mini-player" hidden>
+        <button id="musicMiniToggle" class="music-player-toggle" type="button" aria-label="播放"><i data-lucide="play" aria-hidden="true"></i></button>
+        <div class="music-mini-copy"><strong id="musicMiniTitle"></strong><span id="musicMiniMeta"></span></div>
+        <div class="music-mini-time"><span id="musicMiniCurrent">0:00</span><input id="musicMiniSeek" type="range" min="0" max="1000" value="0" aria-label="音频进度"><span id="musicMiniDuration">0:00</span></div>
+        <button id="musicOpenPlayer" class="music-icon-button compact" type="button" aria-label="展开播放器"><i data-lucide="maximize-2" aria-hidden="true"></i></button>
+        <audio id="musicAudioElement" preload="metadata"></audio>
+    </div>
+
+    <dialog id="musicPlayerDialog" class="music-player-dialog" aria-labelledby="musicPlayerDialogTitle">
+        <div class="music-player-dialog-head"><div><span class="music-section-index">LISTENING</span><h2 id="musicPlayerDialogTitle">正在播放</h2></div><button id="musicPlayerClose" class="music-icon-button compact" type="button" aria-label="关闭播放器"><i data-lucide="x" aria-hidden="true"></i></button></div>
+        <div class="music-player-art"><i data-lucide="audio-lines" aria-hidden="true"></i></div>
+        <h3 id="musicPlayerTrackTitle"></h3><p id="musicPlayerTrackMeta"></p>
+        <div id="musicTimedLyrics" class="music-timed-lyrics"><span>暂无同步歌词</span></div>
+        <div class="music-expanded-controls"><button id="musicExpandedToggle" class="music-player-toggle large" type="button" aria-label="播放"><i data-lucide="play" aria-hidden="true"></i></button><span id="musicExpandedCurrent">0:00</span><input id="musicExpandedSeek" type="range" min="0" max="1000" value="0" aria-label="音频进度"><span id="musicExpandedDuration">0:00</span></div>
+    </dialog>
+
+    <dialog id="musicMappingDialog" class="music-mapping-dialog" aria-labelledby="musicMappingTitle">
+        <div class="music-player-dialog-head"><div><span class="music-section-index">INPUTS</span><h2 id="musicMappingTitle">本次输入</h2></div><button id="musicMappingClose" class="music-icon-button compact" type="button" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button></div>
+        <p id="musicMappingHint"></p>
+        <div id="musicMappingFields" class="music-mapping-fields"></div>
+        <div id="musicMappingError" class="music-mapping-error" role="alert" hidden></div>
+        <div class="music-dialog-actions"><button id="musicMappingCancel" class="music-secondary-button" type="button">取消</button><button id="musicMappingSubmit" class="music-primary-button" type="button">继续提交</button></div>
+    </dialog>
+    <script src="/static/js/studio-music.js"></script>
+</body>
+</html>

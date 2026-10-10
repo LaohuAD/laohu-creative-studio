@@ -215,6 +215,25 @@ answer=null;await createProject();assert.equal(saves,1);assert.equal(opened,0);}
                 self.assertTrue((backups[0] / "workflow" / "notes.txt").exists())
                 self.assertTrue((backups[0] / "project.json").exists())
 
+    def test_music_delete_reports_recycled_and_keeps_project_record_in_archive(self):
+        with isolated_temp_directory() as folder:
+            with make_client(folder) as client:
+                created = client.post(
+                    "/api/studio/projects",
+                    json={"module": "music", "name": "待归档歌曲"},
+                ).json()["project"]
+                project_id = created["id"]
+                response = client.delete(
+                    f"/api/studio/projects/{project_id}?module=music&revision={created['revision']}"
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertTrue(response.json()["recycled"])
+                self.assertEqual(response.json()["project"]["module"], "music")
+                self.assertFalse((Path(folder) / "data" / "studio_projects" / f"{project_id}.json").exists())
+                archives = list((Path(folder) / "backups" / "studio-projects" / "music").glob(f"{project_id}-*"))
+                self.assertEqual(len(archives), 1)
+                self.assertTrue((archives[0] / "project.json").is_file())
+
     def test_path_validation_corrupt_record_and_revision_conflict(self):
         with isolated_temp_directory() as folder:
             with make_client(folder) as client:

@@ -43,11 +43,13 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
           const grid=document.querySelector('#studioProjectGrid');
           const rect=(node)=>node&&node.getBoundingClientRect();
           const titleRect=rect(title), actionRect=rect(actions), toolbarRect=rect(toolbar), guideRect=rect(guide), gridRect=rect(grid);
+          const descriptionLineHeight=description&&parseFloat(getComputedStyle(description).lineHeight);
           return {
             module:document.body.dataset.studioModule,
             description:document.getElementById('studioProjectDescription')?.textContent?.trim()||'',
             titleRect:rect(titleText)&&{x:rect(titleText).x,y:rect(titleText).y,right:rect(titleText).right,bottom:rect(titleText).bottom},
             descriptionRect:rect(description)&&{x:rect(description).x,y:rect(description).y,right:rect(description).right,bottom:rect(description).bottom},
+            descriptionFirstLineBottom:descriptionLineHeight&&rect(description).y+descriptionLineHeight,
             legacyCount:document.getElementById('studioProjectCount')?.textContent?.trim()||'',
             titleActionCenterDelta:titleRect&&actionRect?Math.abs((titleRect.top+titleRect.bottom-actionRect.top-actionRect.bottom)/2):null,
             actionParent:actions?.parentElement?.className||null,
@@ -109,7 +111,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
           search:document.getElementById('studioProjectSearch')?.getAttribute('aria-label'),
           controls:[...document.querySelectorAll('.studio-project-toolbar-actions button')].map(button=>button.innerText.trim())
         }))()""")
-        self.assertEqual(english["description"], "Manage video recreation projects, connect an external Agent and review the work.")
+        self.assertEqual(english["description"], "Manage Hypit video recreation projects, connect an external Agent and review the work.")
         self.assertEqual(english["search"], "Search projects")
         self.assertEqual(english["controls"], ["Prepare creative skills", "New project"])
 
@@ -118,11 +120,11 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
         expected_actions = ["open", "rename", "connect", "delete"]
         expected_descriptions = {
             "canvas": "整理素材、连接画布节点，逐步完成作品。",
-            "hypit": "管理视频复刻项目，连接外部 Agent，并查看制作内容与结果。",
+            "hypit": "管理 Hypit 视频复刻项目，连接外部 Agent，并查看制作内容与结果。",
         }
         expected_english = {
             "canvas": "Organise assets, connect canvas nodes and build each piece step by step.",
-            "hypit": "Manage video recreation projects, connect an external Agent and review the work.",
+            "hypit": "Manage Hypit video recreation projects, connect an external Agent and review the work.",
         }
         for module in ("canvas", "hypit"):
             for width in (1440, 1280, 390):
@@ -137,7 +139,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     self.assertEqual(report["description"], expected_descriptions[module], report)
                     if width > 820:
                         self.assertGreater(report["descriptionRect"]["x"], report["titleRect"]["right"], report)
-                        self.assertLess(abs(report["descriptionRect"]["bottom"] - report["titleRect"]["bottom"]), 2, report)
+                        self.assertLess(abs(report["descriptionFirstLineBottom"] - report["titleRect"]["bottom"]), 2, report)
                     else:
                         self.assertGreaterEqual(report["descriptionRect"]["y"], report["titleRect"]["bottom"], report)
                     self.assertEqual(report["legacyCount"], "", "列表头部仍显示项目计数/排序文案")
@@ -170,9 +172,9 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     pitches:items.slice(1).map((node,index)=>node.getBoundingClientRect().top-items[index].getBoundingClientRect().top)
                   };
                 })()""")
-                self.assertEqual(report["labels"], ["画布", "Hypit", "公众号文章", "素材库"], report)
+                self.assertEqual(report["labels"], ["画布", "Hypit克隆", "公众号文章", "音乐创作", "素材库"], report)
                 self.assertTrue(all(height >= 44 for height in report["heights"]), report)
-                self.assertTrue(all(56 <= pitch <= 64 for pitch in report["pitches"]), report)
+                self.assertTrue(all(52 <= pitch <= 56 for pitch in report["pitches"]), report)
 
     def test_canvas_and_hypit_toolbar_wrap_on_narrow_screens_without_horizontal_overflow(self):
         for module in ("canvas", "hypit"):
@@ -185,6 +187,65 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                 self.assertLessEqual(report["scrollWidth"], report["viewport"], report)
                 self.assertTrue(all(item["parent"] and item["rect"]["width"] > 0 for item in report["controls"]), report)
                 self.assertTrue(all(float(item["fontSize"].removesuffix("px")) >= 12 for item in report["controls"]), report)
+
+    def test_independent_work_pages_have_no_management_return_and_share_three_toolbar_controls(self):
+        browser = self.browser
+        pages = (
+            ("article.html?id=article-fixture", ".article-toolbar-actions", "articleRefreshButton", "articleLanguageButton", "articleThemeButton"),
+            ("music.html?id=music-fixture", ".music-toolbar-actions", "musicRefreshButton", "musicLanguageButton", "musicThemeButton"),
+            ("hypit.html?id=safe-hypit", ".hypit-toolbar-actions", "refresh", "language", "theme"),
+        )
+        for width in (1440, 390):
+            for path, group_selector, refresh_id, language_id, theme_id in pages:
+                with self.subTest(page=path.split("?", 1)[0], width=width):
+                    browser.set_viewport(width)
+                    browser.cdp("Page.navigate", {"url": f"http://127.0.0.1:{_brand.StudioBrandBrowserTests.http_port}/static/{path}"})
+                    loaded = browser.evaluate(f"""(async()=>{{
+                      for(let i=0;i<160;i++){{
+                        if(document.readyState==='complete' && document.querySelector({json.dumps(group_selector)}) &&
+                           document.getElementById({json.dumps(refresh_id)}) && window.StudioTheme && window.StudioI18n) return true;
+                        await new Promise(resolve=>setTimeout(resolve,25));
+                      }} return false;
+                    }})()""")
+                    self.assertTrue(loaded, f"作品页工具没有加载：{path}")
+                    browser.evaluate("StudioI18n.set('zh');StudioTheme.setPreference({version:1,themeId:'studio-violet',appearance:'light'});")
+                    report = browser.evaluate(f"""(() => {{
+                      const group=document.querySelector({json.dumps(group_selector)});
+                      const buttons=[...group.querySelectorAll('button')];
+                      const rect=button=>{{const r=button.getBoundingClientRect();return {{width:r.width,height:r.height,radius:getComputedStyle(button).borderRadius}};}};
+                      return {{
+                        ids:buttons.map(button=>button.id), metrics:buttons.map(rect), gap:getComputedStyle(group).gap,
+                        managementLinks:[...document.querySelectorAll('header a, #empty a')].filter(link=>/管理|项目|projects/i.test(link.textContent+' '+link.getAttribute('href'))).length,
+                        agentButton:!!document.getElementById('musicConnectButton'), connectionDialog:!!document.getElementById('musicConnectionDialog'),
+                        overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,
+                        languageLabel:document.getElementById({json.dumps(language_id)}).getAttribute('aria-label'),
+                        refreshLabel:document.getElementById({json.dumps(refresh_id)}).getAttribute('aria-label')
+                      }};
+                    }})()""")
+                    self.assertEqual(report["ids"], [refresh_id, language_id, theme_id], report)
+                    self.assertEqual(report["metrics"], [{"width": 34, "height": 34, "radius": "9px"}] * 3, report)
+                    self.assertEqual(report["gap"], "7px" if width > 420 else "5px", report)
+                    self.assertEqual(report["managementLinks"], 0, report)
+                    self.assertFalse(report["agentButton"] or report["connectionDialog"], report)
+                    self.assertFalse(report["overflow"], report)
+                    self.assertTrue(report["refreshLabel"] and report["languageLabel"], report)
+
+                    browser.evaluate(f"document.getElementById({json.dumps(language_id)}).click()")
+                    self.assertTrue(browser.evaluate("StudioI18n.lang()==='en'"), f"语言按钮没有切换：{path}")
+                    labels = browser.evaluate(f"""(() => ({{
+                      language:document.getElementById({json.dumps(language_id)}).textContent.trim(),
+                      languageLabel:document.getElementById({json.dumps(language_id)}).getAttribute('aria-label')
+                    }}))()""")
+                    self.assertEqual(labels, {"language": "EN", "languageLabel": "Switch language"}, labels)
+                    before = browser.evaluate("StudioTheme.get()")
+                    browser.evaluate(f"document.getElementById({json.dumps(theme_id)}).click()")
+                    self.assertNotEqual(browser.evaluate("StudioTheme.get()"), before, f"主题按钮没有切换：{path}")
+                    browser.evaluate("window.__toolbarFetches=[];const originalFetch=window.fetch.bind(window);window.fetch=(input,init={})=>{window.__toolbarFetches.push({url:String(input),method:String(init.method||'GET').toUpperCase()});return originalFetch(input,init);};")
+                    browser.evaluate(f"document.getElementById({json.dumps(refresh_id)}).click()")
+                    self.assertTrue(browser.evaluate("(async()=>{for(let i=0;i<40;i++){if(window.__toolbarFetches?.length)return window.__toolbarFetches.some(item=>item.method==='GET');await new Promise(resolve=>setTimeout(resolve,25));}return false;})()"), f"刷新按钮没有调用本页现有读取逻辑：{path}")
+
+        self.open_hypit_projects(1440)
+        self.assertTrue(browser.evaluate("!!document.querySelector('.studio-project-card-actions [data-card-action=connect]')"), "项目管理页的 Agent 接入入口必须保留")
 
     def test_theme_picker_hides_system_and_undo_but_keeps_system_preference_compatible(self):
         browser = self.browser

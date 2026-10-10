@@ -704,7 +704,6 @@
     function applyLanguage(){
         const en=isEnglish();
         document.documentElement.lang=en?'en':'zh-CN';
-        $('#articleBackLink span').textContent=en?'Article projects':'文章项目';
         $('.article-kicker').textContent=en?'WECHAT ARTICLE':'公众号文章';
         $('#articleLayoutsTitle').textContent=en?'Saved layouts':'已有排版';
         $('#articleLayoutHint').textContent=en?'Select a saved layout. Historical versions can be previewed; only layouts matching the current source can be copied or exported.':'选择已保存的排版。历史版本可预览；只有与当前原文匹配的排版可以复制或导出。';

@@ -8,8 +8,9 @@ const params = new URLSearchParams(location.search);
 const canvasId = params.get('id') || '';
 const isHypitSettingsMode = canvasId === 'hypit-settings' && params.get('mode') === 'hypit-settings';
 const isArticleSettingsMode = canvasId === 'article-settings' && params.get('mode') === 'article-settings';
+const isMusicSettingsMode = canvasId === 'music-settings' && params.get('mode') === 'music-settings';
 const isCanvasSettingsMode = canvasId === 'canvas-settings' && params.get('mode') === 'canvas-settings';
-const isSettingsCanvasMode = isHypitSettingsMode || isArticleSettingsMode;
+const isSettingsCanvasMode = isHypitSettingsMode || isArticleSettingsMode || isMusicSettingsMode;
 const isSettingsCanvasEmbedded = isSettingsCanvasMode && params.get('embedded') === '1';
 const isCanvasSettingsEmbedded = isCanvasSettingsMode && params.get('embedded') === '1';
 const HYPIT_OUTPUT_SLOTS = ['text','image','video','audio','music','voice'];
@@ -169,6 +170,12 @@ let hypitModelOptionPendingNodeId = '';
 let hypitModelOptionPendingContextKey = '';
 let modelPricingCatalog = {schema_version:0, default_status:'pending', entries:{}, unit_definitions:{}};
 let modelCapabilityLoadError = '';
+let comfyWorkflowLoadState = 'idle';
+let comfyWorkflowLoadError = '';
+const comfyWorkflowDetailPromises = new Map();
+const comfyWorkflowDetailErrors = new Map();
+const comfyWorkflowDetailStale = new Set();
+let comfyWorkflowCatalogGeneration = 0;
 let smartPriceHighlightKey = '';
 let smartPriceHighlightModelId = '';
 let smartPriceHighlightProviderId = '';
@@ -222,6 +229,14 @@ let imageClickTimer = null;
 let suppressImageClickUntil = 0;
 let lastMouseWorld = null;
 let lastConfigRefreshAt = 0;
+let configRefreshPromise = null;
+let configRefreshPending = false;
+let configRefreshGeneration = 0;
+let configRefreshInvalidateWorkflows = false;
+let assetLibraryLoadGeneration = 0;
+let assetLibraryLoadPromise = null;
+let assetLibraryLoadPending = false;
+let assetLibraryLoadError = '';
 let smartMinimapState = null;
 let smartMinimapDrag = false;
 let zoomPreviewState = null;
@@ -1226,12 +1241,14 @@ async function loadSmartCanvasPersonalization(){
                 .some(key => localValue[key] && Object.keys(localValue[key]).length);
             // reset_epoch 不同意味着另一个标签页完成了明确重置；服务器值优先，旧本地顺序不能复活。
             smartCanvasPersonalization = serverEpoch!==localEpoch || serverHasPreferences || !localHasPreferences ? serverValue : localValue;
+            smartCanvasPersonalizationStore();
             localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalization));
             if(!serverHasPreferences && localHasPreferences) saveSmartCanvasPersonalization();
             return;
         }
     } catch(e) {}
     smartCanvasPersonalization = localValue && typeof localValue === 'object' ? localValue : {};
+    smartCanvasPersonalizationStore();
 }
 
 function discardLegacyParameterVisibilityPreferences(value=smartCanvasPersonalizationStore()){
@@ -1254,19 +1271,22 @@ function discardLegacyParameterVisibilityPreferences(value=smartCanvasPersonaliz
 }
 
 function smartCanvasPersonalizationStore(){
-    if(smartCanvasPersonalization) return smartCanvasPersonalization;
-    try {
-        const parsed = JSON.parse(localStorage.getItem(SMART_CANVAS_PERSONALIZATION_KEY) || '{}');
-        smartCanvasPersonalization = parsed && typeof parsed === 'object' ? parsed : {};
-    } catch(e) {
-        smartCanvasPersonalization = {};
+    if(!smartCanvasPersonalization){
+        try {
+            const parsed = JSON.parse(localStorage.getItem(SMART_CANVAS_PERSONALIZATION_KEY) || '{}');
+            smartCanvasPersonalization = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch(e) {
+            smartCanvasPersonalization = {};
+        }
     }
+    // 老版本或服务端返回的偏好可能只含 executionLayouts；每个入口都补齐
+    // 新增映射，避免排序读取缺失 modelOrder 时中断节点参数面板渲染。
     if(!smartCanvasPersonalization.version) smartCanvasPersonalization.version = 1;
     if(!Number.isInteger(smartCanvasPersonalization.reset_epoch)||smartCanvasPersonalization.reset_epoch<0) smartCanvasPersonalization.reset_epoch = 0;
-    if(!smartCanvasPersonalization.executionLayouts || typeof smartCanvasPersonalization.executionLayouts !== 'object') smartCanvasPersonalization.executionLayouts = {};
-    if(!smartCanvasPersonalization.parameterOptionOrder || typeof smartCanvasPersonalization.parameterOptionOrder !== 'object') smartCanvasPersonalization.parameterOptionOrder = {};
-    if(!smartCanvasPersonalization.modelOrder || typeof smartCanvasPersonalization.modelOrder !== 'object') smartCanvasPersonalization.modelOrder = {};
-    if(!smartCanvasPersonalization.parameterPresentation || typeof smartCanvasPersonalization.parameterPresentation !== 'object') smartCanvasPersonalization.parameterPresentation = {};
+    if(!smartCanvasPersonalization.executionLayouts || typeof smartCanvasPersonalization.executionLayouts !== 'object' || Array.isArray(smartCanvasPersonalization.executionLayouts)) smartCanvasPersonalization.executionLayouts = {};
+    if(!smartCanvasPersonalization.parameterOptionOrder || typeof smartCanvasPersonalization.parameterOptionOrder !== 'object' || Array.isArray(smartCanvasPersonalization.parameterOptionOrder)) smartCanvasPersonalization.parameterOptionOrder = {};
+    if(!smartCanvasPersonalization.modelOrder || typeof smartCanvasPersonalization.modelOrder !== 'object' || Array.isArray(smartCanvasPersonalization.modelOrder)) smartCanvasPersonalization.modelOrder = {};
+    if(!smartCanvasPersonalization.parameterPresentation || typeof smartCanvasPersonalization.parameterPresentation !== 'object' || Array.isArray(smartCanvasPersonalization.parameterPresentation)) smartCanvasPersonalization.parameterPresentation = {};
     return smartCanvasPersonalization;
 }
 function saveSmartCanvasPersonalization(){
@@ -3243,17 +3263,17 @@ if(isSettingsCanvasMode){
 }
 function updateHypitModeUi(){
     if(!isSettingsCanvasMode)return;
-    document.documentElement.dataset.canvasMode=isArticleSettingsMode?'article-settings':'hypit-settings';
+    document.documentElement.dataset.canvasMode=isArticleSettingsMode?'article-settings':isMusicSettingsMode?'music-settings':'hypit-settings';
     document.documentElement.dataset.canvasSettings='true';
     if(isSettingsCanvasEmbedded)document.documentElement.dataset.canvasEmbedded='1';
     hypitCanvasTools?.removeAttribute('hidden');
     const title=document.getElementById('smartTitle');
-    if(title)title.textContent=isArticleSettingsMode?capabilityUiText('文章生成配置','Article generation setup'):capabilityUiText('Hypit 流程设置','Hypit flow settings');
+    if(title)title.textContent=isArticleSettingsMode?capabilityUiText('文章生成配置','Article generation setup'):isMusicSettingsMode?capabilityUiText('音乐生成配置','Music generation setup'):capabilityUiText('Hypit 流程设置','Hypit flow settings');
     const drawerTitle=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head strong');
     const drawerHelp=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head span');
     if(drawerTitle)drawerTitle.textContent=capabilityUiText('输出端口',drawerTitle.dataset.hypitLabelEn||'Output ports');
     if(drawerHelp)drawerHelp.textContent=capabilityUiText('只添加对应输出端口；重复选择会定位已有端口',drawerHelp.dataset.hypitLabelEn||'Adds only this output port; selecting it again focuses the existing one.');
-    if(hypitOutputDrawer)hypitOutputDrawer.setAttribute('aria-label',capabilityUiText(isArticleSettingsMode?'文章输出端口':'Hypit 输出端口',isArticleSettingsMode?'Article output ports':(hypitOutputDrawer.dataset.hypitAriaLabelEn||'Hypit output ports')));
+    if(hypitOutputDrawer)hypitOutputDrawer.setAttribute('aria-label',capabilityUiText(isArticleSettingsMode?'文章输出端口':isMusicSettingsMode?'音乐输出端口':'Hypit 输出端口',isArticleSettingsMode?'Article output ports':isMusicSettingsMode?'Music output ports':(hypitOutputDrawer.dataset.hypitAriaLabelEn||'Hypit output ports')));
     const close=hypitOutputDrawer?.querySelector('[data-hypit-drawer-close]');if(close)close.setAttribute('aria-label',capabilityUiText('关闭',close.dataset.hypitLabelEn||'Close'));
     if(hypitOutputDrawerToggle){
         const label=capabilityUiText('添加输出端口',hypitOutputDrawerToggle.dataset.hypitLabelEn||'Add output port');
@@ -3264,6 +3284,7 @@ function updateHypitModeUi(){
     }
     hypitOutputDrawer?.querySelectorAll('[data-hypit-slot]').forEach(button=>{
         const slot=button.dataset.hypitSlot,span=button.querySelector('span');
+        button.hidden=isMusicSettingsMode&&!['music','image'].includes(slot);
         if(span)span.textContent=hypitSlotName(slot);
     });
     if(typeof requestAnimationFrame==='function')requestAnimationFrame(positionHypitCanvasTools);
@@ -3513,7 +3534,8 @@ async function runHypitExecutionNode(node,requestId=''){
     return operation;
 }
 function addHypitOutput(slot){
-    if(!isSettingsCanvasMode||!HYPIT_OUTPUT_SLOTS.includes(slot)||!canvas)return null;
+    const allowedSlots=isMusicSettingsMode?new Set(['music','image']):new Set(HYPIT_OUTPUT_SLOTS);
+    if(!isSettingsCanvasMode||!allowedSlots.has(slot)||!canvas)return null;
     const existing=nodes.find(node=>isHypitOutputNode(node)&&node.hypitSlot===slot);
     if(existing){selectedId=existing.id;selectedIds=[];render();focusSmartNodeInViewport(existing.id);return existing;}
     pushUndo();
@@ -3573,7 +3595,7 @@ function removeHypitOutput(nodeId){
     render();scheduleSave();return true;
 }
 async function prepareHypitReset(){
-    if(!isSettingsCanvasMode||!['hypit-settings','article-settings'].includes(canvasId)||!canvas)return false;
+    if(!isSettingsCanvasMode||!['hypit-settings','article-settings','music-settings'].includes(canvasId)||!canvas)return false;
     hypitResetPending=true;clearTimeout(saveTimer);saveTimer=null;canvasSyncSaveQueued=false;
     const started=Date.now();
     while(canvasSyncInFlight&&Date.now()-started<15000)await hypitSleep(40);
@@ -4210,7 +4232,7 @@ function hypitModelSlotContext(node){
 function requestHypitModelOptions(slot){
     if(hypitSlotModelOptionLoads.has(slot)) return hypitSlotModelOptionLoads.get(slot);
     const generation = hypitModelOptionGeneration;
-    const moduleId=isArticleSettingsMode?'article':'hypit';
+    const moduleId=isArticleSettingsMode?'article':isMusicSettingsMode?'music':'hypit';
     const query = new URLSearchParams({module_id:moduleId, slot_id:slot});
     let promise;
     promise = (async()=>{
@@ -4304,7 +4326,9 @@ function updateHypitModelOptionCatalogRevision(revision){
     if(next) hypitModelOptionCatalogRevision = next;
 }
 async function loadCanvasModelManagementCatalog(){
-    if(!isCanvasSettingsMode)return;
+    if(!isCanvasSettingsMode)return {changed:false,ok:true};
+    const beforeCatalog=JSON.stringify(canvasModelManagementCatalog||{});
+    const beforeError=String(canvasModelManagementCatalogError||'');
     canvasModelManagementCatalogError='';
     try{
         const response=await fetch('/api/studio/canvas/model-management-catalog',{cache:'no-store'});
@@ -4312,41 +4336,27 @@ async function loadCanvasModelManagementCatalog(){
         if(!response.ok)throw new Error(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`);
         if(!Array.isArray(payload?.options)||!String(payload?.catalog_revision||''))throw new Error(capabilityUiText('服务没有返回有效的模型管理目录','The server did not return a valid model management catalog'));
         canvasModelManagementCatalog={options:payload.options,catalog:payload.catalog&&Array.isArray(payload.catalog.providers)?payload.catalog:null,catalog_revision:String(payload.catalog_revision),selection_contract_version:payload.selection_contract_version||0};
+        const changed=beforeCatalog!==JSON.stringify(canvasModelManagementCatalog)||beforeError!=='';
+        return {changed,ok:true};
     }catch(error){
-        canvasModelManagementCatalog={options:[],catalog:null,catalog_revision:'',selection_contract_version:0};
         canvasModelManagementCatalogError=String(error?.message||error);
+        return {changed:beforeError!==canvasModelManagementCatalogError,ok:false};
     }
 }
 async function refreshCanvasPickerSources(){
     if(canvasPickerCatalogRefreshPromise) return canvasPickerCatalogRefreshPromise;
     canvasPickerCatalogRefreshPromise=(async()=>{
-        const beforeConfig=JSON.stringify(apiProviders);
-        const beforeCatalog=JSON.stringify(modelCapabilityCatalog||{});
-        const beforeManagementCatalog=JSON.stringify(canvasModelManagementCatalog||{});
-        const [configResult,catalogResult]=await Promise.allSettled([
-            fetch('/api/config',{cache:'no-store'}).then(async response=>{
-                if(!response.ok)throw new Error(`HTTP ${response.status}`);
-                return response.json();
-            }),
-            fetch('/api/model-capabilities',{cache:'no-store'}).then(async response=>{
-                if(!response.ok)throw new Error(`HTTP ${response.status}`);
-                return response.json();
-            })
+        const [configResult,preferencesUpdated]=await Promise.all([
+            loadConfig(),
+            refreshSmartCanvasPersonalizationForUse()
         ]);
-        if(configResult.status==='fulfilled'){
-            const config=configResult.value||{};
-            if(Array.isArray(config.api_providers)) apiProviders=config.api_providers.map(provider=>SMART_NODE_CONTRACT.hydrateRunningHubProviderApps(provider));
-        }
-        if(catalogResult.status==='fulfilled'&&Array.isArray(catalogResult.value?.providers)){
-            modelCapabilityCatalog=catalogResult.value;
-            updateHypitModelOptionCatalogRevision(modelCapabilityCatalog.catalog_revision);
-        }
-        if(isCanvasSettingsMode) await loadCanvasModelManagementCatalog();
-        const preferencesUpdated=await refreshSmartCanvasPersonalizationForUse();
-        const configChanged=beforeConfig!==JSON.stringify(apiProviders);
-        const catalogChanged=beforeCatalog!==JSON.stringify(modelCapabilityCatalog||{});
-        const managementCatalogChanged=beforeManagementCatalog!==JSON.stringify(canvasModelManagementCatalog||{});
-        return {configChanged,catalogChanged,managementCatalogChanged,preferencesUpdated,ok:configResult.status==='fulfilled'||catalogResult.status==='fulfilled'};
+        return {
+            configChanged:Boolean(configResult?.configChanged),
+            catalogChanged:Boolean(configResult?.catalogChanged),
+            managementCatalogChanged:Boolean(configResult?.managementCatalogChanged),
+            preferencesUpdated,
+            ok:Boolean(configResult?.ok)
+        };
     })().finally(()=>{canvasPickerCatalogRefreshPromise=null;});
     return canvasPickerCatalogRefreshPromise;
 }
@@ -7372,12 +7382,92 @@ function normalizeApiSizeSettings(prefix=''){
     if(!allowAuto && settings[resKey] === 'auto') settings[resKey] = '1k';
     if(settings[resKey] === 'auto' && !settings[ratioKey]) settings[ratioKey] = 'square';
 }
-async function ensureComfyWorkflow(name){
-    if(!name) return null;
-    if(comfyWorkflowCache[name]) return comfyWorkflowCache[name];
-    const data = await fetch(`/api/workflows/${encodeURIComponent(name)}`).then(r => r.ok ? r.json() : null).catch(() => null);
-    if(data) comfyWorkflowCache[name] = data;
+async function ensureComfyWorkflow(name,{force=false}={}){
+    const workflowName=String(name||'').trim();
+    if(!workflowName) return null;
+    if(!force&&comfyWorkflowCache[workflowName]&&!comfyWorkflowDetailStale.has(workflowName)) return comfyWorkflowCache[workflowName];
+    if(comfyWorkflowDetailPromises.has(workflowName))return comfyWorkflowDetailPromises.get(workflowName);
+    const generation=comfyWorkflowCatalogGeneration;
+    let promise;
+    promise=(async()=>{
+        try{
+            const response=await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`,{cache:'no-store'});
+            if(!response.ok)throw new Error(await smartResponseErrorMessage(response,capabilityUiText('读取工作流参数失败','Could not load workflow parameters')));
+            const data=await response.json();
+            if(!data||typeof data!=='object'||!data.config||!Array.isArray(data.config.fields)){
+                throw new Error(capabilityUiText('工作流没有返回有效的参数结构。','The workflow did not return a valid parameter schema.'));
+            }
+            if(generation!==comfyWorkflowCatalogGeneration)return null;
+            comfyWorkflowCache[workflowName]=data;
+            comfyWorkflowDetailErrors.delete(workflowName);
+            comfyWorkflowDetailStale.delete(workflowName);
+            return data;
+        }catch(error){
+            if(generation===comfyWorkflowCatalogGeneration)comfyWorkflowDetailErrors.set(workflowName,String(error?.message||error));
+            return null;
+        }finally{
+            if(comfyWorkflowDetailPromises.get(workflowName)===promise)comfyWorkflowDetailPromises.delete(workflowName);
+        }
+    })();
+    comfyWorkflowDetailPromises.set(workflowName,promise);
+    return promise;
+}
+async function requireReadyComfyWorkflow(name){
+    const workflowName=String(name||'').trim();
+    if(!workflowName)throw new Error(capabilityUiText('请先选择本地 ComfyUI 工作流','Select a local ComfyUI workflow first'));
+    if(comfyWorkflowLoadState==='loading'||comfyWorkflowLoadState==='idle'){
+        throw new Error(capabilityUiText('本地工作流目录仍在读取，请稍后重试。','The local workflow list is still loading. Try again shortly.'));
+    }
+    if(comfyWorkflowLoadState==='error'){
+        throw new Error(`${capabilityUiText('无法确认本地工作流目录','Could not verify the local workflow list')}${comfyWorkflowLoadError?` · ${comfyWorkflowLoadError}`:''}`);
+    }
+    if(!comfyWorkflows.some(workflow=>String(workflow?.name||'')===workflowName)){
+        throw new Error(capabilityUiText('所选工作流不在当前可用目录中；已保留原选择，请重新确认工作流。','The selected workflow is not in the available list. Its saved selection was kept; verify the workflow before running.'));
+    }
+    const data=await ensureComfyWorkflow(workflowName);
+    if(!data){
+        throw new Error(comfyWorkflowDetailErrors.get(workflowName)
+            ||capabilityUiText('读取所选工作流参数失败，请检查工作流配置后重试。','Could not load the selected workflow parameters. Check the workflow configuration and retry.'));
+    }
     return data;
+}
+function comfyWorkflowSelectionError(name){
+    const workflowName=String(name||'').trim();
+    if(!workflowName)return capabilityUiText('请先选择本地 ComfyUI 工作流','Select a local ComfyUI workflow first');
+    if(comfyWorkflowLoadState==='loading'||comfyWorkflowLoadState==='idle')return capabilityUiText('本地工作流目录仍在读取，请稍后重试。','The local workflow list is still loading. Try again shortly.');
+    if(comfyWorkflowLoadState==='error')return `${capabilityUiText('无法确认本地工作流目录','Could not verify the local workflow list')}${comfyWorkflowLoadError?` · ${comfyWorkflowLoadError}`:''}`;
+    if(!comfyWorkflows.some(workflow=>String(workflow?.name||'')===workflowName))return capabilityUiText('所选工作流不在当前可用目录中；已保留原选择，请重新确认工作流。','The selected workflow is not in the available list. Its saved selection was kept; verify the workflow before running.');
+    return '';
+}
+function ensureComfyWorkflowForCurrentSelection(name,{force=false}={}){
+    const workflowName=String(name||'').trim();
+    const subjectId=String(activeSettingsSubject()?.id||'');
+    const beforeData=JSON.stringify(comfyWorkflowCache[workflowName]||null);
+    const beforeError=comfyWorkflowDetailErrors.get(workflowName)||'';
+    return ensureComfyWorkflow(workflowName,{force}).then(data=>{
+        const changed=beforeData!==JSON.stringify(comfyWorkflowCache[workflowName]||null)
+            ||beforeError!==(comfyWorkflowDetailErrors.get(workflowName)||'');
+        if(String(activeSettingsSubject()?.id||'')===subjectId
+            &&String(settings.comfyWorkflow||'').trim()===workflowName
+            &&String(dynamicParams?.dataset?.smartNodeId||'')===subjectId&&changed){
+            renderDynamicParams();
+        }
+        return data;
+    });
+}
+function invalidateComfyWorkflowDetails(){
+    comfyWorkflowCatalogGeneration++;
+    Object.keys(comfyWorkflowCache||{}).forEach(name=>comfyWorkflowDetailStale.add(name));
+    comfyWorkflowDetailPromises.clear();
+}
+function comfyWorkflowListStatusNote(){
+    if(comfyWorkflowLoadState==='loading'||comfyWorkflowLoadState==='idle'){
+        return `<div class="muted-note" role="status">${escapeHtml(capabilityUiText('正在读取本地工作流目录…','Loading local workflows…'))}</div>`;
+    }
+    if(comfyWorkflowLoadState==='error'){
+        return `<div class="muted-note warning" role="alert">${escapeHtml(capabilityUiText('读取本地工作流目录失败','Could not load local workflows'))}${comfyWorkflowLoadError?` · ${escapeHtml(comfyWorkflowLoadError)}`:''} <button type="button" class="smart-inline-retry" data-comfy-workflow-retry>${escapeHtml(capabilityUiText('重试','Retry'))}</button></div>`;
+    }
+    return '';
 }
 function currentComfyFields(){
     return comfyWorkflowCache[settings.comfyWorkflow]?.config?.fields || [];
@@ -7561,7 +7651,7 @@ function mountCanvasModelConfigPickers(subject){
     if(canvasModelConfigInstance){ canvasModelConfigInstance.destroy(); canvasModelConfigInstance = null; }
     canvasModelConfigInstance = window.mountModelConfigControl(container, {
         context:{
-            host:'canvas', moduleId:isSettingsCanvasMode?(isArticleSettingsMode?'article':'hypit'):'canvas',
+            host:'canvas', moduleId:isSettingsCanvasMode?(isArticleSettingsMode?'article':isMusicSettingsMode?'music':'hypit'):'canvas',
             slotId:isSettingsCanvasMode?(hypitModelSlotContext(subject)?.slots?.[0] || canvasSelectionNodeType(subject)):canvasSelectionNodeType(subject), phase:'live',
             nodeId:String(subject.id || '')
         },
@@ -8256,8 +8346,12 @@ function renderComfyParams(){
         ['custom', tr('canvas.comfyModeCustom') || '自定义']
     ];
     if(settings.comfyMode === 'custom'){
-        if(!settings.comfyWorkflow || !comfyWorkflows.some(w => w.name === settings.comfyWorkflow)) settings.comfyWorkflow = comfyWorkflows[0]?.name || '';
-        if(settings.comfyWorkflow && !comfyWorkflowCache[settings.comfyWorkflow]) ensureComfyWorkflow(settings.comfyWorkflow).then(renderDynamicParams);
+        if(!settings.comfyWorkflow&&comfyWorkflowLoadState==='ready') settings.comfyWorkflow = comfyWorkflows[0]?.name || '';
+        const workflowListed=comfyWorkflows.some(item=>String(item?.name||'')===String(settings.comfyWorkflow||''));
+        if(settings.comfyWorkflow && !comfyWorkflowCache[settings.comfyWorkflow]
+            &&(comfyWorkflowLoadState==='loading'||comfyWorkflowLoadState==='idle'||workflowListed)){
+            ensureComfyWorkflowForCurrentSelection(settings.comfyWorkflow);
+        }
     }
     let html = '';
     if(settings.comfyMode === 'text'){
@@ -8274,7 +8368,12 @@ function renderComfyParams(){
         const wf = comfyWorkflowCache[settings.comfyWorkflow];
         const fields = (wf?.config?.fields || []).filter(f => comfyFieldKind(f) === 'setting');
         html += renderComfyWorkflowControl();
-        html += fields.length ? fields.map(renderComfySettingField).join('') : (settings.comfyWorkflow ? '' : `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`);
+        if(fields.length) html += fields.map(renderComfySettingField).join('');
+        else if(!settings.comfyWorkflow&&comfyWorkflowLoadState==='ready') html += `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`;
+        else if(settings.comfyWorkflow&&!wf){
+            const detailError=comfyWorkflowDetailErrors.get(String(settings.comfyWorkflow))||'';
+            html += `<div class="muted-note ${detailError?'warning':''}" role="${detailError?'alert':'status'}">${detailError?escapeHtml(detailError):escapeHtml(capabilityUiText('正在读取所选工作流参数…','Loading the selected workflow parameters…'))} ${detailError?`<button type="button" class="smart-inline-retry" data-comfy-workflow-detail-retry="${escapeAttr(settings.comfyWorkflow)}">${escapeHtml(capabilityUiText('重试','Retry'))}</button>`:''}</div>`;
+        }
     }
     dynamicParams.innerHTML = `
         ${localWorkflowNode ? '' : `<div class="smart-control comfy-mode-control">
@@ -8303,9 +8402,14 @@ function renderUpscalePill(paramKey, current){
     </div>`;
 }
 function renderComfyWorkflowControl(){
-    if(!comfyWorkflows.length) return `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`;
-    const current = comfyWorkflows.find(w => w.name === settings.comfyWorkflow) || comfyWorkflows[0];
-    const label = current?.title || (current?.name || '').replace('.json','') || tr('smart.workflow');
+    const statusNote=comfyWorkflowListStatusNote();
+    const workflowName=String(settings.comfyWorkflow||'').trim();
+    const current = comfyWorkflows.find(w => w.name === workflowName) || null;
+    const label = current?.title || workflowName.replace('.json','') || tr('smart.workflow');
+    if(comfyWorkflowLoadState==='ready'&&!comfyWorkflows.length){
+        return `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`;
+    }
+    const selectionMissing=comfyWorkflowLoadState==='ready'&&workflowName&&!current;
     return `<div class="smart-control workflow-control">
         <button class="smart-pill" type="button"><i data-lucide="layers"></i><span class="sub">${escapeHtml(label)}</span></button>
         <div class="smart-popover compact-popover">
@@ -8314,7 +8418,16 @@ function renderComfyWorkflowControl(){
                 ${comfyWorkflows.map(w => `<button type="button" class="direct-option ${w.name === settings.comfyWorkflow ? 'active' : ''}" data-smart-param="comfyWorkflow" data-smart-value="${escapeHtml(w.name)}"><span>${escapeHtml(w.title || w.name.replace('.json',''))}</span></button>`).join('')}
             </div>
         </div>
+        ${statusNote}${selectionMissing?`<div class="muted-note warning" role="alert">${escapeHtml(capabilityUiText('已保存的工作流当前不在可用目录中，保留原选择；请确认本地工作流后再运行。','The saved workflow is not in the available list. The selection was kept; verify the local workflow before running.'))}</div>`:''}
     </div>`;
+}
+async function retryComfyWorkflowCatalog(){
+    if(comfyWorkflowLoadState==='loading')return;
+    comfyWorkflowLoadState='loading';
+    comfyWorkflowLoadError='';
+    renderDynamicParams();
+    const generation=++configRefreshGeneration;
+    await loadConfigAuxiliary(generation);
 }
 function renderSizeControls(prefix='', includeSource=false){
     const ratioKey = prefix ? `${prefix}Ratio` : 'ratio';
@@ -9400,7 +9513,8 @@ function setDynamicSetting(key, value){
     }
     if(key === 'comfyWorkflow') {
         settings.comfyParams = {};
-        ensureComfyWorkflow(settings.comfyWorkflow).then(renderDynamicParams);
+        comfyWorkflowDetailErrors.delete(String(settings.comfyWorkflow||''));
+        ensureComfyWorkflowForCurrentSelection(settings.comfyWorkflow);
     }
     if(key === 'rhConfigKey'){
         settings.rhParams = {};
@@ -9993,6 +10107,21 @@ function moveCapabilityOptionByKeyboard(event,handle){
     handle.focus({preventScroll:true});
 }
 function bindDynamicParams(){
+    dynamicParams.querySelectorAll('[data-comfy-workflow-retry]').forEach(button=>{
+        button.onclick=event=>{
+            event.preventDefault();event.stopPropagation();
+            retryComfyWorkflowCatalog();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-comfy-workflow-detail-retry]').forEach(button=>{
+        button.onclick=event=>{
+            event.preventDefault();event.stopPropagation();
+            const workflowName=button.dataset.comfyWorkflowDetailRetry||'';
+            comfyWorkflowDetailErrors.delete(workflowName);
+            if(settings.comfyWorkflow===workflowName)renderDynamicParams();
+            ensureComfyWorkflowForCurrentSelection(workflowName);
+        };
+    });
     dynamicParams.querySelectorAll('[data-model-enablement-toggle]').forEach(input=>{
         input.addEventListener('change',()=>{
             const optionId=input.dataset.modelEnablementOptionId||'';
@@ -10122,9 +10251,9 @@ function bindDynamicParams(){
                 }
             } else return;
             if(stage !== 'variant') capabilityPickerDrafts.set(draftKey, draft);
-            // 运行模式是选择链的最后一段：选中即确定，随即收起整个参数选择弹层。
-            // 模型 / 平台仍保持打开，交由 restoreOpenControl 在重渲染后自动恢复。
-            if(stage === 'variant'){
+            // 正式画布沿用“选中模式后收起”的既有行为；设置管理画布需连续比较
+            // 候选并启停精确项，因此选中模式后仍留在第四栏。
+            if(stage === 'variant' && !isCanvasSettingsMode){
                 button.closest('[data-capability-model-picker]')?.classList.remove('pinned');
             }
             if(stage === 'variant') ensureExecutionSelectionDefaults(settings, node);
@@ -10133,6 +10262,11 @@ function bindDynamicParams(){
                 persistActiveSmartSettings();
                 scheduleSave();
                 render();
+                if(!isCanvasSettingsMode){
+                    const currentPicker=dynamicParams?.querySelector('[data-capability-model-picker]');
+                    currentPicker?.classList.remove('pinned');
+                    currentPicker?.querySelector(':scope > .smart-pill')?.setAttribute('aria-expanded','false');
+                }
             }
         };
     });
@@ -10585,61 +10719,175 @@ function bindDynamicParams(){
         };
     });
 }
-async function loadConfig(){
-    try {
-        const [cfg, catalog, pricing] = await Promise.all([
-            fetch('/api/config').then(r => r.json()),
-            fetch('/api/model-capabilities', {cache:'no-store'}).then(async r => {
-                if(!r.ok) throw new Error(await smartResponseErrorMessage(r, '能力档案加载失败'));
-                return r.json();
-            }).catch(error => {
-                modelCapabilityLoadError = error?.message || '能力档案加载失败';
-                return {schema_version:0, providers:[]};
-            }),
-            fetch('/api/model-pricing').then(async r => r.ok ? r.json() : null).catch(() => null)
-        ]);
-        apiProviders = Array.isArray(cfg.api_providers)
-            ? cfg.api_providers.map(provider => SMART_NODE_CONTRACT.hydrateRunningHubProviderApps(provider))
-            : [];
-        modelCapabilityCatalog = Array.isArray(catalog?.providers) ? catalog : {schema_version:0, providers:[]};
+async function refreshConfigSnapshot(){
+    const beforeProviders=JSON.stringify(apiProviders||[]);
+    const beforeCatalog=JSON.stringify(modelCapabilityCatalog||{});
+    const beforeManagement=JSON.stringify(canvasModelManagementCatalog||{});
+    const beforeSettings=JSON.stringify(settings||{});
+    const beforeErrors=JSON.stringify({config:window.__smartConfigLoadError||'',catalog:modelCapabilityLoadError||'',management:canvasModelManagementCatalogError||''});
+    const [configResult,catalogResult]=await Promise.allSettled([
+        fetch('/api/config',{cache:'no-store'}).then(async response=>{
+            if(!response.ok)throw new Error(await smartResponseErrorMessage(response,'设置读取失败'));
+            return response.json();
+        }),
+        fetch('/api/model-capabilities',{cache:'no-store'}).then(async response=>{
+            if(!response.ok)throw new Error(await smartResponseErrorMessage(response,'能力档案加载失败'));
+            return response.json();
+        })
+    ]);
+    let configError='';
+    let configAccepted=false;
+    let catalogAccepted=false;
+    if(configResult.status==='fulfilled'&&Array.isArray(configResult.value?.api_providers)){
+        const cfg=configResult.value;
+        const nextProviders=cfg.api_providers.map(provider=>SMART_NODE_CONTRACT.hydrateRunningHubProviderApps(provider));
+        const providersChanged=beforeProviders!==JSON.stringify(nextProviders);
+        apiProviders=nextProviders;
+        comfyInstanceCount=Math.max(1,(Array.isArray(cfg.comfy_instances)?cfg.comfy_instances:[]).filter(Boolean).length||1);
+        if(providersChanged)runningHubWorkflowCache={};
+        configAccepted=true;
+    }else{
+        configError=configResult.status==='rejected'
+            ?String(configResult.reason?.message||configResult.reason||tr('smart.toastApiSettingsFail'))
+            :capabilityUiText('设置服务没有返回有效的平台配置。','The settings service did not return a valid provider configuration.');
+    }
+    if(catalogResult.status==='fulfilled'&&Array.isArray(catalogResult.value?.providers)){
+        modelCapabilityCatalog=catalogResult.value;
+        modelCapabilityLoadError='';
         updateHypitModelOptionCatalogRevision(modelCapabilityCatalog.catalog_revision);
         window.dispatchEvent(new Event('canvas-capabilities-ready'));
-        modelPricingCatalog = pricing && typeof pricing === 'object' ? pricing : {schema_version:0, default_status:'pending', entries:{}, unit_definitions:{}};
-        if(smartPriceComparisonPanel?.classList.contains('open')){
-            populatePriceComparisonFilters();
-            renderPriceComparisonTable();
-        }
-        comfyInstanceCount = Math.max(1, (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : []).filter(Boolean).length || 1);
-        // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
-        sanitizeSmartApiSelection(settings);
-        updateProviderModels();
-        if(isCanvasSettingsMode) await loadCanvasModelManagementCatalog();
-        const wf = await fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows:[]}));
-        comfyWorkflows = Array.isArray(wf.workflows) ? wf.workflows : [];
-        runningHubWorkflowCache = {};
-        const rhProvider = apiProviders.find(p => p.id === 'runninghub');
-        const rhRegions = runningHubEnabledRegions(rhProvider);
-        const rhWorkflowRequests = rhRegions.flatMap(region => runningHubEntries('workflow', {rhRegion:region})
-            .map(item => ({workflowId:String(item.workflowId || item.id || '').trim(), region}))
-            .filter(item => item.workflowId));
-        await Promise.all(rhWorkflowRequests.map(async request => {
-            try { await ensureRunningHubWorkflow(request.workflowId, {}, {rhRegion:request.region}); } catch(_) {}
-        }));
-        lastConfigRefreshAt = Date.now();
-        sanitizeSmartApiSelection(settings);
-        updateProviderModels();
-    } catch(e) {
-        toast(tr('smart.toastApiSettingsFail'));
+        catalogAccepted=true;
+    }else{
+        modelCapabilityLoadError=catalogResult.status==='rejected'
+            ?String(catalogResult.reason?.message||catalogResult.reason||capabilityUiText('能力档案加载失败','Capability catalog could not be loaded'))
+            :capabilityUiText('服务没有返回有效的能力档案。','The service did not return a valid capability catalog.');
     }
+    const managementResult=isCanvasSettingsMode?await loadCanvasModelManagementCatalog():{changed:false,ok:true};
+    const configChanged=beforeProviders!==JSON.stringify(apiProviders||[]);
+    const catalogChanged=beforeCatalog!==JSON.stringify(modelCapabilityCatalog||{});
+    const managementCatalogChanged=beforeManagement!==JSON.stringify(canvasModelManagementCatalog||{});
+    if(configAccepted)sanitizeSmartApiSelection(settings);
+    const settingsChanged=beforeSettings!==JSON.stringify(settings||{});
+    const errorsChanged=beforeErrors!==JSON.stringify({config:configError,catalog:modelCapabilityLoadError||'',management:canvasModelManagementCatalogError||''});
+    if(configError){window.__smartConfigLoadError=configError;toast(tr('smart.toastApiSettingsFail'));}
+    else window.__smartConfigLoadError='';
+    if(configAccepted||catalogAccepted)lastConfigRefreshAt=Date.now();
+    const generation=++configRefreshGeneration;
+    const invalidateWorkflows=configRefreshInvalidateWorkflows;
+    configRefreshInvalidateWorkflows=false;
+    void loadConfigAuxiliary(generation,{invalidateWorkflows});
+    return {
+        ok:configAccepted||catalogAccepted,
+        configChanged,catalogChanged,managementCatalogChanged,settingsChanged,errorsChanged,
+        configAccepted,catalogAccepted,managementOk:managementResult.ok
+    };
 }
-async function refreshSmartConfigFromSettings(){
-    await loadConfig();
-    renderDynamicParams();
-    const node = selectedNode();
-    if(node?.type === 'smart-prompt') {
+function mergeConfigRefreshResult(target,source){
+    ['ok','configChanged','catalogChanged','managementCatalogChanged','settingsChanged','errorsChanged','configAccepted','catalogAccepted','managementOk'].forEach(key=>{
+        target[key]=Boolean(target[key]||source?.[key]);
+    });
+    return target;
+}
+function loadConfig({invalidateWorkflows=false}={}){
+    if(invalidateWorkflows)configRefreshInvalidateWorkflows=true;
+    if(configRefreshPromise){
+        configRefreshPending=true;
+        return configRefreshPromise;
+    }
+    const aggregate={ok:false,configChanged:false,catalogChanged:false,managementCatalogChanged:false,settingsChanged:false,errorsChanged:false,configAccepted:false,catalogAccepted:false,managementOk:true};
+    configRefreshPromise=(async()=>{
+        do{
+            configRefreshPending=false;
+            try{mergeConfigRefreshResult(aggregate,await refreshConfigSnapshot());}
+            catch(error){
+                window.__smartConfigLoadError=String(error?.message||error);
+                toast(tr('smart.toastApiSettingsFail'));
+                aggregate.errorsChanged=true;
+            }
+        }while(configRefreshPending);
+        return aggregate;
+    })().finally(()=>{configRefreshPromise=null;});
+    return configRefreshPromise;
+}
+async function loadConfigAuxiliary(generation,{invalidateWorkflows=false}={}){
+    const previousState=comfyWorkflowLoadState;
+    if(invalidateWorkflows||previousState==='idle')comfyWorkflowLoadState='loading';
+    if(invalidateWorkflows)invalidateComfyWorkflowDetails();
+    const [pricingResult,workflowsResult]=await Promise.allSettled([
+        fetch('/api/model-pricing',{cache:'no-store'}).then(async response=>{
+            if(!response.ok)throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        }),
+        fetch('/api/workflows',{cache:'no-store'}).then(async response=>{
+            if(!response.ok)throw new Error(await smartResponseErrorMessage(response,'工作流目录读取失败'));
+            return response.json();
+        })
+    ]);
+    if(generation!==configRefreshGeneration)return;
+    let priceChanged=false;
+    if(pricingResult.status==='fulfilled'&&pricingResult.value&&typeof pricingResult.value==='object'){
+        const nextPricing=pricingResult.value;
+        priceChanged=JSON.stringify(modelPricingCatalog)!==JSON.stringify(nextPricing);
+        modelPricingCatalog=nextPricing;
+    }
+    const beforeWorkflows=JSON.stringify(comfyWorkflows||[]);
+    if(workflowsResult.status==='fulfilled'&&Array.isArray(workflowsResult.value?.workflows)){
+        comfyWorkflows=workflowsResult.value.workflows;
+        comfyWorkflowLoadState='ready';
+        comfyWorkflowLoadError='';
+    }else{
+        comfyWorkflowLoadState='error';
+        comfyWorkflowLoadError=workflowsResult.status==='rejected'
+            ?String(workflowsResult.reason?.message||workflowsResult.reason||capabilityUiText('读取工作流目录失败','Could not load the workflow list'))
+            :capabilityUiText('服务没有返回有效的工作流目录。','The service did not return a valid workflow list.');
+    }
+    const workflowCatalogChanged=beforeWorkflows!==JSON.stringify(comfyWorkflows||[]);
+    if(workflowCatalogChanged){
+        if(!invalidateWorkflows)invalidateComfyWorkflowDetails();
+        comfyWorkflowCache={};
+        comfyWorkflowDetailPromises.clear();
+        comfyWorkflowDetailErrors.clear();
+        comfyWorkflowDetailStale.clear();
+    }
+    let selectedDetailChanged=false;
+    const currentWorkflowName=String(settings.comfyWorkflow||'').trim();
+    if((invalidateWorkflows||workflowCatalogChanged)&&comfyWorkflowLoadState==='ready'
+        &&currentWorkflowName&&comfyWorkflows.some(item=>String(item?.name||'')===currentWorkflowName)){
+        const oldData=JSON.stringify(comfyWorkflowCache[currentWorkflowName]||null);
+        const oldError=comfyWorkflowDetailErrors.get(currentWorkflowName)||'';
+        await ensureComfyWorkflow(currentWorkflowName,{force:true});
+        if(generation!==configRefreshGeneration)return {stale:true};
+        selectedDetailChanged=oldData!==JSON.stringify(comfyWorkflowCache[currentWorkflowName]||null)
+            ||oldError!==(comfyWorkflowDetailErrors.get(currentWorkflowName)||'');
+    }
+    const workflowsChanged=workflowCatalogChanged
+        ||previousState!==comfyWorkflowLoadState||selectedDetailChanged;
+    if(priceChanged&&smartPriceComparisonPanel?.classList.contains('open')){
+        populatePriceComparisonFilters();
+        renderPriceComparisonTable();
+    }
+    if(workflowsChanged){
+        const node=activeSettingsSubject();
+        const usesComfy=node?.type===SMART_NODE_TYPES.comfyWorkflow||settings.engine==='comfy';
+        const focusedControl=dynamicParams?.contains(document.activeElement);
+        if(usesComfy&&!focusedControl)renderDynamicParams();
+    }
+    return {pricingChanged:priceChanged,workflowsChanged,previousState};
+}
+async function refreshSmartConfigFromSettings({invalidateWorkflows=false}={}){
+    const result=await loadConfig({invalidateWorkflows});
+    const changed=result.configChanged||result.catalogChanged||result.managementCatalogChanged||result.settingsChanged||result.errorsChanged;
+    if(!changed)return result;
+    const node=selectedNode();
+    if(node?.type==='smart-prompt'&&result.configChanged){
         applySettingsToNode(node);
         render();
+    }else{
+        const picker=dynamicParams?.querySelector('.smart-control.pinned');
+        if(picker?.matches('[data-capability-model-picker]'))rerenderOpenCapabilityPicker(picker,String(activeSettingsSubject()?.id||''));
+        else renderDynamicParams();
     }
+    return result;
 }
 function loadPromptPresets(){
     try {
@@ -11532,23 +11780,60 @@ function setActiveAssetTabCategory(categoryId=''){
     else activeAssetCategoryId = categoryId || '';
 }
 async function loadAssetLibrary(){
-    try {
-        const [data, localData, resultData] = await Promise.all([
-            fetch('/api/asset-library').then(r => r.json()),
-            fetch('/api/local-assets').then(r => r.ok ? r.json() : {items:[], tree:null}).catch(() => ({items:[], tree:null})),
-            fetch('/api/results?kind=all').then(r => r.ok ? r.json() : {items:[], canvases:[], counts:{}}).catch(() => ({items:[], canvases:[], counts:{}}))
-        ]);
-        localAssetLibrary = {items:Array.isArray(localData.items) ? localData.items : [], tree:localData.tree || null};
-        generationResults = {
-            items:Array.isArray(resultData.items) ? resultData.items : [],
-            canvases:Array.isArray(resultData.canvases) ? resultData.canvases : [],
-            counts:resultData.counts || {}
-        };
-        setAssetLibraryFromResponse(data, {render:false});
-        renderAssetLibrary();
-    } catch(e) {
-        toast(tr('smart.assetLoadFail'));
-    }
+    if(assetLibraryLoadPromise){assetLibraryLoadPending=true;return assetLibraryLoadPromise;}
+    assetLibraryLoadPromise=(async()=>{
+        const aggregate={ok:false,changed:false,error:''};
+        do{
+            assetLibraryLoadPending=false;
+            const generation=++assetLibraryLoadGeneration;
+            const before=JSON.stringify({assetLibrary,localAssetLibrary,generationResults,assetLibraryUpdatedAt,
+                activeAssetLibraryId,activeAssetCategoryId,activeWorkflowAssetLibraryId,activeWorkflowAssetCategoryId,mentionAssetCategoryId});
+            const settled=await Promise.allSettled([
+                fetch('/api/asset-library',{cache:'no-store'}).then(async response=>{
+                    if(!response.ok)throw new Error(await smartResponseErrorMessage(response,tr('smart.assetLoadFail')));
+                    return response.json();
+                }),
+                fetch('/api/local-assets',{cache:'no-store'}).then(async response=>{
+                    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+                    return response.json();
+                }),
+                fetch('/api/results?kind=all',{cache:'no-store'}).then(async response=>{
+                    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+                    return response.json();
+                })
+            ]);
+            if(generation!==assetLibraryLoadGeneration)continue;
+            const [libraryResult,localResult,resultResult]=settled;
+            const errors=[];
+            if(libraryResult.status==='fulfilled')setAssetLibraryFromResponse(libraryResult.value||{},{render:false});
+            else errors.push(String(libraryResult.reason?.message||libraryResult.reason||tr('smart.assetLoadFail')));
+            if(localResult.status==='fulfilled'&&localResult.value&&typeof localResult.value==='object'){
+                localAssetLibrary={items:Array.isArray(localResult.value.items)?localResult.value.items:(localAssetLibrary.items||[]),
+                    tree:localResult.value.tree??localAssetLibrary.tree??null};
+            }else if(localResult.status==='rejected')errors.push(String(localResult.reason?.message||localResult.reason));
+            if(resultResult.status==='fulfilled'&&resultResult.value&&typeof resultResult.value==='object'){
+                generationResults={
+                    items:Array.isArray(resultResult.value.items)?resultResult.value.items:(generationResults.items||[]),
+                    canvases:Array.isArray(resultResult.value.canvases)?resultResult.value.canvases:(generationResults.canvases||[]),
+                    counts:resultResult.value.counts&&typeof resultResult.value.counts==='object'?resultResult.value.counts:(generationResults.counts||{})
+                };
+            }else if(resultResult.status==='rejected')errors.push(String(resultResult.reason?.message||resultResult.reason));
+            assetLibraryLoadError=errors.join(' · ');
+            aggregate.ok=libraryResult.status==='fulfilled'||localResult.status==='fulfilled'||resultResult.status==='fulfilled';
+            aggregate.error=assetLibraryLoadError;
+            const after=JSON.stringify({assetLibrary,localAssetLibrary,generationResults,assetLibraryUpdatedAt,
+                activeAssetLibraryId,activeAssetCategoryId,activeWorkflowAssetLibraryId,activeWorkflowAssetCategoryId,mentionAssetCategoryId});
+            const changed=before!==after;
+            aggregate.changed=aggregate.changed||changed;
+            if(changed){
+                renderAssetLibrary();
+                if(mentionPicker?.classList?.contains('open')&&mentionSource==='asset')renderMentionPicker('asset');
+            }
+            if(errors.length&&assetLibraryOpen)toast(tr('smart.assetLoadFail'),{tone:'error'});
+        }while(assetLibraryLoadPending);
+        return aggregate;
+    })().finally(()=>{assetLibraryLoadPromise=null;});
+    return assetLibraryLoadPromise;
 }
 function refreshAssetLibrarySoon(delay=120){
     clearTimeout(assetLibraryRefreshTimer);
@@ -26677,12 +26962,8 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
         const urls = resultMediaUrls(data);
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
-    const workflowName = runSettings.comfyWorkflow || comfyWorkflows[0]?.name || '';
-    if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
-    const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
-        return r.json();
-    });
+    const workflowName = String(runSettings.comfyWorkflow||'').trim();
+    const wf = await requireReadyComfyWorkflow(workflowName);
     const fields = wf.config?.fields || [];
     const values = {};
     fields.filter(f => comfyFieldKind(f) === 'prompt').forEach((field, index) => {
@@ -27265,6 +27546,14 @@ async function runGeneration(){
         settings = previousSettings;
         toast(tr('smart.toastNeedPrompt'));
         return;
+    }
+    if(settings.engine==='comfy'&&settings.comfyMode==='custom'){
+        const workflowError=comfyWorkflowSelectionError(settings.comfyWorkflow);
+        if(workflowError){
+            settings=previousSettings;
+            toast(workflowError,{tone:'error'});
+            return;
+        }
     }
     if(isSettingsCanvasMode&&isSmartExecutionNode(node)){
         settings=previousSettings;
@@ -28272,12 +28561,8 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     if(mode === 'text') return runComfyText(node, prompt, pendingNode, meta);
     if(mode === 'enhance') return runComfyEnhance(node, refs, pendingNode, meta);
     if(mode === 'edit') return runComfyEdit(node, prompt, refs, pendingNode, meta);
-    const workflowName = settings.comfyWorkflow || comfyWorkflows[0]?.name || '';
-    if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
-    const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
-        return r.json();
-    });
+    const workflowName = String(settings.comfyWorkflow||'').trim();
+    const wf = await requireReadyComfyWorkflow(workflowName);
     const fields = wf.config?.fields || [];
     const values = {};
     fields.filter(f => comfyFieldKind(f) === 'prompt').forEach((field, index) => {
@@ -31448,7 +31733,7 @@ try {
     const apiChannel = new BroadcastChannel('studio-api');
     apiChannel.onmessage = async event => {
         if(event.data?.type === 'providers-changed' || event.data?.type === 'workflows-changed' || event.data?.type === 'comfy-instances-changed'){
-            await refreshSmartConfigFromSettings();
+            await refreshSmartConfigFromSettings({invalidateWorkflows:event.data?.type==='workflows-changed'});
         }
         if(event.data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(event.data);
         if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
@@ -31466,7 +31751,7 @@ window.addEventListener('storage', event => {
 });
 window.addEventListener('message', event => {
     if(event.origin !== location.origin || event.source !== window.parent) return;
-    if(event.data?.type === 'providers-changed' || event.data?.type === 'workflows-changed' || event.data?.type === 'comfy-instances-changed') refreshSmartConfigFromSettings();
+    if(event.data?.type === 'providers-changed' || event.data?.type === 'workflows-changed' || event.data?.type === 'comfy-instances-changed') refreshSmartConfigFromSettings({invalidateWorkflows:event.data?.type==='workflows-changed'});
     if(event.data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(event.data);
     if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
     if(event.data?.type === 'studio-lang' && window.StudioI18n) {
@@ -31489,13 +31774,14 @@ window.onload = async () => {
     loadPromptPresets();
     loadPromptTemplateGroups();
     loadPromptTemplateOverrides();
-    await loadPromptTemplates();
     if(window.StudioI18n) window.StudioI18n.apply();
     if(window.lucide) lucide.createIcons();
     connectAssetLibrarySyncSocket();
-    await loadSmartCanvasPersonalization();
-    await loadConfig();
-    await loadAssetLibrary();
+    // 画布首屏只等待自身必要配置；提示词库、工作流目录、素材/结果目录
+    // 与核心请求并行读取，完成后只刷新实际变化的对应区域。
+    void loadPromptTemplates();
+    void loadAssetLibrary();
+    await Promise.all([loadSmartCanvasPersonalization(),loadConfig()]);
     await loadCanvas();
     syncApiKindToggleVisibility();
     render();

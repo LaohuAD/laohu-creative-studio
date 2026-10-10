@@ -32,7 +32,8 @@ def build(root, output):
         raise ValueError("更新说明与 VERSION 不一致")
     files = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
     files = sorted(p for p in files if p and allowed(p))
-    for required in ("main.py", "model_capabilities.py", "project_storage.py", "VERSION", "requirements.txt"):
+    for required in ("main.py", "model_capabilities.py", "project_storage.py", "studio_modules.py",
+                     "VERSION", "requirements.txt"):
         if required not in files:
             raise ValueError(f"发布缺少 {required}")
     errors = module_boundary_errors(root, packaged_files=set(files))

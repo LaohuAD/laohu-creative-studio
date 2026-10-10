@@ -8,6 +8,7 @@ import inspect
 import json
 import re
 import threading
+from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -23,6 +24,7 @@ from canvas_core.hypit_config import (
     verify_hypit_slot_results,
 )
 from project_storage import StorageError
+from studio_app_execution import _ACCEPTED_DYNAMIC_SNAPSHOT_KEY, _REQUEST_DYNAMIC_SNAPSHOT_KEY
 
 
 _EXECUTABLE_NODE_TYPES = {
@@ -51,9 +53,45 @@ _PRIVATE_QUERY_KEYS = {"api_key", "apikey", "auth", "authorization", "key", "pas
                        "signature", "signed", "token", "access_token", "refresh_token"}
 _TRUSTED_CONTEXT_FIELDS = {
     "module_id", "project_id", "purpose", "slot", "accepted_revision", "source_hash",
-    "client_operation_id",
+    "client_operation_id", "source_snapshot", "client_request_sha256", "client_base_revision",
+    "settings_revision", "resolved_request",
 }
 _ARTICLE_PURPOSES = {"cover", "illustration", "knowledge"}
+_MUSIC_PURPOSES = {"song", "cover"}
+
+
+class AsyncOperationLockRegistry:
+    """Serialize one module bridge's read/validate/submit sequence per operation ID.
+
+    Each bridge owns its own registry, so identical IDs in different modules are
+    never coupled. Entries are removed after the last holder/waiter exits.
+    """
+
+    def __init__(self):
+        self._entries: dict[str, dict[str, Any]] = {}
+        self._guard = threading.RLock()
+
+    @asynccontextmanager
+    async def hold(self, operation_id: str):
+        key = str(operation_id or "")
+        with self._guard:
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = {"lock": asyncio.Lock(), "references": 0}
+                self._entries[key] = entry
+            entry["references"] += 1
+        acquired = False
+        try:
+            await entry["lock"].acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                entry["lock"].release()
+            with self._guard:
+                entry["references"] -= 1
+                if entry["references"] == 0 and self._entries.get(key) is entry:
+                    del self._entries[key]
 
 
 class HypitFlowRunner:
@@ -107,6 +145,18 @@ class HypitFlowRunner:
         text = str(value or "")
         if self.module_id == "hypit":
             return text
+        if self.module_id == "music":
+            replacements = (
+                ("Hypit 测试请求", "音乐生成请求"), ("Hypit 流程请求", "音乐生成请求"),
+                ("Hypit 执行快照", "音乐生成执行快照"), ("Hypit 设置流程画布", "音乐配置图"),
+                ("Hypit 设置流程", "音乐配置流程"), ("Hypit 参数", "音乐生成参数"),
+                ("Hypit 输入", "音乐生成输入"), ("Hypit 输出", "音乐生成输出"),
+                ("Hypit 节点", "音乐生成节点"), ("Hypit 流程", "音乐生成流程"),
+                ("Hypit 配置", "音乐配置"), ("Hypit", "音乐生成"),
+            )
+            for old, new in replacements:
+                text = text.replace(old, new)
+            return text
         replacements = (
             ("Hypit 测试请求", "文章生成请求"),
             ("Hypit 流程请求", "文章生成请求"),
@@ -142,7 +192,7 @@ class HypitFlowRunner:
         source = nested if isinstance(nested, Mapping) else payload
         allowed = {
             "prompt", "system_prompt", "parameters", "inputs", "references",
-            "prompt_target_node_id", "promptTargetNodeId",
+            "prompt_target_node_id", "promptTargetNodeId", "field_inputs",
         }
         request = {key: copy.deepcopy(source[key]) for key in allowed if key in source}
         if "parameters" in request and not isinstance(request["parameters"], Mapping):
@@ -151,6 +201,18 @@ class HypitFlowRunner:
             raise HTTPException(status_code=400, detail="Hypit 输入必须是对象")
         if "references" in request and not isinstance(request["references"], list):
             raise HTTPException(status_code=400, detail="Hypit 引用必须是数组")
+        if "field_inputs" in request:
+            if not isinstance(request["field_inputs"], list) or len(request["field_inputs"]) > 64:
+                raise HTTPException(status_code=400, detail="Hypit 显式字段输入必须是最多 64 项的数组")
+            for entry in request["field_inputs"]:
+                if not isinstance(entry, Mapping):
+                    raise HTTPException(status_code=400, detail="Hypit 显式字段输入格式无效")
+                node_id = str(entry.get("node_id") or "").strip()
+                field_key = str(entry.get("targetFieldKey") or "").strip()
+                if not node_id or len(node_id) > 160 or not field_key or len(field_key) > 240:
+                    raise HTTPException(status_code=400, detail="Hypit 显式字段输入必须提供 node_id 和精确 targetFieldKey")
+                if str(entry.get("kind") or "").strip().lower() not in {"text", "audio", "image", "video"}:
+                    raise HTTPException(status_code=400, detail="Hypit 显式字段输入媒体类型不受支持")
         cls._canonical(request)
         return request
 
@@ -197,7 +259,7 @@ class HypitFlowRunner:
     def _trusted_context(self, value: Any, *, slot: str, request_id: str) -> dict[str, Any]:
         """验证服务端文章绑定元数据；它不来自请求体，也不影响用户输入指纹。"""
         if value is None:
-            if self.module_id == "article":
+            if self.module_id in {"article", "music"}:
                 raise HTTPException(status_code=400, detail="文章生成缺少受信关联信息")
             return {}
         if not isinstance(value, Mapping):
@@ -212,19 +274,58 @@ class HypitFlowRunner:
             raise HTTPException(status_code=400, detail="受信任务用途与输出端口不匹配")
         if context.get("client_operation_id") != request_id:
             raise HTTPException(status_code=400, detail="受信任务操作标识与本次请求不匹配")
-        if self.module_id == "article":
+        if self.module_id in {"article", "music"}:
             project_id = str(context.get("project_id") or "").strip()
             purpose = str(context.get("purpose") or "").strip()
             revision = context.get("accepted_revision")
             source_hash = str(context.get("source_hash") or "").strip().lower()
             if not project_id or len(project_id) > 160:
-                raise HTTPException(status_code=400, detail="文章受信上下文缺少有效项目 ID")
-            if purpose not in _ARTICLE_PURPOSES:
-                raise HTTPException(status_code=400, detail="文章生成用途无效")
+                raise HTTPException(status_code=400, detail="模块受信上下文缺少有效项目 ID")
+            purposes = _ARTICLE_PURPOSES if self.module_id == "article" else _MUSIC_PURPOSES
+            if purpose not in purposes:
+                raise HTTPException(status_code=400, detail="模块生成用途无效")
             if isinstance(revision, bool) or not isinstance(revision, int) or revision <= 0:
-                raise HTTPException(status_code=400, detail="文章受信上下文缺少有效修订号")
+                raise HTTPException(status_code=400, detail="模块受信上下文缺少有效修订号")
             if not re.fullmatch(r"[a-f0-9]{64}", source_hash):
-                raise HTTPException(status_code=400, detail="文章受信上下文缺少有效来源指纹")
+                raise HTTPException(status_code=400, detail="模块受信上下文缺少有效来源指纹")
+            if self.module_id == "music":
+                wanted_slot = "music" if purpose == "song" else "image"
+                snapshot = context.get("source_snapshot")
+                if slot != wanted_slot or not isinstance(snapshot, Mapping):
+                    raise HTTPException(status_code=400, detail="音乐受信上下文缺少匹配的用途或来源快照")
+                context["source_snapshot"] = copy.deepcopy(dict(snapshot))
+                for key in ("title", "lyrics", "style_prompt", "notes", "cover_prompt"):
+                    value_text = context["source_snapshot"].get(key, "")
+                    if not isinstance(value_text, str) or len(value_text.encode("utf-8")) > 2 * 1024 * 1024:
+                        raise HTTPException(status_code=400, detail="音乐受信来源快照格式无效")
+                references = context["source_snapshot"].get("reference_audio_refs", [])
+                if not isinstance(references, list) or len(references) > 64:
+                    raise HTTPException(status_code=400, detail="音乐受信来源音频引用格式无效")
+                for reference in references:
+                    if (not isinstance(reference, Mapping) or reference.get("kind") != "audio"
+                            or not str(reference.get("url") or "").startswith(("/api/materials/", "/api/results/"))):
+                        raise HTTPException(status_code=400, detail="音乐受信来源音频引用无效")
+                score_refs = context["source_snapshot"].get("score_refs", [])
+                if not isinstance(score_refs, list) or len(score_refs) > 64:
+                    raise HTTPException(status_code=400, detail="音乐受信来源乐谱引用格式无效")
+                for reference in score_refs:
+                    if (not isinstance(reference, Mapping) or reference.get("kind") not in {"text", "file"}
+                            or reference.get("format") not in {"abc", "musicxml", "midi"}
+                            or not str(reference.get("url") or "").startswith(("/api/materials/", "/api/results/"))):
+                        raise HTTPException(status_code=400, detail="音乐受信来源乐谱引用无效")
+                request_hash = str(context.get("client_request_sha256") or "").strip().lower()
+                if not re.fullmatch(r"[a-f0-9]{64}", request_hash):
+                    raise HTTPException(status_code=400, detail="音乐受信上下文缺少有效的请求指纹")
+                settings_revision = context.get("settings_revision")
+                resolved_request = context.get("resolved_request")
+                client_base_revision = context.get("client_base_revision")
+                if (isinstance(settings_revision, bool) or not isinstance(settings_revision, int)
+                        or settings_revision <= 0 or not isinstance(resolved_request, Mapping)):
+                    raise HTTPException(status_code=400, detail="音乐受信上下文缺少可恢复的执行快照")
+                if (client_base_revision is not None and
+                        (isinstance(client_base_revision, bool) or not isinstance(client_base_revision, int)
+                         or client_base_revision <= 0)):
+                    raise HTTPException(status_code=400, detail="音乐受信上下文的内容修订号无效")
             context["project_id"] = project_id
             context["purpose"] = purpose
             context["source_hash"] = source_hash
@@ -264,7 +365,7 @@ class HypitFlowRunner:
     def _ensure_same_operation_context(self, run: Mapping[str, Any], context: Mapping[str, Any]) -> None:
         old_module = str((run.get("capability_snapshot") or {}).get("module_id") or "hypit")
         if old_module != self.module_id or self._saved_trusted_context(run) != dict(context):
-            raise HTTPException(status_code=409, detail="同一操作 ID 已绑定到不同的模块或文章版本")
+            raise HTTPException(status_code=409, detail="同一操作 ID 已绑定到不同模块或原始内容版本")
 
     def _active_task(self, run_id: str) -> bool:
         with self._active_guard:
@@ -332,6 +433,42 @@ class HypitFlowRunner:
                 members.append(node_id)
         return members
 
+    @staticmethod
+    def _clear_untrusted_dynamic_snapshots(task_canvas: dict[str, Any]) -> None:
+        """Ignore reserved markers copied from a saved/client-controlled graph."""
+        for node in task_canvas.get("nodes") or []:
+            if not isinstance(node, dict):
+                continue
+            settings = node.get("runSettings")
+            if not isinstance(settings, dict):
+                continue
+            settings.pop(_ACCEPTED_DYNAMIC_SNAPSHOT_KEY, None)
+            settings.pop("_musicSchemaSnapshot", None)
+
+    @staticmethod
+    def _install_accepted_dynamic_snapshots(
+        task_canvas: dict[str, Any], execution_nodes: list[dict[str, Any]], prepared_requests: Mapping[str, Any],
+    ) -> None:
+        """Persist server-resolved adapter data on the private task graph only."""
+        by_id = {str(node.get("id") or ""): node for node in task_canvas.get("nodes") or [] if isinstance(node, dict)}
+        for source_node in execution_nodes:
+            if source_node.get("type") not in _DYNAMIC_OUTPUT_NODE_TYPES:
+                continue
+            node_id = str(source_node.get("id") or "")
+            prepared = prepared_requests.get(node_id)
+            snapshot = prepared.get(_REQUEST_DYNAMIC_SNAPSHOT_KEY) if isinstance(prepared, Mapping) else None
+            if not isinstance(snapshot, Mapping):
+                # Test callbacks and injected adapters that do not use the shared app
+                # executor remain compatible. Production settings adapters return it.
+                continue
+            if (snapshot.get("version") != 1 or snapshot.get("node_type") != source_node.get("type")
+                    or not isinstance(snapshot.get("fields"), list) or not snapshot.get("fields")):
+                raise HTTPException(status_code=422, detail="动态节点预检没有返回有效的服务端 Schema 快照")
+            target = by_id.get(node_id)
+            if target is None:
+                raise HTTPException(status_code=422, detail="动态任务快照中的节点不存在")
+            target.setdefault("runSettings", {})[_ACCEPTED_DYNAMIC_SNAPSHOT_KEY] = copy.deepcopy(dict(snapshot))
+
     @classmethod
     def _execution_dependencies(cls, plan: Mapping[str, Any], nodes: Mapping[str, Mapping[str, Any]],
                                 execution_nodes: list[Mapping[str, Any]]) -> dict[str, list[str]]:
@@ -384,11 +521,22 @@ class HypitFlowRunner:
                            prepared_requests: Mapping[str, Any], resolved_nodes: Mapping[str, Any],
                            trusted_context: Mapping[str, Any]) -> dict[str, Any]:
         relevant_ids = set(str(value) for value in plan.get("node_ids") or [])
+        accepted_markers = {}
+        safe_nodes = []
+        for node in task_canvas.get("nodes", []):
+            if not isinstance(node, Mapping) or str(node.get("id") or "") not in relevant_ids:
+                continue
+            node_copy = copy.deepcopy(dict(node))
+            settings = node_copy.get("runSettings")
+            if isinstance(settings, dict):
+                marker = settings.pop(_ACCEPTED_DYNAMIC_SNAPSHOT_KEY, None)
+                if isinstance(marker, Mapping):
+                    accepted_markers[str(node_copy.get("id") or "")] = copy.deepcopy(dict(marker))
+            safe_nodes.append(node_copy)
         safe_canvas = {
             "id": str(canvas.get("id") or self.canvas_id),
             "revision": max(1, int(canvas.get("revision") or 1)),
-            "nodes": [copy.deepcopy(node) for node in task_canvas.get("nodes", [])
-                      if isinstance(node, Mapping) and str(node.get("id") or "") in relevant_ids],
+            "nodes": safe_nodes,
             "connections": [copy.deepcopy(edge) for edge in plan.get("connections", []) if isinstance(edge, Mapping)],
         }
         safe = self._safe_snapshot({
@@ -407,6 +555,14 @@ class HypitFlowRunner:
                 "resolved": copy.deepcopy(resolved_nodes.get(str(node.get("id") or ""))),
             } for node in execution_nodes],
         })
+        safe_canvas_nodes = {
+            str(node.get("id") or ""): node
+            for node in safe.get("canvas", {}).get("nodes", []) if isinstance(node, dict)
+        }
+        for node_id, marker in accepted_markers.items():
+            target = safe_canvas_nodes.get(node_id)
+            if target is not None:
+                target.setdefault("runSettings", {})[_ACCEPTED_DYNAMIC_SNAPSHOT_KEY] = marker
         try:
             return json.loads(self._canonical(safe))
         except HTTPException as exc:
@@ -477,6 +633,7 @@ class HypitFlowRunner:
                 canvas_id=self.canvas_id, module_id=self.module_id,
             )
             task_canvas = prepared["canvas"]
+            self._clear_untrusted_dynamic_snapshots(task_canvas)
             plan = prepared["plan"]
             recipe_fingerprint = str(prepared["recipe_fingerprint"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -551,6 +708,8 @@ class HypitFlowRunner:
                 "canvas": copy.deepcopy(latest),
                 "revision": max(1, int(latest.get("revision") or 1)),
             })
+
+        self._install_accepted_dynamic_snapshots(task_canvas, execution_nodes, prepared_requests)
 
         request_identity = {
             "module_id": self.module_id,

@@ -26,6 +26,20 @@
         "asset.images": { zh: "图片", en: "Images" },
         "asset.videos": { zh: "视频", en: "Videos" },
         "asset.audio": { zh: "音频", en: "Audio" },
-        "asset.text": { zh: "文本", en: "Text" }
+        "asset.text": { zh: "文本", en: "Text" },
+        "asset.resultType": { zh: "结果类型", en: "Result type" },
+        "asset.filterByType": { zh: "按文件类型筛选", en: "Filter by file type" },
+        "asset.filterByTime": { zh: "按时间筛选", en: "Filter by time" },
+        "asset.timeRangeHint": { zh: "按生成时间滚动计算：24 小时 / 7 天 / 30 天", en: "Rolling windows by creation time: 24 hours / 7 days / 30 days" },
+        "asset.timeAll": { zh: "全部时间", en: "All time" },
+        "asset.timeDay": { zh: "一天内", en: "Within 24 hours" },
+        "asset.timeWeek": { zh: "一周内", en: "Within 7 days" },
+        "asset.timeMonth": { zh: "一个月内", en: "Within 30 days" },
+        "asset.timeOlderMonth": { zh: "超过一个月", en: "Older than 30 days" },
+        "asset.resultCount": { zh: "{count} 个结果", en: "{count} results" },
+        "asset.searchResults": { zh: "搜索生成结果", en: "Search results" },
+        "asset.batchManage": { zh: "批量管理", en: "Manage" },
+        "asset.finishManaging": { zh: "完成管理", en: "Done" },
+        "asset.resultsLibraryHint": { zh: "共 {count} 个生成结果。删除画布不会影响这里已经保存的内容。", en: "{count} results saved. Deleting a canvas does not remove saved content here." }
     });
 })();

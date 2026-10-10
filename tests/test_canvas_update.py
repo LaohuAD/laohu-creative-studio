@@ -15,12 +15,14 @@ import zipfile
 import canvas_update as updater
 
 
-def package(extra=None):
+def package(extra=None, omit=()):
     files = {'VERSION':b'2.0', '.python-version':b'3.14.5\n', 'requirements.txt':b'fastapi\n', 'main.py':b'pass\n',
-             'project_storage.py':b'pass\n','model_capabilities.py':b'pass\n',
+             'project_storage.py':b'pass\n','model_capabilities.py':b'pass\n','studio_modules.py':b'pass\n',
              'static/release_update.py':b'pass\n','static/update-notes.json':b'{"version":"2.0"}',
              'canvas_core/new_module.py':b'VALUE=2\n'}
     files.update(extra or {})
+    for name in omit:
+        files.pop(name, None)
     archive = io.BytesIO()
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
         for n,d in files.items(): z.writestr(n,d)
@@ -52,6 +54,11 @@ class UpgradeTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_package_rejects_missing_required_studio_module(self):
+        manifest, body = package(omit=('studio_modules.py',))
+        with self.assertRaisesRegex(ValueError, '缺少必要程序文件'):
+            updater.validate_package(body, manifest)
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()

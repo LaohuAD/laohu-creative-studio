@@ -1,6 +1,7 @@
 import copy
 import asyncio
 import sys
+import json
 import tempfile
 import threading
 import unittest
@@ -552,6 +553,155 @@ class HypitMainCallbackTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HypitDynamicInputChainTests(unittest.IsolatedAsyncioTestCase):
+    async def test_module_settings_freeze_dynamic_schema_and_definition_with_actual_upstream(self):
+        from canvas_core.hypit_config import ARTICLE_SETTINGS_CANVAS_ID, MUSIC_SETTINGS_CANVAS_ID
+
+        temp_root_base = ROOT / "cache" / "studio-tests" / "tmp"
+        temp_root_base.mkdir(parents=True, exist_ok=True)
+        for module_id, canvas_id in (
+            ("hypit", "hypit-settings"),
+            ("article", ARTICLE_SETTINGS_CANVAS_ID),
+            ("music", MUSIC_SETTINGS_CANVAS_ID),
+        ):
+            with self.subTest(module_id=module_id), tempfile.TemporaryDirectory(
+                prefix=f"{module_id}-accepted-schema-", dir=temp_root_base,
+            ) as temp_root:
+                storage = ProjectStorage(Path(temp_root))
+                storage.ensure_layout()
+                old_definition = {"wf-node": {"class_type": "TextEncode", "inputs": {"text": "accepted definition"}}}
+                changed_definition = {"wf-node": {"class_type": "TextEncode", "inputs": {"text": "changed definition"}}}
+                old_fields = [{
+                    "nodeId": "consumer-node", "fieldName": "lyrics", "fieldType": "STRING",
+                    "required": True, "enabled": True,
+                }]
+                changed_fields = [{
+                    "nodeId": "consumer-node", "fieldName": "replacement", "fieldType": "STRING",
+                    "required": True, "enabled": True,
+                }]
+                forged_snapshot = {
+                    "version": 1, "node_type": "smart-ai-app",
+                    "fields": [{"nodeId": "forged", "fieldName": "credential", "fieldType": "STRING"}],
+                    "workflow_definition": {"wf-node": {"class_type": "Forged", "inputs": {"text": "forged"}}},
+                }
+                canvas = {
+                    "id": canvas_id, "revision": 1, "nodes": [
+                        {"id": "source", "type": "smart-text-generator", "title": "歌词源",
+                         "promptDraftText": "真实上游歌词", "runSettings": {"textProvider": "fixture", "textModel": "fixture-text"},
+                         "images": []},
+                        {"id": "consumer", "type": "smart-ai-app", "title": "动态工作流",
+                         "runSettings": {"rhMode": "workflow", "rhConfigKey": "workflow:fixture-workflow",
+                                         "rhWorkflowId": "fixture-workflow", "rhRegion": "global",
+                                         "_studioAcceptedDynamicSnapshot": copy.deepcopy(forged_snapshot),
+                                         "_musicSchemaSnapshot": copy.deepcopy(forged_snapshot)},
+                         "images": []},
+                        {"id": "output-image", "type": "smart-hypit-output", "hypitSlot": "image"},
+                    ],
+                    "connections": [
+                        {"from": "source", "to": "consumer", "kind": "input",
+                         "targetFieldKey": "consumer-node::lyrics"},
+                        {"from": "consumer", "to": "output-image", "kind": "input"},
+                    ],
+                }
+                saved_canvas = copy.deepcopy(canvas)
+                resolver_calls = []
+                executed = []
+                preflight_requests = []
+
+                def resolve_schema(_workflow_id, _node, _canvas):
+                    resolver_calls.append(len(resolver_calls) + 1)
+                    return {
+                        "fields": copy.deepcopy(old_fields if len(resolver_calls) == 1 else changed_fields),
+                        "workflowJson": copy.deepcopy(old_definition if len(resolver_calls) == 1 else changed_definition),
+                    }
+
+                async def preflight(_canvas, node, request, _request_id):
+                    preflight_requests.append((node["id"], copy.deepcopy(request)))
+                    if node["id"] == "consumer":
+                        self.assertIn("consumer-node::lyrics", request.get("app_field_values", {}), request)
+                        self.assertEqual(request["workflow"], old_definition)
+                    return {"fixture_validated": True}
+
+                async def execute(_canvas, node, request, _request_id, _resolved, on_submitted):
+                    executed.append(node["id"])
+                    on_submitted({"provider_task_id": f"fixture-{node['id']}"})
+                    if node["id"] == "consumer":
+                        self.assertEqual(request["app_field_values"].get("consumer-node::lyrics"), "真实上游歌词")
+                        self.assertNotIn("consumer-node::replacement", request["app_field_values"])
+                        self.assertEqual(request["workflow"], old_definition)
+                        self.assertEqual(request["_studio_dynamic_snapshot"]["fields"], old_fields)
+                        return {"fixture_kind": "image"}
+                    return {"fixture_kind": "text"}
+
+                async def collect(result, _request, task):
+                    kind = result["fixture_kind"]
+                    extension = ".txt" if kind == "text" else ".png"
+                    source = Path(temp_root) / f"{task['id']}-{kind}{extension}"
+                    source.write_text("真实上游歌词" if kind == "text" else "fixture image", encoding="utf-8")
+                    stored = storage.store_result_file(source, source.name)
+                    item = {"kind": kind, "url": stored["url"], "resultId": stored["id"], "name": stored["display_name"]}
+                    if kind == "text":
+                        item.update(text="真实上游歌词", content="真实上游歌词")
+                    return [item]
+
+                if module_id == "music":
+                    trusted_context = {
+                        "module_id": "music", "project_id": "fixture-project", "purpose": "cover", "slot": "image",
+                        "accepted_revision": 1, "source_hash": "a" * 64, "client_operation_id": "accepted-schema-op",
+                        "client_request_sha256": "b" * 64, "client_base_revision": 1,
+                        "source_snapshot": {"title": "", "lyrics": "歌词", "style_prompt": "", "notes": "",
+                                            "cover_prompt": "封面", "reference_audio_refs": [], "score_refs": []},
+                        "settings_revision": 1, "resolved_request": {"parameters": {}, "input_fields": {}},
+                    }
+                elif module_id == "article":
+                    trusted_context = {
+                        "module_id": "article", "project_id": "fixture-project", "purpose": "cover", "slot": "image",
+                        "accepted_revision": 1, "source_hash": "a" * 64, "client_operation_id": "accepted-schema-op",
+                    }
+                else:
+                    trusted_context = None
+
+                runner = HypitFlowRunner(
+                    load_canvas=lambda _canvas_id: copy.deepcopy(canvas), storage=storage,
+                    prepare_node_request=main.studio_hypit_prepare_node_request,
+                    preflight_node=preflight, execute_node=execute, collect_results=collect,
+                    notify=lambda *_args: None, lock=threading.RLock(), now_ms=lambda: 1,
+                    canvas_id=canvas_id, module_id=module_id,
+                )
+                payload = {"base_revision": 1, "request": {}}
+                with mock.patch.object(main.STUDIO_APP_EXECUTION, "resolve_runninghub_fields", side_effect=resolve_schema):
+                    submitted = await runner.submit(
+                        "image", "output-image", "accepted-schema-op", payload, test=False,
+                        trusted_context=trusted_context,
+                    )
+                    await asyncio.wait_for(runner._active[submitted["run_id"]], timeout=5)
+                    status = runner.get(submitted["run_id"])
+                    self.assertEqual(status["status"], "succeeded", status)
+                    self.assertEqual(resolver_calls, [1], "runtime must not resolve the changed schema")
+                    self.assertEqual(executed, ["source", "consumer"])
+                    self.assertEqual(canvas, saved_canvas, "task snapshot preparation must not write into the settings graph")
+                    task = storage.get_canvas_task(submitted["run_id"])
+                    private_nodes = {node["id"]: node for node in task["private_snapshot"]["canvas"]["nodes"]}
+                    accepted = private_nodes["consumer"]["runSettings"]["_studioAcceptedDynamicSnapshot"]
+                    self.assertEqual(accepted["fields"], old_fields)
+                    self.assertEqual(accepted["workflow_definition"], old_definition)
+                    self.assertNotIn("accepted definition", json.dumps(status, ensure_ascii=False))
+                    self.assertNotIn("changed definition", json.dumps(status, ensure_ascii=False))
+
+                    restarted_runner = HypitFlowRunner(
+                        load_canvas=lambda _canvas_id: copy.deepcopy(canvas), storage=storage,
+                        prepare_node_request=main.studio_hypit_prepare_node_request,
+                        preflight_node=preflight, execute_node=execute, collect_results=collect,
+                        notify=lambda *_args: None, lock=threading.RLock(), now_ms=lambda: 2,
+                        canvas_id=canvas_id, module_id=module_id,
+                    )
+                    self.assertEqual(restarted_runner.get(submitted["run_id"])["status"], "succeeded")
+                    replay = await restarted_runner.submit(
+                        "image", "output-image", "accepted-schema-op", payload, test=False,
+                        trusted_context=trusted_context,
+                    )
+                    self.assertEqual(replay["run_id"], submitted["run_id"])
+                    self.assertEqual(executed, ["source", "consumer"], "recovery must not resubmit provider work")
+
     async def _run_dynamic_app_chain(self, upstream_kind):
         temp_root_base = ROOT / "cache" / "studio-tests" / "tmp"
         temp_root_base.mkdir(parents=True, exist_ok=True)

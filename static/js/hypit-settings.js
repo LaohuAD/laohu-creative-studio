@@ -44,13 +44,20 @@
     const settingsCanvasResetButton = document.getElementById('hypitSettingsReset');
     const settingsCanvasNewTabButton = document.getElementById('hypitSettingsNewTab');
     const SETTINGS_CANVAS_ID = 'hypit-settings';
-    let settingsCanvasPromise = null;
-    let settingsCanvasBootstrapPromise = null;
-    let settingsCanvasBootstrap = null;
-    let settingsCanvasRequestSeq = 0;
-    let settingsCanvasLoaded = false;
     let settingsCanvasResetting = false;
-    let settingsCanvasOpenedWindow = null;
+    const settingsCanvasController = window.StudioSettingsCanvasController.create({
+        id: SETTINGS_CANVAS_ID,
+        mode: 'hypit-settings',
+        endpoint: '/api/hypit/settings-canvas',
+        frame: settingsCanvasFrame,
+        invalidUrlMessage: () => currentLang() === 'en' ? 'The Hypit settings canvas address is invalid.' : '服务返回了无效的 Hypit 画布地址',
+        invalidPayloadMessage: () => currentLang() === 'en' ? 'The Hypit settings canvas response is invalid.' : '服务未返回专用 Hypit 设置画布',
+        timeoutMessage: () => t('hypit.canvasFrameTimeout'),
+        frameErrorMessage: () => t('hypit.canvasFrameError'),
+        onLoading: () => setStatus(t('hypit.canvasLoading')),
+        onReady: () => setStatus(t('hypit.canvasReady')),
+        onError: error => setStatus(t('hypit.canvasLoadError', {message:error?.message || error}), 'error'),
+    });
     const AUTOSAVE_DELAY = 320;
     const state = {
         catalog: { providers: [] },
@@ -92,7 +99,7 @@
     const translations = {
         zh: {
             'hypit.navTitle': 'Hypit 设置',
-            'hypit.navLabel': 'Hypit',
+            'hypit.navLabel': 'Hypit克隆',
             'hypit.navMeta': '生成模型',
             'hypit.title': 'Hypit 设置',
             'hypit.description': '选择各类生成任务使用的 API 模型或工作流；每次任务按所选来源要求提供内容与参数。',
@@ -105,6 +112,8 @@
             'hypit.canvasFrameTitle': 'Hypit 流程设置画布',
             'hypit.canvasLoading': '正在读取 Hypit 流程画布…',
             'hypit.canvasReady': '',
+            'hypit.canvasFrameTimeout': '画布页面加载超时',
+            'hypit.canvasFrameError': '画布页面无法打开',
             'hypit.canvasLoadError': 'Hypit 流程画布读取失败：{message}。请重试读取。',
             'hypit.canvasRetry': '重试读取',
             'hypit.canvasResetConfirm': '将清空 Hypit 设置画布中的所有节点和连线。磁盘素材、生成结果与其他画布不会删除。此操作无法撤销，是否继续？',
@@ -121,6 +130,8 @@
             'articleSettings.canvasFrameTitle': '文章生成配置画布',
             'articleSettings.canvasLoading': '正在读取文章生成配置…',
             'articleSettings.canvasReady': '',
+            'articleSettings.canvasFrameTimeout': '画布页面加载超时',
+            'articleSettings.canvasFrameError': '画布页面无法打开',
             'articleSettings.canvasLoadError': '文章生成配置读取失败：{message}。请重试读取。',
             'articleSettings.canvasRetry': '重试读取',
             'articleSettings.canvasResetConfirm': '将清空文章生成配置画布中的所有节点和连线。磁盘素材、生成结果与其他画布不会删除。此操作无法撤销，是否继续？',
@@ -208,7 +219,7 @@
         },
         en: {
             'hypit.navTitle': 'Hypit settings',
-            'hypit.navLabel': 'Hypit',
+            'hypit.navLabel': 'Hypit Clone',
             'hypit.navMeta': 'Generation models',
             'hypit.title': 'Hypit settings',
             'hypit.description': 'Choose an API model or workflow for each generation task; provide the content and parameters required by the selected source.',
@@ -221,6 +232,8 @@
             'hypit.canvasFrameTitle': 'Hypit workflow settings canvas',
             'hypit.canvasLoading': 'Loading the Hypit workflow canvas…',
             'hypit.canvasReady': '',
+            'hypit.canvasFrameTimeout': 'Canvas page load timed out',
+            'hypit.canvasFrameError': 'Canvas page could not be opened',
             'hypit.canvasLoadError': 'Could not load the Hypit workflow canvas: {message}. Retry loading.',
             'hypit.canvasRetry': 'Retry loading',
             'hypit.canvasResetConfirm': 'This clears all nodes and connections from the Hypit settings canvas. Disk assets, generated results, and other canvases are preserved. This cannot be undone. Continue?',
@@ -237,6 +250,8 @@
             'articleSettings.canvasFrameTitle': 'Article generation canvas',
             'articleSettings.canvasLoading': 'Loading article generation setup…',
             'articleSettings.canvasReady': '',
+            'articleSettings.canvasFrameTimeout': 'Canvas page load timed out',
+            'articleSettings.canvasFrameError': 'Canvas page could not be opened',
             'articleSettings.canvasLoadError': 'Could not load article generation setup: {message}. Retry loading.',
             'articleSettings.canvasRetry': 'Retry loading',
             'articleSettings.canvasResetConfirm': 'This clears all nodes and connections from the article generation canvas. Disk assets, generated results, and other canvases are preserved. This cannot be undone. Continue?',
@@ -352,35 +367,11 @@
     }
 
     function settingsCanvasUrl(payload) {
-        const url = new URL(String(payload?.url || ''), location.href);
-        if (url.origin !== location.origin
-            || url.pathname !== '/static/smart-canvas.html'
-            || url.searchParams.get('id') !== SETTINGS_CANVAS_ID
-            || url.searchParams.get('mode') !== 'hypit-settings') {
-            throw new Error('服务返回了无效的 Hypit 画布地址');
-        }
-        url.searchParams.set('embedded', '1');
-        return `${url.pathname}${url.search}`;
+        return settingsCanvasController.canvasUrl(payload);
     }
 
-    function loadSettingsCanvasBootstrap({force=false} = {}) {
-        if (settingsCanvasBootstrapPromise) return settingsCanvasBootstrapPromise;
-        if (!force && settingsCanvasBootstrap) return Promise.resolve(settingsCanvasBootstrap);
-        settingsCanvasBootstrapPromise = (async () => {
-            const response = await fetch('/api/hypit/settings-canvas', {cache:'no-store'});
-            if (!response.ok) {
-                const body = await response.json().catch(() => ({}));
-                throw new Error(body.detail || `HTTP ${response.status}`);
-            }
-            const payload = await response.json();
-            if (payload?.id !== SETTINGS_CANVAS_ID || !payload?.canvas || payload.canvas.id !== SETTINGS_CANVAS_ID) {
-                throw new Error('服务未返回专用 Hypit 设置画布');
-            }
-            settingsCanvasUrl(payload);
-            settingsCanvasBootstrap = payload;
-            return payload;
-        })().finally(() => { settingsCanvasBootstrapPromise = null; });
-        return settingsCanvasBootstrapPromise;
+    function loadSettingsCanvasBootstrap(options = {}) {
+        return settingsCanvasController.loadBootstrap(options);
     }
 
     function prefetchSettingsCanvasBootstrap() {
@@ -388,67 +379,19 @@
     }
 
     function syncSettingsCanvasFrameContext() {
-        const target = settingsCanvasFrame?.contentWindow;
-        if (!target || target === window) return;
-        try {
-            const preference = window.StudioTheme?.getPreference?.();
-            if (preference) target.postMessage({type:'studio-theme', preference}, location.origin);
-            const lang = window.StudioI18n?.lang?.() || 'zh';
-            target.postMessage({type:'studio-lang', lang}, location.origin);
-        } catch (_) {}
+        return settingsCanvasController.syncContext();
     }
 
-    async function loadSettingsCanvas({force=false} = {}) {
-        if (settingsCanvasPromise) return settingsCanvasPromise;
-        if (!force && settingsCanvasLoaded && settingsCanvasFrame?.src) return true;
-        const requestSeq = ++settingsCanvasRequestSeq;
-        settingsCanvasFrame?.setAttribute('hidden', 'hidden');
-        setStatus(t('hypit.canvasLoading'));
-        settingsCanvasPromise = (async () => {
-            try {
-                const payload = await loadSettingsCanvasBootstrap({force});
-                if (requestSeq !== settingsCanvasRequestSeq) return false;
-                const src = settingsCanvasUrl(payload);
-                const current = settingsCanvasFrame?.getAttribute('src') || '';
-                settingsCanvasFrame?.removeAttribute('hidden');
-                if (current !== src || force) {
-                    settingsCanvasLoaded = false;
-                    await new Promise((resolve, reject) => {
-                        const timer = setTimeout(() => reject(new Error('画布页面加载超时')), 15000);
-                        const onLoad = () => { clearTimeout(timer); resolve(); };
-                        const onError = () => { clearTimeout(timer); reject(new Error('画布页面无法打开')); };
-                        settingsCanvasFrame.addEventListener('load', onLoad, {once:true});
-                        settingsCanvasFrame.addEventListener('error', onError, {once:true});
-                        settingsCanvasFrame.src = src;
-                    });
-                }
-                if (requestSeq !== settingsCanvasRequestSeq) return false;
-                settingsCanvasLoaded = true;
-                syncSettingsCanvasFrameContext();
-                setStatus(t('hypit.canvasReady'));
-                return true;
-            } catch (error) {
-                if (requestSeq === settingsCanvasRequestSeq) {
-                    settingsCanvasLoaded = false;
-                    settingsCanvasFrame?.setAttribute('hidden', 'hidden');
-                    setStatus(t('hypit.canvasLoadError', {message:error?.message || error}), 'error');
-                }
-                return false;
-            } finally {
-                if (requestSeq === settingsCanvasRequestSeq) settingsCanvasPromise = null;
-            }
-        })();
-        return settingsCanvasPromise;
+    function loadSettingsCanvas(options = {}) {
+        settingsCanvasController.activate();
+        return settingsCanvasController.load(options);
     }
 
     function openSettingsCanvasInNewTab() {
-        settingsCanvasOpenedWindow = window.open('/static/smart-canvas.html?id=hypit-settings&mode=hypit-settings', '_blank');
-        if (!settingsCanvasOpenedWindow) {
-            setStatus(t('hypit.canvasLoadError', {message:currentLang() === 'en' ? 'the browser blocked the new tab' : '浏览器阻止了新标签'}), 'error');
-            return false;
-        }
-        try { settingsCanvasOpenedWindow.opener = null; } catch (_) {}
-        return true;
+        return settingsCanvasController.openInNewTab({
+            onBlocked:() => setStatus(t('hypit.canvasLoadError', {message:currentLang() === 'en' ? 'the browser blocked the new tab' : '浏览器阻止了新标签'}), 'error'),
+            onError:error => setStatus(t('hypit.canvasLoadError', {message:error?.message || error}), 'error'),
+        });
     }
 
     async function resetSettingsCanvas() {
@@ -1767,6 +1710,7 @@
     }
 
     function open() {
+        settingsCanvasController.deactivate();
         if (typeof window.closeComfyUiSettings === 'function') window.closeComfyUiSettings();
         if (typeof window.setApiSettingsSection === 'function') window.setApiSettingsSection('connections');
         root?.removeAttribute('hidden');
@@ -1778,10 +1722,12 @@
         document.querySelector('.api-page-delete-btn')?.setAttribute('hidden', 'hidden');
         document.querySelector('.api-page-save-btn')?.setAttribute('hidden', 'hidden');
         syncEditorHeader();
+        settingsCanvasController.activate();
         void loadSettingsCanvas();
     }
 
     function close(options = {}) {
+        settingsCanvasController.deactivate();
         layout?.classList.remove('hypit-settings-mode');
         block?.setAttribute('hidden', 'hidden');
         nav?.classList.remove('active');
@@ -1924,6 +1870,7 @@
 
     window.openHypitSettings = open;
     window.closeHypitSettings = close;
+    window.deactivateHypitSettingsCanvasController = () => settingsCanvasController.deactivate();
     window.prefetchHypitSettings = prefetchSettingsCanvasBootstrap;
     window.reloadHypitSettings = () => loadSettingsCanvas({force:true});
     window.openHypitSettingsCanvasEditor = openSettingsCanvasInNewTab;

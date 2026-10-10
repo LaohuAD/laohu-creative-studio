@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
+from studio_modules import studio_module_label
 
 try:  # FastAPI 在运行环境里一定存在；缺失时本模块仍可用于纯逻辑测试
     from fastapi import Request
@@ -102,6 +103,31 @@ _ARTICLE_SLOT_NODE_TYPES = {
 }
 
 
+def music_slot_descriptors() -> List[Dict[str, Any]]:
+    """歌曲/封面配置槽复用共享模型目录与普通画布的执行节点契约。"""
+    labels = {
+        "music": {"zh": "歌曲", "en": "Song"},
+        "image": {"zh": "封面", "en": "Cover"},
+    }
+    descriptors = []
+    for slot, node_type in (("music", "music_generation"), ("image", "image_generation")):
+        descriptors.append({
+            "id": slot,
+            "module_id": "music",
+            "selection_policy": "fixed",
+            "node_type": node_type,
+            "capability_name": node_type.replace("_", "-"),
+            "label": dict(labels[slot]),
+            "expected_output": dict(_OUTPUT_MEDIA[node_type]),
+            "allowed_operations": sorted(_SLOT_OPERATIONS[slot]),
+            "required_input_scenarios": list(_SLOT_SCENARIOS.get(slot, ["text_prompt"])),
+            "supported_input_roles": list(_SLOT_INPUT_ROLES[slot]),
+            "runtime_model_override": "allow",
+            "runtime_parameter_overrides": "schema_allowlist",
+        })
+    return descriptors
+
+
 def article_slot_descriptors() -> List[Dict[str, Any]]:
     """为文章设置图声明实际画布执行类型；只按共享模型目录的输出契约筛选。"""
     labels = {
@@ -178,7 +204,7 @@ def module_descriptors() -> Dict[str, Dict[str, Any]]:
         "canvas": {
             "schema_version": MODULE_SCHEMA_VERSION,
             "module_id": "canvas",
-            "label": {"zh": "画布", "en": "Canvas"},
+            "label": studio_module_label("canvas"),
             "selection_policy": "multiple",
             "executor_id": "canvas-execution",
             "slots": [
@@ -198,7 +224,7 @@ def module_descriptors() -> Dict[str, Dict[str, Any]]:
         "hypit": {
             "schema_version": MODULE_SCHEMA_VERSION,
             "module_id": "hypit",
-            "label": {"zh": "Hypit", "en": "Hypit"},
+            "label": studio_module_label("hypit"),
             "selection_policy": "fixed",
             "executor_id": "hypit-models-bridge",
             "slots": hypit_slot_descriptors(),
@@ -214,10 +240,18 @@ def module_descriptors() -> Dict[str, Dict[str, Any]]:
         "article": {
             "schema_version": MODULE_SCHEMA_VERSION,
             "module_id": "article",
-            "label": {"zh": "公众号文章", "en": "Article"},
+            "label": studio_module_label("article"),
             "selection_policy": "fixed",
             "executor_id": "article-settings-canvas-execution",
             "slots": article_slot_descriptors(),
+        },
+        "music": {
+            "schema_version": MODULE_SCHEMA_VERSION,
+            "module_id": "music",
+            "label": studio_module_label("music"),
+            "selection_policy": "fixed",
+            "executor_id": "music-settings-canvas-execution",
+            "slots": music_slot_descriptors(),
         },
     }
 

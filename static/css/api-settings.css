@@ -6461,10 +6461,6 @@ html[lang^="en"] .canvas-settings-description-en { display:inline; }
     .canvas-settings-canvas { min-height:620px; }
 }
 .canvas-models-context { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; padding:4px 0 14px; border-bottom:1px solid var(--studio-line); }
-.canvas-model-provider-field { display:flex; flex:0 0 min(260px, 100%); flex-direction:column; gap:6px; }
-.canvas-model-provider-field .label { color:var(--studio-muted); font-size:10.5px; font-weight:850; }
-#canvasModelProviderSelect { width:100%; min-height:36px; border:1px solid var(--studio-line); border-radius:var(--studio-radius-control); background:var(--studio-surface); color:var(--studio-text); padding:0 10px; font-size:12px; font-weight:750; outline:none; }
-#canvasModelProviderSelect:focus { border-color:var(--studio-accent); box-shadow:0 0 0 3px var(--studio-accent-soft); }
 .canvas-model-category-tabs { display:flex; flex-wrap:wrap; gap:5px; }
 .canvas-model-category-tab { min-height:32px; padding:0 12px; border:1px solid var(--studio-line); border-radius:999px; background:var(--studio-surface); color:var(--studio-muted); font-size:11px; font-weight:850; cursor:pointer; }
 .canvas-model-category-tab:hover { border-color:var(--studio-accent); color:var(--studio-text); }
@@ -6474,7 +6470,6 @@ html[lang^="en"] .canvas-settings-description-en { display:inline; }
     .api-settings-section-tabs { width:100%; }
     .api-section-tab { flex:1; }
     .canvas-models-context { align-items:stretch; flex-direction:column; }
-    .canvas-model-provider-field { flex-basis:auto; }
 }
 
 /* ===== RunningHub 双站启用控制：配置站点与启用状态分开 ===== */
@@ -6620,13 +6615,21 @@ body.show-runninghub .runninghub-region-picker > .hint { display:none !important
 html[lang^="en"] .api-settings-boot-zh,
 html:not([lang^="en"]) .api-settings-boot-en { display:none !important; }
 .layout.hypit-settings-mode #settingsContent > #apiSettingsBootState,
-.layout.article-settings-mode #settingsContent > #apiSettingsBootState { display:none !important; }
+.layout.article-settings-mode #settingsContent > #apiSettingsBootState,
+.layout.music-settings-mode #settingsContent > #apiSettingsBootState { display:none !important; }
 .layout.hypit-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
 .layout.hypit-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView,
 .layout.article-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
-.layout.article-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView { display:block !important; }
+.layout.article-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView,
+.layout.music-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
+.layout.music-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView { display:block !important; }
 .layout.hypit-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView,
-.layout.article-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView { display:block !important; }
+.layout.article-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView,
+.layout.music-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView { display:block !important; }
+.layout.music-settings-mode #providerSettingsView > :not(#musicSettingsBlock) { display:none !important; }
+.layout.music-settings-mode .content-head { display:none !important; }
+.layout.music-settings-mode #musicSettingsBlock { display:flex !important; }
+.layout.music-settings-mode #canvasModelSettingsBlock { display:none !important; }
 @keyframes api-settings-boot-spin { to { transform:rotate(360deg); } }
 @media (max-width:560px) {
     #apiSettingsBootState { grid-template-columns:auto minmax(0,1fr); gap:10px; padding:14px; }

@@ -24,10 +24,10 @@ from starlette.concurrency import run_in_threadpool
 
 from canvas_agent import is_local_client
 from canvas_core.json_store import DataFileError, read_json, write_json
+from studio_modules import PROJECT_MODULE_IDS, RESERVED_SETTINGS_CANVAS_IDS
 
 
-PROJECT_MODULES = frozenset({"canvas", "hypit", "article"})
-RESERVED_SETTINGS_CANVAS_IDS = frozenset({"hypit-settings", "article-settings", "canvas-settings"})
+PROJECT_MODULES = PROJECT_MODULE_IDS
 PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 PROJECT_RECORD_VERSION = 1
 MAX_PROJECT_NAME_LENGTH = 120
@@ -92,7 +92,7 @@ def _clean_module(value: Any, *, allow_none: bool = False) -> Optional[str]:
         return None
     module = str(value or "").strip().lower()
     if module not in PROJECT_MODULES:
-        raise StudioProjectError("项目模块必须是 canvas、hypit 或 article")
+        raise StudioProjectError("项目模块必须是 canvas、hypit、article 或 music")
     return module
 
 
@@ -333,6 +333,33 @@ class StudioProjectStore:
             raise DataFileError(f"文章记录 {path.name} 内容损坏，原文件已保留，请从备份恢复。")
         return raw
 
+    def _read_music_record(self, project_id: str, *, missing_ok: bool = False) -> Optional[dict[str, Any]]:
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            if missing_ok:
+                return None
+            raise StudioProjectNotFound("该 ID 保留给模块设置画布")
+        path = self._hypit_record_path(project_id)
+        if not path.exists():
+            if missing_ok:
+                return None
+            raise StudioProjectNotFound("音乐项目不存在")
+        raw = read_json(path)
+        if not isinstance(raw, dict):
+            raise DataFileError(f"项目记录 {path.name} 格式损坏，原文件已保留，请从备份恢复。")
+        if raw.get("id") != project_id or raw.get("module") != "music":
+            raise DataFileError(f"项目记录 {path.name} 与音乐模块或文件名不匹配，原文件已保留，请从备份恢复。")
+        version = raw.get("version", 1)
+        revision = raw.get("revision", 1)
+        if not isinstance(version, int) or version > PROJECT_RECORD_VERSION:
+            raise DataFileError(f"项目记录 {path.name} 版本不受支持，原文件已保留，请从备份恢复。")
+        if not PROJECT_ID_PATTERN.fullmatch(str(raw.get("id") or "")) or not isinstance(raw.get("name"), str):
+            raise DataFileError(f"项目记录 {path.name} 的身份或名称不合法，原文件已保留，请从备份恢复。")
+        if not isinstance(revision, int) or revision < 1:
+            raise DataFileError(f"项目记录 {path.name} 的修订号不合法，原文件已保留，请从备份恢复。")
+        if not isinstance(raw.get("music"), dict):
+            raise DataFileError(f"音乐记录 {path.name} 内容损坏，原文件已保留，请从备份恢复。")
+        return raw
+
     def read_article_record(self, project_id: str) -> dict[str, Any]:
         """在共享项目锁内读取文章主记录，损坏数据不会被空文章覆盖。"""
         project_id = _clean_project_id(project_id)
@@ -349,6 +376,25 @@ class StudioProjectStore:
         value = dict(record)
         if value.get("module") != "article":
             raise StudioProjectStoreError("文章记录模块不匹配")
+        write_json(self._hypit_record_path(project_id), value)
+        return value
+
+    def read_music_record(self, project_id: str) -> dict[str, Any]:
+        project_id = _clean_project_id(project_id)
+        with self.lock:
+            record = self._read_music_record(project_id)
+            assert record is not None
+            return record
+
+    def write_music_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        project_id = _clean_project_id(record.get("id"))
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            raise StudioProjectStoreError("保留设置画布 ID 不能作为音乐项目 ID")
+        value = dict(record)
+        if value.get("module") != "music":
+            raise StudioProjectStoreError("音乐记录模块不匹配")
+        if not isinstance(value.get("music"), Mapping):
+            raise StudioProjectStoreError("音乐项目内容格式无效")
         write_json(self._hypit_record_path(project_id), value)
         return value
 
@@ -373,6 +419,18 @@ class StudioProjectStore:
             name=record.get("name", "未命名文章"),
             updated_at=_timestamp(record),
             url=f"/static/article.html?id={quote(project_id, safe='')}",
+            revision=_revision(record),
+        )
+
+    @staticmethod
+    def _music_public(record: Mapping[str, Any]) -> dict[str, Any]:
+        project_id = _clean_project_id(record.get("id"))
+        return _public_project(
+            module="music",
+            project_id=project_id,
+            name=record.get("name", "未命名音乐"),
+            updated_at=_timestamp(record),
+            url=f"/static/music.html?id={quote(project_id, safe='')}",
             revision=_revision(record),
         )
 
@@ -423,9 +481,12 @@ class StudioProjectStore:
             return normalized
         canvas_item = self._canvas_item(project_id)
         hypit_exists = self._hypit_record_path(project_id).exists()
-        article_exists = hypit_exists and self._record_module(self._hypit_record_path(project_id)) == "article"
-        hypit_exists = hypit_exists and not article_exists
-        matches = [name for name, exists in (("canvas", canvas_item is not None), ("hypit", hypit_exists), ("article", article_exists)) if exists]
+        record_module = self._record_module(self._hypit_record_path(project_id)) if hypit_exists else ""
+        article_exists = hypit_exists and record_module == "article"
+        music_exists = hypit_exists and record_module == "music"
+        hypit_exists = hypit_exists and record_module == "hypit"
+        matches = [name for name, exists in (("canvas", canvas_item is not None), ("hypit", hypit_exists),
+                                               ("article", article_exists), ("music", music_exists)) if exists]
         if len(matches) > 1:
             raise StudioProjectConflict("项目 ID 在多个模块中都存在，请附带 module 参数")
         if matches:
@@ -449,7 +510,7 @@ class StudioProjectStore:
             if normalized in (None, "canvas"):
                 for item in self._canvas_items():
                     output.append(self._canvas_public(item))
-            if normalized in (None, "hypit", "article"):
+            if normalized in (None, "hypit", "article", "music"):
                 if self.studio_dir.exists():
                     for path in sorted(self.studio_dir.glob("*.json")):
                         record = self._record_module(path)
@@ -457,7 +518,9 @@ class StudioProjectStore:
                             output.append(self._hypit_public(self._read_hypit_record(path.stem) or {}))
                         elif record == "article" and normalized in (None, "article"):
                             output.append(self._article_public(self._read_article_record(path.stem) or {}))
-                        elif record not in {"hypit", "article"}:
+                        elif record == "music" and normalized in (None, "music"):
+                            output.append(self._music_public(self._read_music_record(path.stem) or {}))
+                        elif record not in {"hypit", "article", "music"}:
                             raise DataFileError(f"项目记录 {path.name} 模块不受支持，原文件已保留。")
             return sorted(output, key=lambda item: (-int(item.get("updated_at") or 0), item["name"], item["id"]))
 
@@ -473,8 +536,11 @@ class StudioProjectStore:
             if normalized == "hypit":
                 record = self._read_hypit_record(project_id)
                 return self._hypit_public(record or {})
-            article = self._read_article_record(project_id)
-            return self._article_public(article or {})
+            if normalized == "article":
+                article = self._read_article_record(project_id)
+                return self._article_public(article or {})
+            music = self._read_music_record(project_id)
+            return self._music_public(music or {})
 
     def create(self, module: str, name: str) -> dict[str, Any]:
         normalized = _clean_module(module)
@@ -517,6 +583,23 @@ class StudioProjectStore:
                     "selected_cover_variant_id": None,
                     "media_refs": [],
                 }
+            if normalized == "music":
+                record["music"] = {
+                    "title": "",
+                    "lyrics": "",
+                    "style_prompt": "",
+                    "notes": "",
+                    "cover_prompt": "",
+                    "title_candidates": {},
+                    "selected_title_candidate_id": None,
+                    "score_refs": [],
+                    "reference_audio_refs": [],
+                    "source_versions": [],
+                    "cover_variants": [],
+                    "audio_variants": [],
+                    "selected_cover_variant_id": None,
+                    "selected_audio_variant_id": None,
+                }
             if workflow_path is not None:
                 workflow_path.mkdir(parents=True, exist_ok=False)
             try:
@@ -529,7 +612,9 @@ class StudioProjectStore:
                     except OSError:
                         pass
                 raise
-            return self._hypit_public(record) if normalized == "hypit" else self._article_public(record)
+            return self._hypit_public(record) if normalized == "hypit" else (
+                self._article_public(record) if normalized == "article" else self._music_public(record)
+            )
 
     def rename(
         self,
@@ -558,14 +643,17 @@ class StudioProjectStore:
                     raise StudioProjectStoreError("画布重命名后无法重新读取画布")
                 return self._canvas_public(updated)
 
-            record = self._read_hypit_record(project_id) if normalized == "hypit" else self._read_article_record(project_id)
+            record = (self._read_hypit_record(project_id) if normalized == "hypit" else
+                      self._read_article_record(project_id) if normalized == "article" else
+                      self._read_music_record(project_id))
             self._check_revision(record or {}, expected_revision)
             assert record is not None
             record["name"] = clean_name
             record["updated_at"] = now_ms()
             record["revision"] = _revision(record) + 1
             write_json(self._hypit_record_path(project_id), record)
-            return self._hypit_public(record) if normalized == "hypit" else self._article_public(record)
+            return (self._hypit_public(record) if normalized == "hypit" else
+                    self._article_public(record) if normalized == "article" else self._music_public(record))
 
     def delete(
         self,
@@ -588,7 +676,9 @@ class StudioProjectStore:
                 )
                 return self._canvas_public(current)
 
-            record = self._read_hypit_record(project_id) if normalized == "hypit" else self._read_article_record(project_id)
+            record = (self._read_hypit_record(project_id) if normalized == "hypit" else
+                      self._read_article_record(project_id) if normalized == "article" else
+                      self._read_music_record(project_id))
             self._check_revision(record or {}, expected_revision)
             assert record is not None
             # 先读回收索引，索引损坏时在任何移动动作前拒绝操作。
@@ -602,7 +692,8 @@ class StudioProjectStore:
             # 移动记录而非 unlink，方便从备份恢复，也避免删除用户资产。
             shutil.move(str(self._hypit_record_path(project_id)), str(archive / "project.json"))
             self._append_recycle_item(record, archive)
-            return self._hypit_public(record) if normalized == "hypit" else self._article_public(record)
+            return (self._hypit_public(record) if normalized == "hypit" else
+                    self._article_public(record) if normalized == "article" else self._music_public(record))
 
 
 def _revision_from_request(
@@ -732,7 +823,8 @@ def create_studio_projects_router(
         try:
             expected = _revision_from_request(query_revision=revision, headers=request.headers if request else None)
             project = await run_in_threadpool(store.delete, project_id, module, expected)
-            return {"ok": True, "project": project, "recycled": project.get("module") in {"hypit", "article"}}
+            return {"ok": True, "project": project,
+                    "recycled": project.get("module") in {"hypit", "article", "music"}}
         except Exception as exc:
             _raise_store_error(exc)
 

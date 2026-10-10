@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
 from studio_canvas_settings import CANVAS_SETTINGS_CANVAS_ID
+from studio_modules import RESERVED_SETTINGS_CANVAS_IDS, studio_module_identity
 
 from canvas_core.hypit_config import (
     HYPIT_FLOW_SCHEMA_VERSION,
@@ -16,11 +17,17 @@ from canvas_core.hypit_config import (
 )
 
 
-HYPIT_SETTINGS_PROJECT_ID = "__hypit_settings__"
-HYPIT_SETTINGS_CANVAS_URL = f"/static/smart-canvas.html?id={HYPIT_SETTINGS_CANVAS_ID}&mode=hypit-settings"
-ARTICLE_SETTINGS_CANVAS_ID = "article-settings"
-ARTICLE_SETTINGS_PROJECT_ID = "__article_settings__"
-ARTICLE_SETTINGS_CANVAS_URL = f"/static/smart-canvas.html?id={ARTICLE_SETTINGS_CANVAS_ID}&mode=article-settings"
+HYPIT_SETTINGS_IDENTITY = studio_module_identity("hypit")
+ARTICLE_SETTINGS_IDENTITY = studio_module_identity("article")
+MUSIC_SETTINGS_IDENTITY = studio_module_identity("music")
+HYPIT_SETTINGS_PROJECT_ID = HYPIT_SETTINGS_IDENTITY.settings_project_id
+HYPIT_SETTINGS_CANVAS_URL = HYPIT_SETTINGS_IDENTITY.settings_canvas_url
+ARTICLE_SETTINGS_CANVAS_ID = ARTICLE_SETTINGS_IDENTITY.settings_canvas_id
+ARTICLE_SETTINGS_PROJECT_ID = ARTICLE_SETTINGS_IDENTITY.settings_project_id
+ARTICLE_SETTINGS_CANVAS_URL = ARTICLE_SETTINGS_IDENTITY.settings_canvas_url
+MUSIC_SETTINGS_CANVAS_ID = MUSIC_SETTINGS_IDENTITY.settings_canvas_id
+MUSIC_SETTINGS_PROJECT_ID = MUSIC_SETTINGS_IDENTITY.settings_project_id
+MUSIC_SETTINGS_CANVAS_URL = MUSIC_SETTINGS_IDENTITY.settings_canvas_url
 
 
 def is_settings_canvas(value: Any, canvas_id: str | None = None) -> bool:
@@ -30,7 +37,7 @@ def is_settings_canvas(value: Any, canvas_id: str | None = None) -> bool:
     selected_id = str(value or "").strip()
     if canvas_id is not None:
         return selected_id == str(canvas_id)
-    return selected_id in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID, CANVAS_SETTINGS_CANVAS_ID}
+    return selected_id in RESERVED_SETTINGS_CANVAS_IDS
 
 
 def is_hypit_settings_canvas(value: Any) -> bool:
@@ -84,20 +91,21 @@ class HypitSettingsCanvasService:
         project_id: str | None = None,
         migrate_legacy: bool | None = None,
     ):
-        if module_id not in {"hypit", "article"}:
+        identity = studio_module_identity(module_id)
+        if not identity or identity.settings_canvas_kind != "module-generation":
             raise ValueError("设置画布模块不受支持")
-        if not canvas_id or (module_id == "hypit" and canvas_id != HYPIT_SETTINGS_CANVAS_ID) or (
-            module_id == "article" and canvas_id != ARTICLE_SETTINGS_CANVAS_ID
-        ):
+        if not canvas_id or canvas_id != identity.settings_canvas_id:
             raise ValueError("设置画布 ID 与模块不匹配")
         self.canvas_id = canvas_id
         self.module_id = module_id
-        self.project_id = project_id or (HYPIT_SETTINGS_PROJECT_ID if module_id == "hypit" else ARTICLE_SETTINGS_PROJECT_ID)
-        self.canvas_url = canvas_url or (HYPIT_SETTINGS_CANVAS_URL if module_id == "hypit" else ARTICLE_SETTINGS_CANVAS_URL)
-        self.title = title or ("Hypit 生成配置" if module_id == "hypit" else "文章生成配置")
+        self.project_id = project_id or identity.settings_project_id
+        self.canvas_url = canvas_url or identity.settings_canvas_url
+        self.title = title or identity.settings_canvas_title_zh
         self.migrate_legacy = module_id == "hypit" if migrate_legacy is None else bool(migrate_legacy)
-        self.schema_version_key = "hypit_flow_schema_version" if module_id == "hypit" else "article_flow_schema_version"
-        self.migration_done_key = "hypit_legacy_migration_done" if module_id == "hypit" else "article_settings_initialized"
+        self.schema_version_key = {"hypit": "hypit_flow_schema_version", "article": "article_flow_schema_version",
+                                   "music": "music_flow_schema_version"}[module_id]
+        self.migration_done_key = {"hypit": "hypit_legacy_migration_done", "article": "article_settings_initialized",
+                                  "music": "music_settings_initialized"}[module_id]
         self._load_canvas = load_canvas
         self._save_canvas = save_canvas
         self._lock = lock
@@ -427,8 +435,9 @@ def create_hypit_settings_canvas_router(
     """注册设置图初始化、重置和可选的 Hypit 流程测试入口。"""
     router = APIRouter()
     route_path = base_path or (
-        "/api/hypit/settings-canvas" if service.module_id == "hypit"
-        else "/api/studio/articles/settings-canvas"
+        "/api/hypit/settings-canvas" if service.module_id == "hypit" else
+        "/api/studio/articles/settings-canvas" if service.module_id == "article" else
+        "/api/studio/music/settings-canvas"
     )
 
     @router.get(route_path)

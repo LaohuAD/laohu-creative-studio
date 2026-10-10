@@ -1,16 +1,15 @@
 """根据项目真实身份生成接入说明；创作技能准备与作品执行互相独立。"""
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
+from studio_modules import CONNECTION_MODULE_IDS, PREPARATION_MODULE_IDS
 
 
 def create_connection_router(get_project):
     router = APIRouter(prefix='/api/studio', tags=['Project connection'])
 
-    connection_modules = {'canvas', 'hypit', 'article'}
-
     @router.get('/modules/{module}/preparation.md')
     async def preparation_document(module: str, lang: str = 'zh'):
-        if module not in connection_modules:
+        if module not in PREPARATION_MODULE_IDS:
             raise HTTPException(404, '模块不存在')
         prep = ('先检查 Agent 是否已有官方老胡造梦技能仓库和 `/laohu` 入口。已有时按 `/laohu-update` 的官方检查流程核对新版；发现更新先说明版本与主要变化并询问，只有用户同意后才更新。'
                 '获准更新时使用完整仓库比较与合并流程，保留本地修改，不重置、强制覆盖或清理；用户不同意则沿用当前版本。仓库缺失时才按官方仓库 '
@@ -22,6 +21,9 @@ def create_connection_router(get_project):
         elif module == 'article':
             text = (prep + '只有用户明确要求公众号排版时，才可通过 `/laohu-htmlshow` 发现内部 `laohu-htmlshow-gzh` 能力；三级能力不单独注册，连接文章项目本身不调用 Skill。'
                     '工作台只提供主题目录和示例，不包含 Skill，也不直接发布公众号。完成准备后等待用户选择文章项目与创作要求。')
+        elif module == 'music':
+            text = (prep + '音乐项目用于管理歌曲标题、歌词、风格、乐谱和共享音频/封面版本；工作台复用共享音乐配置图、模型目录与任务执行器，不打包创作 Skill。'
+                    '只有用户明确要求创作时才从 `/laohu` 发现适用能力；连接、读取或保存内容都不触发生成。完成准备后等待用户选择歌曲项目与创作要求。')
         else:
             text = (prep + 'Hypit 项目优先使用工作台提供的原生项目与执行契约；不要求另装一套 Hypit 程序，不启动独立 Studio。是否使用仓库内其他创作能力由用户后续任务决定。完成准备后等待用户选择项目与创作要求。')
         if lang.startswith('en'):
@@ -35,13 +37,16 @@ def create_connection_router(get_project):
             elif module == 'article':
                 text = (prep_en + 'For WeChat typesetting, `/laohu-htmlshow` may discover its internal `laohu-htmlshow-gzh` capability; this is optional and must not be registered separately or invoked merely because the article project was connected. '
                         'The workbench contains only a theme catalog and examples, not a Skill, and does not publish to WeChat. After preparation, wait for the user to choose an article project and provide the creative request.')
+            elif module == 'music':
+                text = (prep_en + 'Music projects manage song titles, lyrics, style, scores, and shared audio/cover versions. The workbench reuses its shared music settings graph, model catalog, and task executor; it does not bundle a creative Skill. '
+                        'Discover a suitable capability through `/laohu` only when the user explicitly asks for creative work. Connecting, reading, or saving never starts generation. After preparation, wait for the user to choose a song project and provide the creative request.')
             else:
                 text = (prep_en + 'Hypit projects use the workbench’s native project and execution contracts; do not install another Hypit distribution or launch a separate Studio. Other creative capabilities are chosen later by the user. After preparation, wait for the user to choose a project and provide the creative request.')
         return PlainTextResponse('# '+('Creative skills preparation' if lang.startswith('en') else '创作技能准备')+'\n\n'+text+'\n', media_type='text/markdown; charset=utf-8')
 
     @router.get('/projects/{project_id}/connection.md')
     async def connection_document(project_id: str, request: Request, module: str = 'canvas', lang: str = 'zh'):
-        if module not in connection_modules:
+        if module not in CONNECTION_MODULE_IDS:
             raise HTTPException(404, '模块不存在')
         project = get_project(project_id, module)
         base = str(request.base_url).rstrip('/')
@@ -76,7 +81,7 @@ def create_connection_router(get_project):
                        '使用当前工作台项目页展示，不额外创建脱离项目管理的制作界面。\n'
                        '原生评论在工程 FEEDBACK.json，保留 Run 对应关系。工程删除不删除素材。'
                        '普通文件读写不能移动结果仓库，也不接受绝对路径。\n')
-        else:
+        elif module == 'article':
             article_url = f'{base}/api/studio/articles/{project_id}'
             common += ('文章卡片、列表与改名复用工作台项目目录。先读取当前服务 OpenAPI 并按实际路由操作；不得猜接口、直接写文件或绕过工作台读取密钥/磁盘。\n'
                        f'模板目录：GET {base}/api/studio/articles/templates，返回 templates 与 catalog_fingerprint；按条目的 id、name、description、preview_url 展示主题和示例。预览示例仅供浏览，不是当前文章正文。用户选择主题时，在文章 PUT 中提交 selected_theme_id 和 expected_revision，并使用模板目录返回的 catalog_fingerprint 填 expected_catalog_fingerprint；只有文章记录中实际保存且有效的 variants 才能复制或导出。缺少有效版本时，仅在用户明确要求排版后才按所选主题生成并保存正文版本。\n'
@@ -89,6 +94,15 @@ def create_connection_router(get_project):
                        f'生成：POST /api/studio/articles/{project_id}/generations，JSON {{purpose,slot,output_node_id,client_operation_id,request,base_revision?}}；purpose 为 cover、illustration 或 knowledge，slot 为 text/image/video/audio/music/voice，cover 必须使用 image。request 承载共享执行器支持的本次提示、参数和输入；base_revision 可用来拒绝过期文章。服务端接受时固定文章 revision/source_sha256 与配置图/任务快照。响应读取 generation.run_id 后，以 GET /api/studio/articles/{project_id}/generations/{{run_id}} 查询原任务。\n'
                        '普通生成成功只会把实际收集到的受管媒体引用追加到 media_refs；cover 图片同时写入 cover_variants，若接受时的文章 revision 和来源指纹仍是当前版本才自动选中。标题和正文 HTML 不会由文本/媒体任务自动改写，标题/正文版本须由用户要求的内容工作经上述 PUT 保存。若文章在任务期间更新，旧生成结果仍留作历史引用，不替换新版本的封面选择。\n'
                        '提交超时或刷新后，若已知 run_id 就查询原 generation；若 POST 响应不确定，使用完全相同的 client_operation_id 和请求查询/恢复同一幂等操作，不自动用新 ID 重发。状态为运行中或可恢复时继续查询原任务。只有确定任务终态失败/取消且用户明确要求重试，才以新 operation ID 发起新任务并保留旧记录。成功任务若仅关联文章失败，查询同一 generation 会重试关联，不会重新提交模型。\n')
+        else:
+            music_url = f'{base}/api/studio/music/{project_id}'
+            common += ('歌曲项目、列表、改名和删除复用共享 StudioProjectStore；音乐内容与项目元数据分开按项目 ID 读取。先读取当前服务 OpenAPI 并按实际路由操作，不得猜接口、直接写文件或绕过工作台读取密钥/磁盘。连接、读取和保存都不自动创作或生成。\n'
+                       f'歌曲内容：GET {music_url}；响应包含 revision、source_sha256、title、lyrics、style_prompt、notes、cover_prompt、title_candidates、selected_title_candidate_id、score_refs、reference_audio_refs、audio_variants、cover_variants、selected_audio_variant_id、selected_cover_variant_id。source_versions 保留歌词/风格/说明等来源的不可变快照；source_sha256 是服务端指纹，不自行猜算法。\n'
+                       f'保存：PUT {music_url}，必须携带 expected_revision。只提交要修改的歌曲字段；标题候选使用 title_candidates 与 selected_title_candidate_id，乐谱/参考音频用共享 asset_id 或 result_id 作为 score_refs/reference_audio_refs。乐谱格式限 abc、musicxml、midi，服务端会核对共享文件的名称、MIME 与实际内容。外部 Agent 添加现成作品时可提交 audio_refs/cover_refs，它们只接受可解析的共享素材/结果引用；run_id、来源快照和历史状态由服务端生成，不能伪造。409 时重新读取当前版本并合并，不能用旧 revision 覆盖。\n'
+                       '每个歌曲/封面结果版本保存生成时的标题、歌词、风格、备注、来源指纹和接受 revision；编辑歌曲源文不会改写已有版本。timed_lyrics 按音频版本 ID 保存，时间单位为秒，行结构为 {start,end?,text}。选中历史版本必须通过独立字段明确保存；生成或接入历史本身不自动替用户选择。媒体只引用共享结果 ID，不复制文件或暴露磁盘路径。\n'
+                       f'音乐配置图：GET {base}/api/studio/music/settings-canvas；重置：POST {base}/api/studio/music/settings-canvas/reset；Agent 命令路由：POST {base}/api/agent/canvases/{{canvas_id}}/commands，canvas_id 固定为 music-settings。配置图与歌曲项目内容分开；它复用共享画布节点、模型启用清单、预检、任务和受管结果收集，不创建第二套凭据、模型目录或执行器。重置只清空配置图，不删除歌曲、版本、共享素材或已有任务/结果。\n'
+                       f'明确要求生成歌曲时：POST {music_url}/generations，JSON {{purpose:"song",slot:"music",output_node_id,client_operation_id,request,base_revision?}}；封面使用 purpose:"cover" 与 slot:"image"。request 是本次用户输入，歌词、风格、参考音频及其他必要字段按当前共享节点/模型契约显式映射。服务端在接受时固定来源内容与配置图 revision 的私有快照。\n'
+                       f'生成列表：GET {music_url}/generations；提交返回 run_id 后查询 GET {music_url}/generations/{{run_id}}。超时或重连后优先查询原 run_id；若 POST 结果不确定，用完全相同的 client_operation_id 和请求恢复，不能自动换 ID 重交。只有确认原任务已终态失败/取消且用户明确要求重试时才使用新 ID。实际受管音频/图片结果关联失败时，重复查询同一任务只重试关联，不重复调用模型。\n')
         if lang.startswith('en'):
             common = (f'Connect to the current Laohu Creative Studio (laohu-creative-studio) project. Module: {module}; project ID: {project_id}; '
                       f'name: {project.get("name") or project.get("title") or project_id}.\n'
@@ -119,7 +133,7 @@ def create_connection_router(get_project):
                            f'Native preview: POST {endpoint}/studio with {{source:"main.svrun"}}. Display in this project page.\n'
                            'Preserve native FEEDBACK.json and its Run references. Project deletion preserves generated media. '
                            'Use relative paths; do not move the managed result repository through file editing.\n')
-            else:
+            elif module == 'article':
                 article_url = f'{base}/api/studio/articles/{project_id}'
                 common += ('Article cards, listing, and rename use the shared project store. Read the running service OpenAPI first and follow its actual routes; never guess an endpoint, write files directly, or bypass the workbench to read keys or disk.\n'
                            f'Theme catalog: GET {base}/api/studio/articles/templates returns templates and catalog_fingerprint. Use each item’s id, name, description, and preview_url to present the themes and examples. Previews are for browsing, not the current article body. When the user selects a theme, submit selected_theme_id and expected_revision in the article PUT, and pass the catalog_fingerprint from the catalog response as expected_catalog_fingerprint. Only valid variants actually saved in the article may be copied or exported. If no valid version exists, create and save the selected layout only after the user explicitly asks for typesetting.\n'
@@ -132,6 +146,15 @@ def create_connection_router(get_project):
                            f'Generation: POST /api/studio/articles/{project_id}/generations with {{purpose,slot,output_node_id,client_operation_id,request,base_revision?}}. purpose is cover, illustration, or knowledge; slot is text/image/video/audio/music/voice, and cover requires image. request carries this task’s prompt, parameters, and inputs for the shared executor. The server captures the accepted article revision/source_sha256 and configuration/task snapshot. Read generation.run_id, then poll GET /api/studio/articles/{project_id}/generations/{{run_id}}.\n'
                            'On ordinary generation success, only collected managed-media references are appended to media_refs. An image cover also enters cover_variants and is selected only while the accepted article revision and source hash remain current. Text generation does not rewrite the title or Markdown/HTML body; title/body variants are saved through PUT after the user requests that work. If the article changes while a task runs, the old output remains a historical media reference and does not replace the current cover selection.\n'
                            'After a timeout or refresh, query the known run_id. If the POST response is uncertain, retry/query with the identical client_operation_id and request so the operation remains idempotent; do not automatically resubmit with a new ID. Continue polling a running or recoverable task. Only after a confirmed failed/cancelled terminal state and an explicit user request may a new operation ID start a retry, preserving the old record. If generation succeeded but article association failed, GET on that same generation retries association without submitting another model task.\n')
+            else:
+                music_url = f'{base}/api/studio/music/{project_id}'
+                common += ('Music project metadata and listing use the shared StudioProjectStore; musical content is loaded separately by project ID. Read the running service OpenAPI first and follow its actual routes. Never guess endpoints, write files directly, or bypass the workbench to read keys or disk. Connecting, reading, and saving do not create content or run a model.\n'
+                           f'Song content: GET {music_url}. The response includes revision, source_sha256, title, lyrics, style_prompt, notes, cover_prompt, title_candidates, selected_title_candidate_id, score_refs, reference_audio_refs, audio_variants, cover_variants, selected_audio_variant_id, and selected_cover_variant_id. source_versions preserve immutable lyric/style/source snapshots; source_sha256 is computed by the server, so do not guess its algorithm.\n'
+                           f'Save with PUT {music_url} and expected_revision. Send only fields to change. Title candidates use title_candidates and selected_title_candidate_id; scores and reference audio use shared asset_id or result_id references. Score formats are abc, musicxml, or midi, and the server checks the shared file name, MIME, and actual content. An external Agent may attach existing work through audio_refs/cover_refs, but only resolvable shared media/result references are accepted. The server creates run IDs, source snapshots, and history metadata; clients cannot forge them. On 409 reread and merge against the current revision.\n'
+                           'Each song/cover version keeps its accepted title, lyrics, style, notes, source hash, and project revision. Editing the current song never rewrites existing versions. Save timed_lyrics by audio variant ID; times are seconds and each row is {start,end?,text}. Select a historical version only through its explicit selection field. Generated or attached history is not selected automatically. Media points to shared result IDs; do not copy files or expose disk paths.\n'
+                           f'Music settings graph: GET {base}/api/studio/music/settings-canvas; reset: POST {base}/api/studio/music/settings-canvas/reset; Agent command route: POST {base}/api/agent/canvases/{{canvas_id}}/commands with canvas_id fixed to music-settings. The graph is separate from song content. It reuses shared canvas nodes, enabled model options, preflight, task execution, and managed-result collection; it creates no second credentials, model catalog, or executor. Reset clears only the graph and preserves songs, versions, shared media, and existing tasks/results.\n'
+                           f'Only after an explicit generation request, POST {music_url}/generations. A song uses {{purpose:"song",slot:"music",output_node_id,client_operation_id,request,base_revision?}}; a cover uses purpose:"cover" and slot:"image". request carries this task’s inputs and follows the current shared node/model contract. At acceptance the server captures a private snapshot of the song source and settings-graph revision.\n'
+                           f'List generations with GET {music_url}/generations; after submit, query the returned run_id with GET {music_url}/generations/{{run_id}}. After timeout or reconnect, query the original run_id. If the POST outcome is uncertain, recover using the exact same client_operation_id and request; never automatically retry with a new ID. Use a new ID only after a confirmed terminal failure/cancellation and an explicit user retry request. If attaching a managed audio/image result fails, querying that same task retries association without resubmitting the model.\n')
         if module == 'hypit':
             models = f'{base}/api/studio/hypit/models'
             if lang.startswith('en'):
@@ -165,7 +188,7 @@ def create_connection_router(get_project):
 
     @router.get('/projects/{project_id}/connection')
     async def connection(project_id: str, request: Request, module: str = 'canvas', lang: str = 'zh'):
-        if module not in connection_modules:
+        if module not in CONNECTION_MODULE_IDS:
             raise HTTPException(404, '模块不存在')
         project = get_project(project_id, module)
         base = str(request.base_url).rstrip('/')
@@ -185,11 +208,19 @@ def create_connection_router(get_project):
                 text = (f'I use Laohu Creative Studio articles. Project: {name} (ID: {project_id}).\n'
                         f'Check the skills version, read the article contract, then connect this article: {document}\n'
                         'Report newer versions and ask before updating. Connection only prepares and reads; do not create content, invoke a fixed Skill, or publish.')
+        elif module == 'music':
+            text = (f'我在老胡画梦枋音乐模块工作。歌曲项目：{name}（ID：{project_id}）。\n'
+                    f'先读取歌曲项目契约并关联当前歌曲：{document}\n'
+                    '接入只准备并读取；不要自动创作或生成。只在我明确提出创作要求后，按共享音乐配置图和任务契约执行；等待我的具体任务。')
+            if language == 'en':
+                text = (f'I use Laohu Creative Studio music. Song project: {name} (ID: {project_id}).\n'
+                        f'Read the music project contract and connect this song: {document}\n'
+                        'Connection only prepares and reads; do not create content or run generation. Use the shared music settings graph and task contract only after I explicitly request creative work.')
         return {'project_id':project_id, 'module':module, 'project':project, 'text':text, 'document_url':document}
 
     @router.get('/modules/{module}/preparation')
     async def preparation(module: str, request: Request, lang: str = 'zh'):
-        if module not in connection_modules:
+        if module not in PREPARATION_MODULE_IDS:
             raise HTTPException(404, '模块不存在')
         language='en' if lang.startswith('en') else 'zh'
         document=f"{str(request.base_url).rstrip('/')}/api/studio/modules/{module}/preparation.md?lang={language}"
@@ -200,6 +231,10 @@ def create_connection_router(get_project):
             text=f'我准备使用老胡画梦枋的公众号文章模块。请读取技能准备文档：{document}\n先检查官方仓库版本；发现新版先告知并询问，未经同意不更新。缺仓库才安装；后续明确要求排版时再选 `/laohu-htmlshow`，不单独注册三级能力。完成准备后等待我选择文章项目与创作要求。'
             if language == 'en':
                 text=f'I plan to use Laohu Creative Studio’s WeChat article module. Read the preparation guide: {document}\nCheck the official version and ask before updating; install only if missing. Choose `/laohu-htmlshow` only for a later layout request; do not register its level-three Skill separately. Then wait for me to choose an article project and provide the creative request.'
+        elif module == 'music':
+            text=f'我准备使用老胡画梦枋的音乐模块。请读取技能准备文档：{document}\n只在后续明确要求创作时再查找适用能力；不把 Skill 打包进工作台。完成准备后等待我选择歌曲项目与创作要求，不自动生成。'
+            if language == 'en':
+                text=f'I plan to use Laohu Creative Studio’s music module. Read the preparation guide: {document}\nDiscover a suitable capability only for a later explicit creative request; do not bundle Skills in the workbench. Then wait for me to choose a song project and provide the request. Do not generate automatically.'
         return {'module':module, 'optional':True, 'text':text, 'document_url':document}
 
     return router

@@ -748,6 +748,129 @@ class CanvasSettingsManagementTests(unittest.TestCase):
         self.assertEqual(profile["operation"], "image_to_image")
         self.assertNotIn("fixture-only-secret", json.dumps(registry.build_catalog(saved)))
 
+    def test_exact_disable_prunes_formal_provider_hierarchy_but_keeps_management_options(self):
+        """精确停用清空正式目录层级，不删共享档案、连接数据或管理候选。"""
+        registry, root = self._isolated_registry()
+        capability_root = root / "data" / "model_capabilities"
+        image_profiles = [
+            {
+                "model_id": "qwen-image", "family_id": "qwen-image", "family_name": "Qwen Image",
+                "node_type": "image_generation", "operation": "text_to_image",
+                "status": "confirmed", "readiness": "ready", "validation_mode": "strict",
+                "runnable": True, "selectable": True, "evidence_level": "official_documented",
+                "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
+                "output": {"media_type": "image", "min": 1, "max": 1}, "parameters": {},
+                "request_mapping": {"prompt": "prompt"},
+            },
+            {
+                "model_id": "qwen-image", "family_id": "qwen-image", "family_name": "Qwen Image",
+                "node_type": "image_generation", "operation": "image_to_image",
+                "status": "confirmed", "readiness": "ready", "validation_mode": "strict",
+                "runnable": True, "selectable": True, "evidence_level": "official_documented",
+                "inputs": {
+                    "prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"},
+                    "reference": {"media_type": "image", "min": 1, "max": 1, "role": "reference"},
+                },
+                "output": {"media_type": "image", "min": 1, "max": 1}, "parameters": {},
+                "request_mapping": {"prompt": "prompt", "reference": "images"},
+            },
+        ]
+        (capability_root / "registry.json").write_text(json.dumps({
+            "schema_version": 1,
+            "providers": [
+                {"provider_id": "fixture", "file": "data/model_capabilities/providers/fixture.json"},
+                {"provider_id": "fixture-alt", "file": "data/model_capabilities/providers/fixture-alt.json"},
+            ],
+        }), encoding="utf-8")
+        for provider_id in ("fixture", "fixture-alt"):
+            (capability_root / "providers" / f"{provider_id}.json").write_text(json.dumps({
+                "provider_id": provider_id, "models": copy.deepcopy(image_profiles),
+            }), encoding="utf-8")
+        registry = ModelCapabilityRegistry(root)
+
+        records = [{
+            "id": provider_id, "name": provider_id, "protocol": "openai", "enabled": True,
+            "api_key": f"{provider_id}-fixture-secret", "chat_models": [],
+            "image_models": ["qwen-image"], "video_models": [], "audio_models": [],
+            "disabled_model_options": [],
+            # 画布模型目录的剪枝不得改动同一连接上的 AI 应用来源数据。
+            "rh_apps": [{"id": f"{provider_id}-saved-app"}],
+        } for provider_id in ("fixture", "fixture-alt")]
+        config_path = root / "api_providers.json"
+        config_path.write_text(json.dumps(records), encoding="utf-8")
+        namespace = self._management_main_functions(
+            registry, config_path, lambda: json.loads(config_path.read_text(encoding="utf-8")),
+        )
+
+        before = namespace["_build_model_management_catalog"](records)
+        family_options = [item for item in before["options"]
+                          if item["canonical_family_id"] == "series-image-qwen-image"]
+        self.assertEqual(len(family_options), 4, before)
+        ids_by_provider = {
+            provider_id: {item["option_id"] for item in family_options if item["connection_id"] == provider_id}
+            for provider_id in ("fixture", "fixture-alt")
+        }
+        exact_off = next(item for item in family_options
+                         if item["connection_id"] == "fixture" and item["operation"] == "image_to_image")
+        result = namespace["patch_canvas_model_option_enabled"](
+            exact_off["option_id"], False, before["catalog_revision"],
+        )
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        formal = namespace["build_model_capability_catalog"](saved)
+        formal_by_id = {item["option_id"]: item for item in formal["options"]}
+        self.assertNotIn(exact_off["option_id"], formal_by_id)
+        self.assertEqual(set(formal_by_id), {item["option_id"] for item in family_options} - {exact_off["option_id"]})
+        provider_entry = next(item for item in formal["providers"] if item["id"] == "fixture")
+        self.assertEqual({item["operation"] for item in provider_entry["models"]}, {"text_to_image"})
+        self.assertEqual({item["operation"] for item in provider_entry["families"][0]["variants"]}, {"text_to_image"})
+        for module_id, slot_id in (("canvas", "image_generation"), ("hypit", "image"), ("article", "image")):
+            projected = select_options_for_slot(formal["options"], module_id, slot_id)["options"]
+            self.assertEqual({item["option_id"] for item in projected}, set(formal_by_id))
+
+        # 同一平台此家族的兄弟操作都关闭后，只移除该平台；另一平台仍保有该家族。
+        current_management = namespace["_build_model_management_catalog"](saved)
+        fixture_remaining = next(item for item in current_management["options"]
+                                 if item["connection_id"] == "fixture" and item["enabled"] is True)
+        namespace["patch_canvas_model_option_enabled"](
+            fixture_remaining["option_id"], False, current_management["catalog_revision"],
+        )
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        formal_other_provider = namespace["build_model_capability_catalog"](saved)
+        self.assertNotIn("fixture", {item["id"] for item in formal_other_provider["providers"]})
+        self.assertIn("fixture-alt", {item["id"] for item in formal_other_provider["providers"]})
+        self.assertIn("series-image-qwen-image", {
+            item.get("canonical_family_id") for item in formal_other_provider["options"]
+        })
+
+        # 再关闭其余平台的全部精确项，最后一个可用 family 才消失。
+        current_management = namespace["_build_model_management_catalog"](saved)
+        for option in current_management["options"]:
+            if option["enabled"] is False or option["connection_id"] != "fixture-alt":
+                continue
+            result = namespace["patch_canvas_model_option_enabled"](
+                option["option_id"], False, current_management["catalog_revision"],
+            )
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+            current_management = namespace["_build_model_management_catalog"](saved)
+        formal_empty = namespace["build_model_capability_catalog"](saved)
+        self.assertEqual(formal_empty["options"], [])
+        self.assertFalse(any(item["id"] in ids_by_provider for item in formal_empty["providers"]))
+        self.assertFalse(any(
+            family.get("canonical_family_id") == "qwen-image"
+            or family.get("family_id") == "qwen-image"
+            for provider in formal_empty["providers"]
+            for family in provider.get("families") or []
+        ))
+        retained = namespace["_build_model_management_catalog"](saved)
+        retained_by_id = {item["option_id"]: item for item in retained["options"]}
+        self.assertEqual(set(retained_by_id), {item["option_id"] for item in family_options})
+        self.assertTrue(all(item["enabled"] is False for item in retained_by_id.values()))
+        self.assertEqual(
+            {item["id"]: item["rh_apps"] for item in json.loads(config_path.read_text(encoding="utf-8"))},
+            {item["id"]: item["rh_apps"] for item in records},
+        )
+        self.assertTrue(result["enabled"] is False)
+
     def test_public_management_catalog_covers_active_multimedia_and_dynamic_options_without_input_state(self):
         """公开档案反向核对管理目录，并验证共享音频字段、动态档案及精确启停。"""
         from tests.provider_fixture import configured_providers

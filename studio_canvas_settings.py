@@ -7,12 +7,12 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
+from studio_modules import studio_module_identity
 
 
-CANVAS_SETTINGS_CANVAS_ID = "canvas-settings"
-CANVAS_SETTINGS_CANVAS_URL = (
-    f"/static/smart-canvas.html?id={CANVAS_SETTINGS_CANVAS_ID}&mode=canvas-settings"
-)
+_CANVAS_IDENTITY = studio_module_identity("canvas")
+CANVAS_SETTINGS_CANVAS_ID = _CANVAS_IDENTITY.settings_canvas_id
+CANVAS_SETTINGS_CANVAS_URL = _CANVAS_IDENTITY.settings_canvas_url
 CANVAS_SETTINGS_ROUTE = "/api/studio/canvas/settings-canvas"
 MODEL_MANAGEMENT_CATALOG_ROUTE = "/api/studio/canvas/model-management-catalog"
 MODEL_ENABLEMENT_ROUTE = "/api/studio/canvas/model-enablement"
