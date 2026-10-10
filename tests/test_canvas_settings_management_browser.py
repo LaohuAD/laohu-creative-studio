@@ -619,19 +619,39 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
             "version": 1, "reset_epoch": 0,
             "executionLayouts": {"image_generation::fixture-provider::fixture-image-family::fixture-image-a": {"width": "full"}},
         }
-        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=canvas-settings"})
-        self.wait_for("document.readyState==='complete'&&!!document.getElementById('world')",
-                      "普通画布页没有加载")
+        canvas_url = f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=canvas-settings"
+        ready_expression = (
+            f"location.href==={json.dumps(canvas_url)}&&document.readyState==='complete'&&"
+            "!!document.getElementById('world')&&typeof loadSmartCanvasPersonalization==='function'&&"
+            "Array.from(document.scripts).some(script=>{try{return new URL(script.src,location.href).pathname==='/static/js/smart-canvas.js'}catch(e){return false}})&&"
+            "typeof canvas!=='undefined'&&canvas?.id==='canvas-settings'&&"
+            "typeof SmartNodeContract!=='undefined'&&Number(canvas.node_schema_version)===SmartNodeContract.SCHEMA_VERSION&&"
+            "typeof smartNodeMigrationPending!=='undefined'&&!smartNodeMigrationPending&&"
+            "typeof canvasSyncInFlight!=='undefined'&&!canvasSyncInFlight&&"
+            "typeof canvasSyncSaveQueued!=='undefined'&&!canvasSyncSaveQueued"
+        )
+        self.evaluate("document.body.innerHTML='<div id=\"world\"></div>';true")
+        self.assertTrue(self.evaluate("document.readyState==='complete'&&!!document.getElementById('world')"),
+                        "模拟的旧 about:blank 文档应满足原就绪判断")
+        self.assertFalse(self.evaluate(ready_expression),
+                         "模拟的旧文档不得满足绑定目标 URL、脚本及画布身份的就绪判断")
+        navigation = self.cdp("Page.navigate", {"url": canvas_url})
+        self.assertFalse(navigation.get("errorText"), f"普通画布页导航失败：{navigation}")
+        self.wait_for(ready_expression,
+                      lambda: "普通画布页没有完成当前 URL、共享脚本及目标画布加载：" + str(self.evaluate(
+                          "JSON.stringify({url:location.href,readyState:document.readyState,world:!!document.getElementById('world'),loader:{type:typeof loadSmartCanvasPersonalization,name:typeof loadSmartCanvasPersonalization==='function'?loadSmartCanvasPersonalization.name:null,scripts:[...document.scripts].filter(item=>item.src.includes('smart-canvas.js')).map(item=>item.src)},canvas:{id:typeof canvas==='undefined'?null:canvas?.id,schema:typeof canvas==='undefined'?null:canvas?.node_schema_version,contract:typeof SmartNodeContract==='undefined'?null:SmartNodeContract.SCHEMA_VERSION,migrationPending:typeof smartNodeMigrationPending==='undefined'?null:smartNodeMigrationPending,inFlight:typeof canvasSyncInFlight==='undefined'?null:canvasSyncInFlight,saveQueued:typeof canvasSyncSaveQueued==='undefined'?null:canvasSyncSaveQueued},navigation:performance.getEntriesByType('navigation').map(item=>({name:item.name,type:item.type,domComplete:Math.round(item.domComplete),loadEventEnd:Math.round(item.loadEventEnd)}))})"
+                      )))
         self.wait_for("document.documentElement.dataset.canvasSettings!=='true'",
                       "正式画布不能进入设置管理模式")
-        self.wait_for("canvas?.id==='canvas-settings'&&Number(canvas.node_schema_version)===SmartNodeContract.SCHEMA_VERSION&&"
-                      "!smartNodeMigrationPending&&!canvasSyncInFlight&&!canvasSyncSaveQueued",
-                      "正式画布测试夹具未按当前 schema 完成加载")
         deadline = time.time() + 8
         while time.time() < deadline and type(self).state["personalization_get_responses"] == 0:
             time.sleep(0.03)
         self.assertGreater(type(self).state["personalization_get_responses"], 0,
-                           "正式画布交互前应读取服务端旧形状个性化偏好")
+                           "正式画布交互前应读取服务端旧形状个性化偏好；"
+                           f"page={self.evaluate('JSON.stringify({url:location.href,readyState:document.readyState,canvasId:canvas?.id||null,loader:{type:typeof loadSmartCanvasPersonalization,name:typeof loadSmartCanvasPersonalization===\"function\"?loadSmartCanvasPersonalization.name:null,scripts:[...document.scripts].filter(item=>item.src.includes(\"smart-canvas.js\")).map(item=>item.src)},apiResources:performance.getEntriesByType(\"resource\").filter(item=>item.name.includes(\"/api/\")).map(item=>({name:item.name,status:item.responseStatus}))})')}，"
+                           f"apiRequestCount={len(type(self).state['api_requests'])}，"
+                           f"apiRequests={type(self).state['api_requests'][-30:]}，"
+                           f"personalizationResponseCount={type(self).state['personalization_get_responses']}")
         self.wait_for("Boolean(smartCanvasPersonalization&&smartCanvasPersonalization.modelOrder&&"
                       "smartCanvasPersonalization.parameterOptionOrder&&smartCanvasPersonalization.parameterPresentation)",
                       lambda: "旧形状偏好未被安全归一化：" + str(self.evaluate("JSON.stringify({prefs:smartCanvasPersonalization,modelOrder:smartCanvasPersonalization?.modelOrder})")))
