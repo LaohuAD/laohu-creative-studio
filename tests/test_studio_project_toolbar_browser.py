@@ -43,11 +43,13 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
           const grid=document.querySelector('#studioProjectGrid');
           const rect=(node)=>node&&node.getBoundingClientRect();
           const titleRect=rect(title), actionRect=rect(actions), toolbarRect=rect(toolbar), guideRect=rect(guide), gridRect=rect(grid);
+          const descriptionLineHeight=description&&parseFloat(getComputedStyle(description).lineHeight);
           return {
             module:document.body.dataset.studioModule,
             description:document.getElementById('studioProjectDescription')?.textContent?.trim()||'',
             titleRect:rect(titleText)&&{x:rect(titleText).x,y:rect(titleText).y,right:rect(titleText).right,bottom:rect(titleText).bottom},
             descriptionRect:rect(description)&&{x:rect(description).x,y:rect(description).y,right:rect(description).right,bottom:rect(description).bottom},
+            descriptionFirstLineBottom:descriptionLineHeight&&rect(description).y+descriptionLineHeight,
             legacyCount:document.getElementById('studioProjectCount')?.textContent?.trim()||'',
             titleActionCenterDelta:titleRect&&actionRect?Math.abs((titleRect.top+titleRect.bottom-actionRect.top-actionRect.bottom)/2):null,
             actionParent:actions?.parentElement?.className||null,
@@ -109,7 +111,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
           search:document.getElementById('studioProjectSearch')?.getAttribute('aria-label'),
           controls:[...document.querySelectorAll('.studio-project-toolbar-actions button')].map(button=>button.innerText.trim())
         }))()""")
-        self.assertEqual(english["description"], "Manage video recreation projects, connect an external Agent and review the work.")
+        self.assertEqual(english["description"], "Manage Hypit video recreation projects, connect an external Agent and review the work.")
         self.assertEqual(english["search"], "Search projects")
         self.assertEqual(english["controls"], ["Prepare creative skills", "New project"])
 
@@ -118,11 +120,11 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
         expected_actions = ["open", "rename", "connect", "delete"]
         expected_descriptions = {
             "canvas": "整理素材、连接画布节点，逐步完成作品。",
-            "hypit": "管理视频复刻项目，连接外部 Agent，并查看制作内容与结果。",
+            "hypit": "管理 Hypit 视频复刻项目，连接外部 Agent，并查看制作内容与结果。",
         }
         expected_english = {
             "canvas": "Organise assets, connect canvas nodes and build each piece step by step.",
-            "hypit": "Manage video recreation projects, connect an external Agent and review the work.",
+            "hypit": "Manage Hypit video recreation projects, connect an external Agent and review the work.",
         }
         for module in ("canvas", "hypit"):
             for width in (1440, 1280, 390):
@@ -137,7 +139,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     self.assertEqual(report["description"], expected_descriptions[module], report)
                     if width > 820:
                         self.assertGreater(report["descriptionRect"]["x"], report["titleRect"]["right"], report)
-                        self.assertLess(abs(report["descriptionRect"]["bottom"] - report["titleRect"]["bottom"]), 2, report)
+                        self.assertLess(abs(report["descriptionFirstLineBottom"] - report["titleRect"]["bottom"]), 2, report)
                     else:
                         self.assertGreaterEqual(report["descriptionRect"]["y"], report["titleRect"]["bottom"], report)
                     self.assertEqual(report["legacyCount"], "", "列表头部仍显示项目计数/排序文案")
@@ -170,7 +172,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     pitches:items.slice(1).map((node,index)=>node.getBoundingClientRect().top-items[index].getBoundingClientRect().top)
                   };
                 })()""")
-                self.assertEqual(report["labels"], ["画布", "Hypit", "公众号文章", "素材库"], report)
+                self.assertEqual(report["labels"], ["画布", "Hypit克隆", "公众号文章", "音乐创作", "素材库"], report)
                 self.assertTrue(all(height >= 44 for height in report["heights"]), report)
                 self.assertTrue(all(52 <= pitch <= 56 for pitch in report["pitches"]), report)
 

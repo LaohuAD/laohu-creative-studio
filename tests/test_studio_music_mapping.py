@@ -5,10 +5,12 @@ import asyncio
 import unittest
 
 import main
+from provider_fixture import ConfiguredProvidersMixin
 
 
-class StudioMusicMappingTests(unittest.TestCase):
+class StudioMusicMappingTests(ConfiguredProvidersMixin, unittest.TestCase):
     def setUp(self):
+        super().setUp()
         self.canvas = {
                 "id": main.MUSIC_SETTINGS_CANVAS_ID,
             "nodes": [{
