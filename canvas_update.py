@@ -105,7 +105,8 @@ def validate_package(body, manifest):
             raise ValueError(f'不允许或重复的更新路径：{name}')
         folded.add(name.casefold())
         expected[name] = record
-    required = {PYTHON_VERSION_FILE, 'VERSION', 'main.py', 'requirements.txt', 'model_capabilities.py', 'project_storage.py', 'static/release_update.py', 'static/update-notes.json'}
+    required = {PYTHON_VERSION_FILE, 'VERSION', 'main.py', 'requirements.txt', 'model_capabilities.py',
+                'project_storage.py', 'studio_modules.py', 'static/release_update.py', 'static/update-notes.json'}
     if not required.issubset(expected):
         raise ValueError('更新包缺少必要程序文件')
     result = {}

@@ -315,14 +315,17 @@ class ProjectionContractBoundaryTests(unittest.TestCase):
         # Hypit 设置现在嵌入共享画布；API 页不再维护第二套六槽选择器。
         page = (ROOT / "static" / "api-settings.html").read_text(encoding="utf-8")
         self.assertIn("hypit-settings.js", page, "设置页必须加载共享画布宿主脚本")
+        self.assertIn("settings-canvas-controller.js", page, "四种配置必须先加载共同的画布生命周期控制器")
         self.assertIn('id="hypitSettingsCanvasFrame"', page, "设置页必须挂载共享画布 iframe")
         self.assertIn('id="hypitSettingsReset"', page, "共享画布需要原子重置入口")
         self.assertIn('id="hypitSettingsNewTab"', page, "共享画布需要同一画布的独立编辑入口")
         source = (ROOT / "static" / "js" / "hypit-settings.js").read_text(encoding="utf-8")
-        self.assertIn("fetch('/api/hypit/settings-canvas'", source, "宿主必须获取专用共享画布")
+        self.assertIn("window.StudioSettingsCanvasController.create({", source, "Hypit must use the shared iframe lifecycle controller")
+        self.assertIn("endpoint: '/api/hypit/settings-canvas'", source, "shared controller must retain the Hypit bootstrap route")
         self.assertIn("SETTINGS_CANVAS_ID = 'hypit-settings'", source, "共享画布 ID 必须稳定")
-        self.assertIn("/static/smart-canvas.html", source, "必须复用智能画布页面")
-        self.assertIn("mode=hypit-settings", source, "专用模式必须通过同一画布 URL 识别")
+        controller = (ROOT / "static" / "js" / "settings-canvas-controller.js").read_text(encoding="utf-8")
+        self.assertIn("/static/smart-canvas.html", controller, "必须复用智能画布页面")
+        self.assertIn("searchParams.getAll('mode')", controller, "专用模式必须通过同一画布 URL 识别")
 
     def test_missing_projection_is_not_silent(self):
         source = (ROOT / "static" / "js" / "hypit-settings.js").read_text(encoding="utf-8")

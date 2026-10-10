@@ -40,7 +40,6 @@
         "api.canvasModelsTab": { zh: "画布模块模型", en: "Canvas Models" },
         "api.canvasModelsTitle": { zh: "画布模块模型", en: "Canvas Module Models" },
         "api.canvasModelsDesc": { zh: "这里的启用清单决定画布候选；具体节点仍在节点设置中单选。AI 应用与本地工作流不进入普通生成分类。", en: "This enabled list controls Canvas candidates; each node still chooses one model. AI apps and local workflows stay outside normal generation categories." },
-        "api.canvasModelsProvider": { zh: "配置平台", en: "Provider" },
         "api.modelCategoryAll": { zh: "全部", en: "All" },
         "api.modelCategoryText": { zh: "文本", en: "Text" },
         "api.modelCategoryImage": { zh: "图片", en: "Image" },
@@ -318,6 +317,23 @@
         "api.tagLlmModels": { zh: "LLM模型", en: "LLM Models" },
         "api.tagSeedance": { zh: "Seedance", en: "Seedance" },
         "api.tagAliyunBinding": { zh: "需绑定阿里云", en: "Requires Aliyun binding" },
-        "api.tagGptImage2": { zh: "GPT image 2模型", en: "GPT image 2 Models" }
+        "api.tagGptImage2": { zh: "GPT image 2模型", en: "GPT image 2 Models" },
+        "musicSettings.navLabel": { zh: "音乐创作", en: "Music Creation" },
+        "musicSettings.navMeta": { zh: "音乐生成配置", en: "Music generation setup" },
+        "musicSettings.canvasTitle": { zh: "音乐生成配置", en: "Music generation setup" },
+        "musicSettings.canvasDescription": { zh: "在共享画布中配置歌曲与封面生成节点。", en: "Configure song and cover generation on the shared canvas." },
+        "musicSettings.canvasReset": { zh: "重置配置", en: "Reset configuration" },
+        "musicSettings.canvasResetTitle": { zh: "清空音乐生成配置画布", en: "Clear the music generation setup canvas" },
+        "musicSettings.canvasNewTab": { zh: "打开画布编辑", en: "Open canvas editor" },
+        "musicSettings.canvasNewTabTitle": { zh: "在独立标签中打开同一份音乐配置画布", en: "Open this same music setup canvas in a separate tab" },
+        "musicSettings.canvasFrameTitle": { zh: "音乐生成配置画布", en: "Music generation setup canvas" },
+        "musicSettings.canvasLoading": { zh: "正在读取音乐生成配置…", en: "Loading music generation setup…" },
+        "musicSettings.canvasLoadError": { zh: "音乐生成配置读取失败：{message}。请重试读取。", en: "Could not load music generation setup: {message}. Retry loading." },
+        "musicSettings.canvasFrameTimeout": { zh: "画布页面加载超时", en: "Canvas page load timed out" },
+        "musicSettings.canvasFrameError": { zh: "画布页面无法打开", en: "Canvas page could not be opened" },
+        "musicSettings.canvasRetry": { zh: "重试读取", en: "Retry loading" },
+        "musicSettings.canvasResetConfirm": { zh: "将清空音乐生成配置画布中的节点和连线；不会删除作品、素材、结果或已提交任务。此操作无法撤销，是否继续？", en: "This clears nodes and connections from the music setup canvas. Projects, assets, results, and submitted tasks remain. This cannot be undone. Continue?" },
+        "musicSettings.canvasResetDone": { zh: "音乐生成配置已重置。", en: "Music generation setup was reset." },
+        "musicSettings.canvasResetError": { zh: "重置失败，当前画布内容已保留：{message}", en: "Reset failed; the current canvas was preserved: {message}" }
     });
 })();

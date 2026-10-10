@@ -30,8 +30,9 @@
                 var settingsMode=query.get('mode');
                 var isHypitSettings=query.get('id')==='hypit-settings' && settingsMode==='hypit-settings';
                 var isArticleSettings=query.get('id')==='article-settings' && settingsMode==='article-settings';
+                var isMusicSettings=query.get('id')==='music-settings' && settingsMode==='music-settings';
                 var isCanvasSettings=query.get('id')==='canvas-settings' && settingsMode==='canvas-settings';
-                if(isHypitSettings || isArticleSettings || isCanvasSettings) {
+                if(isHypitSettings || isArticleSettings || isMusicSettings || isCanvasSettings) {
                     root.dataset.canvasMode=settingsMode;
                     root.dataset.canvasSettings='true';
                     if(query.get('embedded')==='1') root.dataset.canvasEmbedded='1';

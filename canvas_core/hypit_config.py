@@ -8,13 +8,13 @@ import time
 from collections import defaultdict
 from typing import Any, Mapping
 
+from studio_modules import MODULE_SETTINGS_CANVAS_MODULES, studio_module_identity
 
-HYPIT_SETTINGS_CANVAS_ID = "hypit-settings"
-ARTICLE_SETTINGS_CANVAS_ID = "article-settings"
-SETTINGS_CANVAS_MODULES = {
-    HYPIT_SETTINGS_CANVAS_ID: "hypit",
-    ARTICLE_SETTINGS_CANVAS_ID: "article",
-}
+
+HYPIT_SETTINGS_CANVAS_ID = studio_module_identity("hypit").settings_canvas_id
+ARTICLE_SETTINGS_CANVAS_ID = studio_module_identity("article").settings_canvas_id
+MUSIC_SETTINGS_CANVAS_ID = studio_module_identity("music").settings_canvas_id
+SETTINGS_CANVAS_MODULES = dict(MODULE_SETTINGS_CANVAS_MODULES)
 HYPIT_FLOW_SCHEMA_VERSION = 1
 HYPIT_OUTPUT_SLOTS = ("text", "image", "video", "audio", "music", "voice")
 HYPIT_OUTPUT_KINDS = {
@@ -707,11 +707,57 @@ def prepare_hypit_task_canvas(
     module_id: str = "hypit",
 ) -> dict[str, Any]:
     """为一次 Hypit 请求构造私有画布快照，绝不改写已保存的设置画布。"""
-    plan = plan_hypit_slot(
+    configured_plan = plan_hypit_slot(
         canvas, slot, output_node_id, canvas_id=canvas_id, module_id=module_id,
     )
     task_canvas = copy.deepcopy(dict(canvas))
     by_id = {str(node.get("id") or ""): node for node in task_canvas.get("nodes", []) if isinstance(node, dict)}
+    field_inputs = request.get("field_inputs") if isinstance(request.get("field_inputs"), list) else []
+    field_targets: dict[str, set[str]] = defaultdict(set)
+    for entry in field_inputs:
+        if not isinstance(entry, Mapping):
+            raise ValueError("Hypit 显式字段输入格式无效")
+        node_id = str(entry.get("node_id") or "").strip()
+        field_key = str(entry.get("targetFieldKey") or "").strip()
+        kind = str(entry.get("kind") or "").strip().lower()
+        target = by_id.get(node_id)
+        if (not node_id or node_id not in set(configured_plan.get("node_ids") or [])
+                or target is None or target.get("type") not in _DYNAMIC_OUTPUT_TYPES
+                or not field_key or len(field_key) > 240 or kind not in {"text", "audio", "image", "video"}):
+            raise ValueError("Hypit 显式字段输入必须指向依赖流程中的动态节点和精确字段")
+        if field_key in field_targets[node_id]:
+            raise ValueError(f"Hypit 显式字段 {field_key} 不能重复绑定")
+        field_targets[node_id].add(field_key)
+
+    if field_targets:
+        # 本次提交的精确字段值覆盖相同 targetFieldKey 的配置素材。只改任务副本，
+        # 并从私有执行依赖中移除被覆盖的字段连线，避免旧素材抢先命中或上游被无用执行。
+        for node_id, field_keys in field_targets.items():
+            target = by_id[node_id]
+            current_refs = target.get("manualInputRefs") if isinstance(target.get("manualInputRefs"), list) else []
+            target["manualInputRefs"] = [
+                ref for ref in current_refs
+                if not isinstance(ref, Mapping)
+                or str(ref.get("targetFieldKey") or ref.get("target_field_key") or "").strip() not in field_keys
+            ]
+        task_canvas["connections"] = [
+            edge for edge in task_canvas.get("connections", [])
+            if not (
+                isinstance(edge, Mapping)
+                and str(edge.get("to", edge.get("target", "")) or "") in field_targets
+                and str(edge.get("targetFieldKey") or edge.get("target_field_key") or "").strip()
+                    in field_targets[str(edge.get("to", edge.get("target", "")) or "")]
+                and str(edge.get("kind") or "input").strip().lower() not in {"story", "history", "result"}
+            )
+        ]
+        plan = plan_hypit_slot(
+            task_canvas, slot, output_node_id, canvas_id=canvas_id, module_id=module_id,
+        )
+        # The fingerprint describes the configured graph. Per-run field overrides live in
+        # the private task snapshot and must not make the run look like a changed setting.
+        plan["recipe_fingerprint"] = configured_plan["recipe_fingerprint"]
+    else:
+        plan = configured_plan
     ordered = [by_id[node_id] for node_id in plan["node_ids"]]
     execution_nodes = [node for node in ordered if node.get("type") in _EXECUTABLE_TYPES]
     if not execution_nodes:
@@ -939,6 +985,27 @@ def prepare_hypit_task_canvas(
             target["text"] = str(implicit_text[0]["text"])
         else:
             replace_material_kind(target, "text", implicit_text)
+
+    execution_by_id = {str(node.get("id") or ""): node for node in execution_nodes}
+    for entry in field_inputs:
+        if not isinstance(entry, Mapping):
+            raise ValueError("Hypit 显式字段输入格式无效")
+        node_id = str(entry.get("node_id") or "").strip()
+        field_key = str(entry.get("targetFieldKey") or "").strip()
+        kind = str(entry.get("kind") or "").strip().lower()
+        target = execution_by_id.get(node_id)
+        if target is None or not field_key or len(field_key) > 240 or kind not in {"text", "audio", "image", "video"}:
+            raise ValueError("Hypit 显式字段输入缺少有效执行节点、targetFieldKey 或媒体类型")
+        value = copy.deepcopy(entry.get("value"))
+        if kind == "text":
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Hypit 显式文本字段 {field_key} 缺少正文")
+            reference = {"kind": "text", "targetFieldKey": field_key, "text": value, "content": value}
+        else:
+            if not isinstance(value, Mapping) or not str(value.get("url") or "").strip():
+                raise ValueError(f"Hypit 显式 {kind} 字段 {field_key} 缺少稳定素材地址")
+            reference = {**copy.deepcopy(dict(value)), "kind": kind, "targetFieldKey": field_key}
+        target.setdefault("manualInputRefs", []).append(reference)
 
     parameters = request.get("parameters") if isinstance(request.get("parameters"), Mapping) else {}
     if parameters:

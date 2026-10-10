@@ -21,7 +21,7 @@
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .author-short { display:none; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .author-full { display:inline; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .social-row-lite { grid-template-columns:repeat(4,18px); gap:12px; }
-        .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill { display:grid; grid-template-columns:18px 88px 14px; justify-content:center; align-items:center; column-gap:8px; }
+        .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill { display:grid; grid-template-columns:18px 88px 14px; justify-content:center; align-items:center; column-gap:6px; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill-text { text-align:left; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill > svg:first-child { justify-self:center; }
         .sidebar .settings-fold-chevron { margin:0; }
@@ -241,19 +241,19 @@
         .nav-item {
             position: relative;
             width: 48px;
-            height: 48px;
-            flex: 0 0 48px;
-            margin: 6px 0;
+            height: 46px;
+            flex: 0 0 46px;
+            margin: 3px 0;
             display: flex;
             align-items: center;
             justify-content: flex-start;
-            border-radius: 18px;
+            border-radius: 16px;
             cursor: pointer;
             /* 只对 width 做带延迟的过渡（侧栏悬停展开效果）；background/color 不参与过渡，避免 active 切换时底色"流动" */
             transition: width 0.3s var(--fluid-ease) 0.5s;
             color: var(--muted);
             overflow: hidden;
-            padding-left: 14px;
+            padding-left: 12px;
         }
 
         .sidebar:hover .nav-item {
@@ -559,18 +559,18 @@
 
         .side-actions {
             margin-top:auto;
-            margin-bottom:12px;
+            margin-bottom:8px;
             display:flex;
             flex-direction:column;
             align-items:center;
-            gap:8px;
+            gap:5px;
             width:100%;
             flex:0 0 auto;
         }
 
         .side-pill {
             width:44px;
-            height:36px;
+            height:34px;
             border-radius:999px;
             background: transparent;
             border: 1px solid var(--border);
@@ -583,7 +583,8 @@
             transition: width 0.3s var(--fluid-ease) 0.5s, gap 0.3s var(--fluid-ease) 0.5s, background-color 0.2s, color 0.2s, border-color 0.2s;
             flex-shrink: 0;
             overflow:hidden;
-            gap:8px;
+            gap:6px;
+            padding:0 5px;
             position:relative;
         }
 
@@ -671,12 +672,12 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 8px;
+            gap: 5px;
             pointer-events: none;
             transition: max-height .28s var(--fluid-ease), opacity .18s ease;
         }
         .settings-fold-group:not(.is-collapsed) {
-            max-height: 132px;
+            max-height: 126px;
             opacity: 1;
             pointer-events: auto;
         }
@@ -697,7 +698,7 @@
         }
         /* 折叠态去除 gap，避免图标被推偏 */
         .side-pill { gap:0; }
-        .sidebar:hover .side-pill { gap:8px; }
+        .sidebar:hover .side-pill { gap:6px; }
 
         .project-version-badge {
             width:44px;
@@ -1348,7 +1349,7 @@
         }
         .sidebar.is-pinned .side-pill {
             width: 170px;
-            gap: 8px;
+            gap: 6px;
             transition-delay: 0s;
         }
         .sidebar.is-pinned .side-pill-text {
@@ -1440,7 +1441,7 @@
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .author-short { display:none; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .author-full { display:inline; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .social-row-lite { grid-template-columns:repeat(4,18px); gap:12px; }
-        .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill { display:grid; grid-template-columns:18px 88px 14px; justify-content:center; align-items:center; column-gap:8px; }
+        .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill { display:grid; grid-template-columns:18px 88px 14px; justify-content:center; align-items:center; column-gap:6px; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill-text { text-align:left; }
         .sidebar:is(:hover,.is-pinned):not(.is-collapsing) .side-pill > svg:first-child { justify-self:center; }
         .sidebar .settings-fold-chevron { margin:0; }
@@ -1469,11 +1470,15 @@
                 </div>
                 <div class="nav-item" onclick="switchUI(this, 'hypit')">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="m10 8 6 4-6 4z"></path></svg>
-                    <span class="nav-text" data-i18n="nav.hypit">Hypit</span>
+                    <span class="nav-text" data-i18n="nav.hypit">Hypit克隆</span>
                 </div>
                 <div class="nav-item" id="nav-article" onclick="switchUI(this, 'article')">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H19v18H7.5A2.5 2.5 0 0 0 5 22z"></path><path d="M5 4.5v15A2.5 2.5 0 0 1 7.5 17H19"></path><path d="M9 7h6M9 10h6M9 13h4"></path></svg>
                     <span class="nav-text" data-i18n="nav.article">公众号文章</span>
+                </div>
+                <div class="nav-item" id="nav-music" onclick="switchUI(this, 'music')">
+                    <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                    <span class="nav-text" data-i18n="nav.music">音乐创作</span>
                 </div>
                 <div class="nav-item" onclick="switchUI(this, 'asset-manager')">
                     <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1592,6 +1597,7 @@
             <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2026.08.17.1787828134" scrolling="yes"></iframe>
             <iframe id="frame-hypit" data-src="/static/hypit-list.html" scrolling="yes"></iframe>
             <iframe id="frame-article" data-src="/static/article-list.html" scrolling="yes"></iframe>
+            <iframe id="frame-music" data-src="/static/music-list.html" scrolling="yes"></iframe>
 
         </main>
     </div>
@@ -1707,7 +1713,7 @@
         const SIDEBAR_SETTINGS_COLLAPSED_KEY = 'studio_sidebar_settings_collapsed';
         const SIDEBAR_PINNED_KEY = 'studio_sidebar_pinned';
         const DEFAULT_PAGE_ID = 'canvas';
-        const PAGE_IDS = ['canvas','asset-manager','hypit','article','api-settings'];
+        const PAGE_IDS = ['canvas','asset-manager','hypit','article','music','api-settings'];
         const PROJECT_URL = 'https://github.com/LaohuAD/laohu-creative-studio';
         let appInfo = { version:'', repo_url:PROJECT_URL, version_url:'https://raw.githubusercontent.com/LaohuAD/laohu-creative-studio/main/VERSION' };
         let updateConnectivityResult = null;

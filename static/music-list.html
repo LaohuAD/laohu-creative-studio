@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-studio-scale="off">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="/static/images/logo.png" type="image/png">
+    <title>音乐创作</title>
+    <script>
+        (function(){try{
+            var key='studio_theme_preference_v1', ids=['studio-violet','sunlit','vermilion','forest','classic'];
+            var raw=localStorage.getItem(key), pref=null; try{pref=raw?JSON.parse(raw):null;}catch(e){}
+            if(!pref||pref.version!==1||!['light','dark','system'].includes(pref.appearance)){
+                var old=localStorage.getItem('studio_theme'), legacy=localStorage.getItem('canvas_theme');
+                pref={version:1,themeId:'studio-violet',appearance:old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light'};
+                if(raw===null)localStorage.setItem(key,JSON.stringify(pref));
+            }
+            var theme=ids.includes(pref.themeId)?pref.themeId:'studio-violet';
+            var mode=['light','dark','system'].includes(pref.appearance)?pref.appearance:'light';
+            var appearance=mode==='system'&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':mode==='system'?'light':mode;
+            document.documentElement.dataset.studioTheme=theme;document.documentElement.dataset.studioAppearance=appearance;document.documentElement.dataset.studioAppearanceMode=mode;
+            document.documentElement.style.colorScheme=appearance;document.documentElement.classList.toggle('studio-theme-dark',appearance==='dark');document.documentElement.classList.toggle('theme-dark',appearance==='dark');
+        }catch(e){}})();
+    </script>
+    <script src="/static/vendor/js/lucide.js"></script>
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/i18n.js"></script>
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/studio-ui-polish.css">
+    <link rel="stylesheet" href="/static/css/studio-projects.css">
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css">
+</head>
+<body data-studio-module="music">
+    <div class="studio-project-page">
+        <main class="studio-project-main">
+            <section class="studio-project-toolbar" aria-labelledby="studioProjectListTitle">
+                <div class="studio-project-toolbar-top">
+                    <div class="studio-project-toolbar-heading">
+                        <h2 id="studioProjectListTitle">音乐项目</h2>
+                        <p id="studioProjectDescription" class="studio-project-description">管理歌曲作品，接入外部 Agent，并查看歌词、乐谱与音频结果。</p>
+                    </div>
+                    <div class="studio-project-toolbar-actions">
+                        <label class="studio-search-field" for="studioProjectSearch"><i data-lucide="search" aria-hidden="true"></i><input id="studioProjectSearch" type="search" autocomplete="off" placeholder="搜索项目" aria-label="搜索项目"></label>
+                        <button id="studioPrepareButton" class="studio-secondary-button" type="button"><i data-lucide="book-open-check" aria-hidden="true"></i><span>准备创作技能</span></button>
+                        <button id="studioNewProjectButton" class="studio-primary-button" type="button"><i data-lucide="plus" aria-hidden="true"></i><span>新建项目</span></button>
+                    </div>
+                </div>
+            </section>
+            <section id="studioProjectState" class="studio-project-state" aria-live="polite" role="status">
+                <div class="studio-state-icon"><i data-lucide="loader-circle" aria-hidden="true"></i></div><strong>正在读取项目</strong><span>项目记录来自服务端。</span>
+            </section>
+            <section id="studioProjectGrid" class="studio-project-grid" aria-live="polite"></section>
+        </main>
+        <div id="studioOpenFallback" class="studio-open-fallback" hidden>
+            <div class="studio-open-fallback-panel" role="status"><div class="studio-state-icon"><i data-lucide="external-link" aria-hidden="true"></i></div><div><strong id="studioOpenFallbackTitle">浏览器拦截了新标签</strong><p id="studioOpenFallbackText">点击下面的按钮打开项目。</p></div><div class="studio-open-fallback-actions"><button id="studioOpenFallbackButton" class="studio-primary-button" type="button">打开项目</button><button id="studioOpenFallbackClose" class="studio-secondary-button" type="button">关闭</button></div></div>
+        </div>
+    </div>
+    <script src="/static/js/studio-projects.js"></script>
+</body>
+</html>

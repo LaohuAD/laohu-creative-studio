@@ -259,6 +259,26 @@ class AppExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(workflow['3']['inputs']['strength'], 0.5)
         self.assertEqual(self.store.get_canvas_task(result['task_ids'][0])['status'], 'succeeded')
 
+    async def test_ordinary_canvas_dynamic_request_does_not_freeze_settings_snapshot(self):
+        service = await self._service()
+        node = self.canvas['nodes'][1]
+        node['runSettings'].update({
+            'rhMode': 'workflow',
+            'rhConfigKey': 'workflow:wf-1',
+            'rhWorkflowId': 'wf-1',
+        })
+        workflow_json = {'1': {'inputs': {'prompt': 'ordinary canvas workflow'}}}
+        service.resolve_runninghub_fields = lambda *_: {
+            'fields': app_fields(), 'workflowJson': workflow_json,
+        }
+
+        request = await service._prepare_request(self.canvas, node, 'ordinary-canvas')
+
+        self.assertEqual(request['kind'], 'runninghub_workflow')
+        self.assertEqual(request['workflow']['1']['inputs']['prompt'], 'ordinary canvas workflow')
+        self.assertNotIn('_studio_dynamic_snapshot', request)
+        self.assertNotIn('_studioAcceptedDynamicSnapshot', node['runSettings'])
+
     async def test_local_comfy_uses_projected_params_and_saves_result(self):
         captured = {}
 

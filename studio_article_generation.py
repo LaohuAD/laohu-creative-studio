@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException
+from studio_hypit_flow import AsyncOperationLockRegistry
 
 
 class StudioArticleGenerationBridge:
@@ -19,6 +20,7 @@ class StudioArticleGenerationBridge:
         self.storage = storage
         self.settings_service = settings_service
         self.publish_node_result_callback = publish_node_result
+        self._operation_locks = AsyncOperationLockRegistry()
 
     @staticmethod
     async def _await(value: Any) -> Any:
@@ -75,6 +77,11 @@ class StudioArticleGenerationBridge:
         return None, None
 
     async def submit(self, project_id: str, payload: Mapping[str, Any], accepted: Mapping[str, Any]) -> dict[str, Any]:
+        operation_id = str(payload.get("client_operation_id") or "").strip() if isinstance(payload, Mapping) else ""
+        async with self._operation_locks.hold(operation_id):
+            return await self._submit_locked(project_id, payload, accepted)
+
+    async def _submit_locked(self, project_id: str, payload: Mapping[str, Any], accepted: Mapping[str, Any]) -> dict[str, Any]:
         """校验文章与配置图快照后，只通过共享 runner 提交一次任务。"""
         if not isinstance(payload, Mapping) or not isinstance(accepted, Mapping):
             raise HTTPException(status_code=400, detail="文章生成请求格式无效")

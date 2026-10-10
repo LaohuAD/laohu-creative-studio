@@ -9,7 +9,7 @@ import time
 import unittest
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from canvas_core.hypit_config import ARTICLE_SETTINGS_CANVAS_ID
@@ -29,6 +29,90 @@ from tests.test_studio_articles import (
 
 
 class StudioArticleGenerationTests(unittest.TestCase):
+    def test_same_operation_id_concurrent_on_different_output_is_rejected_and_replay_is_stable(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            root = Path(temporary)
+            project_store = StudioProjectStore(root, FakeCanvasAdapter())
+            project = project_store.create("article", "并发幂等文章")
+            storage = ProjectStorage(root / "managed")
+            storage.ensure_layout()
+            article_store = StudioArticleStore(
+                root,
+                project_store,
+                catalog_fixture(root / "static" / "article-templates" / "catalog.json"),
+                resolve_media_reference=fake_media_reference,
+                register_managed_result=storage.register_managed_result,
+                find_shared_media_by_hash=lambda digest, kind: find_shared_media_by_hash(storage, digest, kind),
+            )
+            article = article_store.get(project["id"])
+
+            class SettingsService:
+                def ensure_canvas(self):
+                    return {"id": "article-settings", "revision": 1, "nodes": [], "connections": []}
+
+            class Runner:
+                def __init__(self):
+                    self.calls = []
+                    self.accepted_run_ids = set()
+
+                async def submit(self, slot, output_node_id, request_id, payload, test=False, *, trusted_context=None):
+                    del test
+                    self.calls.append((output_node_id, request_id))
+                    # Both callers can pass the bridge's prior-run scan without its lock;
+                    # suspending here makes that race deterministic in this fixture.
+                    await asyncio.sleep(0.01)
+                    run = storage.prepare_run(
+                        canvas_id="article-settings",
+                        node_id=output_node_id,
+                        client_operation_id=request_id,
+                        standard_request={"slot": slot, "request": copy.deepcopy(payload.get("request") or {})},
+                        platform_request={"slot": slot},
+                        capability_snapshot={
+                            "module_id": "article",
+                            "trusted_context": copy.deepcopy(dict(trusted_context or {})),
+                            "output_node_id": output_node_id,
+                        },
+                    )
+                    self.accepted_run_ids.add(run["run_id"])
+                    return {"run_id": run["run_id"], "status": "queued", "output_node_id": output_node_id}
+
+            runner = Runner()
+            bridge = StudioArticleGenerationBridge(
+                article_store=article_store,
+                runner=runner,
+                storage=storage,
+                settings_service=SettingsService(),
+            )
+            accepted = {"accepted_revision": article["revision"], "source_hash": article["source_sha256"]}
+            common = {
+                "slot": "image", "purpose": "cover", "client_operation_id": "article-shared-operation",
+                "request": {"prompt": "同一次封面请求"},
+            }
+
+            async def submit_pair():
+                return await asyncio.gather(
+                    bridge.submit(project["id"], {**common, "output_node_id": "cover-a"}, accepted),
+                    bridge.submit(project["id"], {**common, "output_node_id": "cover-b"}, accepted),
+                    return_exceptions=True,
+                )
+
+            values = asyncio.run(submit_pair())
+            successes = [value for value in values if isinstance(value, dict)]
+            conflicts = [value for value in values if isinstance(value, HTTPException)]
+            self.assertEqual(len(successes), 1, values)
+            self.assertEqual(len(conflicts), 1, values)
+            self.assertEqual(conflicts[0].status_code, 409)
+            self.assertEqual(len(runner.accepted_run_ids), 1)
+            self.assertEqual(len(storage.list_runs(canvas_id="article-settings")), 1)
+
+            original = successes[0]
+            replay = asyncio.run(bridge.submit(
+                project["id"], {**common, "output_node_id": original["output_node_id"]}, accepted,
+            ))
+            self.assertEqual(replay["run_id"], original["run_id"])
+            self.assertEqual(len(runner.accepted_run_ids), 1)
+
     def test_failed_publish_association_is_persisted_and_get_retries_without_resubmit(self):
         TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:

@@ -97,6 +97,16 @@ class AssetManagerUiTests(unittest.TestCase):
         self.assertIn("source_canvas", self.script)
         self.assertIn("未记录来源", self.script)
 
+    def test_generation_results_use_global_refresh_and_compose_time_filter(self):
+        results_view = self.script.split("function renderCanvasAssetsManager(){", 1)[1].split("function renderCanvasAssetTreeBranch", 1)[0]
+        global_refresh = self.script.split("async function loadAll(){", 1)[1].split("async function ", 1)[0]
+
+        self.assertIn("apiJson('/api/results')", global_refresh)
+        self.assertIn("function canvasAssetMatchesTimeRange", self.script)
+        self.assertIn("data-canvas-asset-time-range=", self.script)
+        self.assertNotIn("data-canvas-asset-refresh", results_view)
+        self.assertNotIn('id="canvasAssetSort"', results_view)
+
     def test_generation_results_share_material_preview_edit_and_promote_actions(self):
         result_detail = self.script.split("function renderCanvasAssetDetail(item){", 1)[1].split("function refreshCanvasAssetSelectionOnly", 1)[0]
         self.assertIn("data-canvas-asset-preview", result_detail)

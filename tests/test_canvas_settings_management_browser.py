@@ -68,6 +68,14 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
 
             def do_GET(self):
                 path = urlsplit(self.path).path
+                owner = type(self).owner
+                if path.startswith("/api/"):
+                    owner.state["api_requests"].append(path)
+                    gate = owner.state["delayed_api"].get(path)
+                    if gate is not None:
+                        owner.state["delayed_api_started"].set()
+                        owner.state["delayed_api_started_paths"].append(path)
+                        gate.wait(15)
                 if path == "/api/studio/canvas/settings-canvas":
                     type(self).owner.state["bootstrap_gets"] += 1
                     self._json(200, {
@@ -78,6 +86,7 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                 if path == "/api/canvases/canvas-settings":
                     type(self).owner.state["canvas_gets"] += 1
                     self._json(200, {"canvas": type(self).owner.state["canvas"]})
+                    type(self).owner.state["canvas_get_responses"] += 1
                     return
                 if path == "/api/canvases/canvas-settings/meta":
                     canvas = type(self).owner.state["canvas"]
@@ -92,6 +101,7 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                     return
                 if path == "/api/smart-canvas/personalization":
                     self._json(200, type(self).owner.state["personalization"])
+                    type(self).owner.state["personalization_get_responses"] += 1
                     return
                 if path == "/api/providers":
                     self._json(200, {"providers": type(self).owner.state["providers"]})
@@ -305,8 +315,10 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                      "seed": {"type": "integer", "min": 0, "max": 99, "required": True},
                  }},
             ],
-            "catalog_revision": "fixture-catalog-1", "bootstrap_gets": 0, "canvas_gets": 0,
-            "catalog_gets": 0, "api_reads": [], "writes": [], "agent_commands": [],
+            "catalog_revision": "fixture-catalog-1", "bootstrap_gets": 0, "canvas_gets": 0, "canvas_get_responses": 0,
+            "catalog_gets": 0, "personalization_get_responses": 0, "api_reads": [], "api_requests": [], "delayed_api": {},
+            "delayed_api_started": threading.Event(), "delayed_api_started_paths": [],
+            "writes": [], "agent_commands": [],
         }
 
     @classmethod
@@ -602,6 +614,11 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
         self.assertFalse(type(self).state["writes"], "只读核对站点状态不能触发保存")
 
     def test_formal_canvas_picker_keeps_model_and_parameter_order_read_only(self):
+        # 旧版本只保存了节点布局；打开模型选择器时必须补齐新偏好映射，不能因缺 modelOrder 崩溃。
+        type(self).state["personalization"] = {
+            "version": 1, "reset_epoch": 0,
+            "executionLayouts": {"image_generation::fixture-provider::fixture-image-family::fixture-image-a": {"width": "full"}},
+        }
         self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=canvas-settings"})
         self.wait_for("document.readyState==='complete'&&!!document.getElementById('world')",
                       "普通画布页没有加载")
@@ -610,6 +627,14 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
         self.wait_for("canvas?.id==='canvas-settings'&&Number(canvas.node_schema_version)===SmartNodeContract.SCHEMA_VERSION&&"
                       "!smartNodeMigrationPending&&!canvasSyncInFlight&&!canvasSyncSaveQueued",
                       "正式画布测试夹具未按当前 schema 完成加载")
+        deadline = time.time() + 8
+        while time.time() < deadline and type(self).state["personalization_get_responses"] == 0:
+            time.sleep(0.03)
+        self.assertGreater(type(self).state["personalization_get_responses"], 0,
+                           "正式画布交互前应读取服务端旧形状个性化偏好")
+        self.wait_for("Boolean(smartCanvasPersonalization&&smartCanvasPersonalization.modelOrder&&"
+                      "smartCanvasPersonalization.parameterOptionOrder&&smartCanvasPersonalization.parameterPresentation)",
+                      lambda: "旧形状偏好未被安全归一化：" + str(self.evaluate("JSON.stringify({prefs:smartCanvasPersonalization,modelOrder:smartCanvasPersonalization?.modelOrder})")))
         self.evaluate("document.getElementById('shell').dispatchEvent(new MouseEvent('dblclick',{bubbles:true,clientX:760,clientY:320}));true")
         self.wait_for("!!document.querySelector('.create-menu.open')", "空白画布双击没有打开添加菜单")
         self.evaluate("document.querySelector('[data-create-type=\\\"image-generator\\\"]').click();true")
@@ -646,9 +671,14 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                          f"建立只读基线前仍有保存请求：{page_state}")
         # 建立只读检查基线：schema 初始化和新增节点保存属于测试准备，不属于候选浏览。
         type(self).state["writes"].clear()
+        self.evaluate("window.__canvasTestErrors=[];window.addEventListener('error',event=>window.__canvasTestErrors.push(event.message||'unknown error'))")
         self.evaluate("document.querySelector('[data-capability-model-picker] .capability-model-picker-pill').click();true")
         self.wait_for("!!document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option]')",
                       "正式候选模式没有渲染")
+        self.evaluate("document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option]').click();true")
+        self.wait_for("document.querySelector('[data-capability-model-picker] .capability-model-picker-pill')?.getAttribute('aria-expanded')==='false'",
+                      lambda: "正式画布选择运行模式后应保持原有自动收起行为：" + str(self.evaluate("JSON.stringify({url:location.href,manager:isCanvasSettingsMode,pickers:[...document.querySelectorAll('[data-capability-model-picker]')].map(p=>({connected:p.isConnected,pinned:p.classList.contains('pinned'),subject:p.dataset.capabilitySubjectId,pill:p.querySelector(':scope > .capability-model-picker-pill')?.getAttribute('aria-expanded'),pillConnected:p.querySelector(':scope > .capability-model-picker-pill')?.isConnected})),errors:window.__canvasTestErrors,dynamicNode:dynamicParams?.dataset.smartNodeId,active:activeSettingsSubject()?.id,preferences:smartCanvasPersonalization,model:settings.model,selection:selectedNode()?.modelSelection,toast:document.querySelector('.toast')?.innerText})")))
+        self.assertFalse(self.evaluate("window.__canvasTestErrors||[]"), "旧形状偏好不能使模型选择器渲染抛错")
         self.assertEqual(self.evaluate("JSON.stringify({canvasSettings:document.documentElement.dataset.canvasSettings||'',handles:document.querySelectorAll('[data-preference-sort-handle],[data-capability-option-sort-handle],[data-parameter-presentation-order-handle]').length,stages:[...new Set([...document.querySelectorAll('[data-capability-picker-stage]')].map(item=>item.dataset.capabilityPickerStage))]})"),
                          '{"canvasSettings":"","handles":0,"stages":["family","platform","variant"]}')
         quiet_since = time.time()
@@ -662,7 +692,135 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
             elif time.time() - quiet_since >= 0.6:
                 break
             time.sleep(0.03)
-        self.assertFalse(type(self).state["writes"], "正式候选只读展示不应保存展示排序偏好")
+        presentation_writes=[item for item in type(self).state["writes"] if item[1]=="/api/smart-canvas/personalization"]
+        self.assertFalse(presentation_writes, "正式候选浏览不能写入管理专用的模型/参数展示偏好")
+
+    def test_management_variant_selection_keeps_picker_open(self):
+        self.open_settings_canvas()
+        frame = "document.getElementById('canvasSettingsCanvasFrame').contentWindow"
+        self.frame_eval("document.getElementById('shell').dispatchEvent(new MouseEvent('dblclick',{bubbles:true,clientX:760,clientY:320}));true")
+        self.wait_for(f"{frame}.document.querySelector('.create-menu.open')!==null", "空白画布双击没有打开添加菜单")
+        self.frame_eval("document.querySelector('[data-create-type=\\\"image-generator\\\"]').click();true")
+        self.wait_for(f"{frame}.document.querySelector('[data-capability-model-picker] .capability-model-picker-pill')!==null",
+                      "管理画布没有创建图片节点")
+        self.frame_eval("document.querySelector('[data-capability-model-picker] .capability-model-picker-pill').click();true")
+        self.wait_for(f"{frame}.document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option]')!==null",
+                      "管理画布没有显示运行模式")
+        self.frame_eval("document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option]').click();true")
+        self.wait_for(f"{frame}.document.querySelector('[data-capability-model-picker] .capability-model-picker-pill')?.getAttribute('aria-expanded')==='true'",
+                      "canvas-settings 管理模式选择运行模式后必须保留四栏选择器")
+
+    def test_unchanged_focus_refresh_preserves_open_picker_dom_and_browsing_state(self):
+        # 增加真实目录项，让运行模式栏确实可滚动；该目录在刷新前后保持字节级等价。
+        for index in range(8):
+            extra = json.loads(json.dumps(type(self).state["options"][0]))
+            extra.update({
+                "option_id": f"fixture-refresh-{index}",
+                "catalog_model_id": f"fixture-refresh-model-{index}",
+                "display_mode": f"refresh-state 测试模式 {index}", "variant_id": f"fixture-refresh-v{index}",
+                "enabled": True,
+            })
+            type(self).state["options"].append(extra)
+        self.open_settings_canvas()
+        frame = "document.getElementById('canvasSettingsCanvasFrame').contentWindow"
+        self.frame_eval("document.getElementById('shell').dispatchEvent(new MouseEvent('dblclick',{bubbles:true,clientX:760,clientY:320}));true")
+        self.wait_for(f"{frame}.document.querySelector('.create-menu.open')!==null", "空白画布双击没有打开添加菜单")
+        self.frame_eval("document.querySelector('[data-create-type=\\\"image-generator\\\"]').click();true")
+        self.wait_for(f"{frame}.document.querySelector('[data-capability-model-picker] .capability-model-picker-pill')!==null",
+                      "图片节点没有展示共享模型选择器")
+        self.frame_eval("document.querySelector('[data-capability-model-picker] .capability-model-picker-pill').click();true")
+        self.wait_for(f"{frame}.document.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-option]')!==null",
+                      "运行模式目录没有渲染")
+        self.frame_eval("""(() => {
+          const picker=document.querySelector('[data-capability-model-picker]');
+          const search=picker.querySelector('[data-capability-picker-search]');
+          const list=picker.querySelector('[data-capability-picker-stage="variant"] [data-capability-picker-options]');
+          search.value='refresh-state'; search.dispatchEvent(new Event('input',{bubbles:true})); search.focus();
+          list.scrollTop=Math.max(1,list.scrollHeight-list.clientHeight);
+          window.__refreshBrowseBaseline={picker,search,list,scrollTop:list.scrollTop,active:document.activeElement,activeSearch:false};
+          const rect=search.getBoundingClientRect();
+          window.__refreshSearchRect={left:rect.left,top:rect.top,width:rect.width,height:rect.height};
+          const original=refreshSmartConfigFromSettings;
+          refreshSmartConfigFromSettings=async(...args)=>{
+            window.__focusRefreshPromise=Promise.resolve().then(()=>original(...args)).then(()=>{
+              window.__focusRefreshDone=true;
+            },error=>{
+              window.__focusRefreshError=String(error?.message||error);
+              window.__focusRefreshDone=true;
+            });
+            return window.__focusRefreshPromise;
+          };
+          window.__focusRefreshDone=false;
+          return true;
+        })()""")
+        self.scroll_frame_into_outer_view()
+        click_point = json.loads(self.evaluate(
+            "JSON.stringify((()=>{const frame=document.getElementById('canvasSettingsCanvasFrame');"
+            "const outer=frame.getBoundingClientRect();const inner=frame.contentWindow.__refreshSearchRect;"
+            "return {x:outer.left+inner.left+inner.width/2,y:outer.top+inner.top+inner.height/2}})())"
+        ))
+        for params in (
+            {"type": "mouseMoved", "x": click_point["x"], "y": click_point["y"]},
+            {"type": "mousePressed", "x": click_point["x"], "y": click_point["y"], "button": "left", "clickCount": 1},
+            {"type": "mouseReleased", "x": click_point["x"], "y": click_point["y"], "button": "left", "clickCount": 1},
+        ):
+            self.cdp("Input.dispatchMouseEvent", params)
+        focused = self.frame_eval("window.__refreshBrowseBaseline.activeSearch=document.activeElement===window.__refreshBrowseBaseline.search;window.__refreshBrowseBaseline.activeElement=document.activeElement?.outerHTML?.slice(0,160)||'';window.__refreshBrowseBaseline.activeSearch")
+        self.assertTrue(focused, self.frame_eval("JSON.stringify({active:document.activeElement?.outerHTML?.slice(0,160),search:window.__refreshBrowseBaseline?.search?.outerHTML})"))
+        self.frame_eval("window.__focusRefreshDone=false;window.__focusRefreshError='';lastConfigRefreshAt=Date.now()-5000;window.addEventListener('focus',()=>{window.__focusListenerObserved=true;},{once:true});window.dispatchEvent(new Event('focus'));true")
+        self.wait_for(f"{frame}.__focusRefreshDone===true", lambda: "焦点刷新没有完成：" + str(self.frame_eval("JSON.stringify({listener:window.__focusListenerObserved,done:window.__focusRefreshDone,error:window.__focusRefreshError||'',active:document.activeElement?.outerHTML?.slice(0,160),requests:window.__refreshBrowseBaseline?.picker?.isConnected})")))
+        self.assertFalse(self.frame_eval("window.__focusRefreshError||''"), "无变化焦点刷新不应失败")
+        state = json.loads(self.frame_eval("JSON.stringify((()=>{const b=window.__refreshBrowseBaseline;const p=document.querySelector('[data-capability-model-picker]');const s=p?.querySelector('[data-capability-picker-search]');const l=p?.querySelector('[data-capability-picker-stage=variant] [data-capability-picker-options]');return {samePicker:b.picker===p,sameSearch:b.search===s,sameList:b.list===l,scrollTop:l?.scrollTop,expectedScrollTop:b.scrollTop,search:s?.value,activeSearch:document.activeElement===s,baselineActiveSearch:b.activeSearch,pinned:p?.classList.contains('pinned')}})())"))
+        self.assertTrue(state["samePicker"], state)
+        self.assertTrue(state["sameSearch"], state)
+        self.assertTrue(state["sameList"], state)
+        self.assertEqual(state["scrollTop"], state["expectedScrollTop"], state)
+        self.assertEqual(state["search"], "refresh-state", state)
+        self.assertTrue(state["baselineActiveSearch"], state)
+        self.assertEqual(state["activeSearch"], state["baselineActiveSearch"], state)
+        self.assertTrue(state["pinned"], state)
+        self.assertGreater(state["expectedScrollTop"], 0, state)
+
+    def test_canvas_screen_load_does_not_wait_for_auxiliary_workflows_or_assets(self):
+        state = type(self).state
+        workflow_gate = threading.Event()
+        asset_gate = threading.Event()
+        state["delayed_api"] = {"/api/workflows": workflow_gate, "/api/asset-library": asset_gate}
+        try:
+            self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/api-settings.html"})
+            self.wait_for("document.readyState==='complete'&&!!document.getElementById('canvasModelsNav')",
+                          "API 设置页没有加载")
+            self.evaluate("document.getElementById('canvasModelsNav').click();true")
+            self.wait_for("(()=>{const f=document.getElementById('canvasSettingsCanvasFrame');return !!f&&!f.hidden&&f.contentWindow?.location?.pathname==='/static/smart-canvas.html'&&!!f.contentWindow.document.getElementById('world')})()",
+                          "管理画布 iframe 没有挂载")
+            deadline = time.time() + 8
+            if "/api/workflows" not in state["delayed_api_started_paths"]:
+                while time.time() < deadline and "/api/workflows" not in state["delayed_api_started_paths"]:
+                    time.sleep(0.03)
+            self.assertIn("/api/workflows", state["delayed_api_started_paths"], state["api_requests"])
+            self.wait_for(
+                "(()=>{const f=document.getElementById('canvasSettingsCanvasFrame');const w=f?.contentWindow;return Boolean(w?.location?.search.includes('id=canvas-settings')&&w?.document.querySelector('#world')&&w?.document.querySelector('#smartTitle')&&w?.document.querySelector('#runBtn'))})()",
+                lambda: "辅助接口仍被挂起时，画布首屏未达到可操作状态：" + str(self.evaluate(
+                    "JSON.stringify((()=>{const f=document.getElementById('canvasSettingsCanvasFrame');const w=f?.contentWindow;return {requests:" +
+                    json.dumps(state["api_requests"]) + ",url:w?.location?.href||'',mode:w?.document.documentElement.dataset.canvasMode||'',world:!!w?.document.querySelector('#world'),title:!!w?.document.querySelector('#smartTitle'),run:!!w?.document.querySelector('#runBtn'),body:w?.document.body?.innerText.slice(0,300)}})())"
+                )), timeout=8,
+            )
+            canvas_response_deadline = time.time() + 4
+            while time.time() < canvas_response_deadline and state["canvas_get_responses"] == 0:
+                time.sleep(0.02)
+            self.assertGreater(state["canvas_get_responses"], 0,
+                               "辅助请求未完成时，首屏必须已收到共享画布标准 GET 响应")
+            self.frame_eval("document.getElementById('shell').dispatchEvent(new MouseEvent('dblclick',{bubbles:true,clientX:760,clientY:320}));true")
+            self.wait_for("document.getElementById('canvasSettingsCanvasFrame').contentWindow.document.querySelector('.create-menu.open')!==null", "辅助请求未完成时画布仍应能响应新建操作")
+            self.assertIn("/api/workflows", state["api_requests"])
+            self.assertIn("/api/asset-library", state["api_requests"])
+            self.assertIn("/api/asset-library", state["delayed_api_started_paths"],
+                          "首屏后应并行开始素材目录请求，不应等工作流请求返回")
+            self.assertFalse(workflow_gate.is_set())
+            self.assertFalse(asset_gate.is_set())
+        finally:
+            workflow_gate.set()
+            asset_gate.set()
 
     def test_display_order_and_parameter_presentation_do_not_toggle_global_enablement(self):
         self.open_settings_canvas()

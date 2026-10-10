@@ -24,6 +24,7 @@ const vm = require('vm');
 
 const sourcePath = process.argv[1];
 const source = fs.readFileSync(sourcePath, 'utf8');
+const controllerSource = fs.readFileSync('static/js/settings-canvas-controller.js', 'utf8');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function response(body, ok = true) {
@@ -139,6 +140,7 @@ function createHarness() {
     };
     context.globalThis = context;
     vm.createContext(context);
+    vm.runInContext(controllerSource, context, { filename: 'settings-canvas-controller.js' });
     vm.runInContext(source, context, { filename: sourcePath });
     vm.runInContext(`
         renderEditor = () => {};
@@ -359,6 +361,10 @@ class ApiSettingsAutosaveTests(unittest.TestCase):
         script = SCRIPT.read_text(encoding="utf-8")
         styles = STYLES.read_text(encoding="utf-8")
         i18n = I18N.read_text(encoding="utf-8")
+        self.assertNotIn('id="canvasModelProviderSelect"', html)
+        self.assertNotIn("selectCanvasModelProvider", script)
+        self.assertNotIn("canvas-model-provider-field", styles)
+        self.assertIn("function selectProvider(id)", script)
         order = [
             html.index('id="canvasModelsNav"'),
             html.index('id="hypitSubnav"'),

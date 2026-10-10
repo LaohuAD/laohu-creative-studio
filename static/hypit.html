@@ -28,27 +28,34 @@
             } catch(e) {}
         })();
     </script>
-  <script src="/static/js/theme.js"></script><script src="/static/js/i18n.js"></script>
+  <script src="/static/vendor/js/lucide.js"></script><script src="/static/js/theme.js"></script><script src="/static/js/i18n.js"></script>
   <link rel="stylesheet" href="/static/css/theme.css"><link rel="stylesheet" href="/static/css/studio-projects.css">
   <style>
     body{height:100dvh;overflow:hidden;display:flex;flex-direction:column}
     .hypit-header{display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid var(--sp-line);background:var(--sp-surface);flex-wrap:wrap}
     .hypit-heading{margin-right:auto;min-width:120px}.hypit-heading strong{display:block;font-size:17px}.hypit-heading span{color:var(--sp-muted);font-size:12px}
-    .hypit-header button,.hypit-header select{height:36px;padding:0 12px;border:1px solid var(--sp-line);border-radius:8px;background:var(--sp-card);color:var(--sp-text);font:inherit;font-size:13px}
-    .hypit-header select{max-width:240px}.hypit-header button:hover{background:var(--sp-soft)}
+    .hypit-project-controls{display:flex;align-items:center;gap:8px;margin-left:auto}
+    .hypit-header select{height:34px;max-width:240px;padding:0 10px;border:1px solid var(--studio-line,var(--sp-line));border-radius:9px;background:var(--studio-surface,var(--sp-card));color:var(--studio-text,var(--sp-text));font:inherit;font-size:12px}
+    .hypit-toolbar-actions{display:flex;align-items:center;gap:7px}
+    .hypit-icon-button{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;min-height:34px;padding:0;border:1px solid var(--studio-line,var(--sp-line));border-radius:9px;background:var(--studio-surface,var(--sp-card));color:var(--studio-muted,var(--sp-muted));cursor:pointer}
+    .hypit-icon-button svg{width:15px;height:15px}.hypit-icon-button:hover{border-color:var(--studio-accent,var(--sp-accent));color:var(--studio-accent,var(--sp-accent))}.hypit-icon-button:focus-visible{outline:2px solid var(--studio-accent,var(--sp-accent));outline-offset:2px}
     #nativeStudio{width:100%;flex:1;border:0;background:var(--sp-page)}
     #empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;gap:14px;text-align:center}
     #empty h1{font-size:24px;margin:0}#empty p{max-width:560px;color:var(--sp-muted);line-height:1.8;margin:0}#status{font-size:13px;color:var(--sp-muted)}
-    @media(max-width:650px){.hypit-header{gap:8px;padding:12px}.hypit-heading{width:100%}.hypit-header select{max-width:150px}}
+    @media(max-width:650px){.hypit-header{gap:8px;padding:12px}.hypit-heading{width:100%}.hypit-project-controls{width:100%;justify-content:flex-end}.hypit-header select{max-width:min(240px,calc(100vw - 160px))}.hypit-toolbar-actions{gap:5px}}
   </style>
     <link rel="stylesheet" href="/static/css/studio-theme-palettes.css?v=2026.10.04.theme-1">
 </head>
 <body>
   <header class="hypit-header">
     <div class="hypit-heading"><strong>Hypit</strong><span id="projectName"></span></div>
-    <a id="back" href="/static/hypit-list.html"></a><select id="run" aria-label="制作方案" hidden></select><button id="refresh" type="button"></button>
+    <div class="hypit-project-controls"><select id="run" aria-label="制作方案" hidden></select><div class="hypit-toolbar-actions" aria-label="作品工具">
+      <button id="refresh" class="hypit-icon-button" type="button" title="刷新作品" aria-label="刷新作品"><i data-lucide="refresh-cw" aria-hidden="true"></i></button>
+      <button id="language" class="hypit-icon-button" type="button" title="切换语言" aria-label="切换语言">中</button>
+      <button id="theme" class="hypit-icon-button" type="button" title="切换主题" aria-label="切换主题"><i data-lucide="sun-moon" aria-hidden="true"></i></button>
+    </div></div>
   </header>
-  <main id="empty"><h1 id="emptyTitle"></h1><p id="emptyCopy"></p><div id="status" role="status" aria-live="polite"></div><a id="emptyBack" href="/static/hypit-list.html"></a></main>
+  <main id="empty"><h1 id="emptyTitle"></h1><p id="emptyCopy"></p><div id="status" role="status" aria-live="polite"></div></main>
   <iframe id="nativeStudio" title="Hypit Studio / 老胡画梦枋" hidden allow="fullscreen; clipboard-write"></iframe>
   <script src="/static/js/hypit-project.js"></script>
 </body>

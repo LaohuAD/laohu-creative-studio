@@ -57,6 +57,11 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         cls.api_providers_payload = []
         cls.model_capabilities_payload = {"schema_version": 1, "providers": [], "options": []}
         cls.poll_state = {"status": "succeeded", "current_recipe_matches": True, "output_kind": "image"}
+        cls.comfy_workflows_payload = {"workflows": []}
+        cls.comfy_workflow_detail_payloads = {}
+        cls.comfy_workflow_detail_responses = []
+        cls.comfy_workflow_detail_gets = []
+        cls.comfy_workflow_detail_completions = []
 
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
@@ -127,7 +132,25 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                 elif path == "/api/model-pricing":
                     self._json(200, {"schema_version": 1, "entries": {}, "unit_definitions": {}})
                 elif path == "/api/workflows":
-                    self._json(200, {"workflows": []})
+                    self._json(200, cls.comfy_workflows_payload)
+                elif path.startswith("/api/workflows/"):
+                    from urllib.parse import unquote
+                    workflow_name = unquote(path[len("/api/workflows/"):])
+                    cls.comfy_workflow_detail_gets.append(workflow_name)
+                    responses = cls.comfy_workflow_detail_responses
+                    response = responses.pop(0) if responses else None
+                    if response is not None:
+                        payload = response["payload"]
+                        started = response.get("started")
+                        release = response.get("release")
+                        if started is not None:
+                            started.set()
+                        if release is not None:
+                            release.wait(timeout=10)
+                    else:
+                        payload = cls.comfy_workflow_detail_payloads.get(workflow_name, {})
+                    self._json(200, payload)
+                    cls.comfy_workflow_detail_completions.append(workflow_name)
                 elif path == "/api/prompt-libraries":
                     self._json(200, {"library": {"active_library_id": "system", "libraries": [{"id": "system", "items": [], "categories": []}]}})
                 elif path == "/api/smart-canvas/personalization":
@@ -346,6 +369,11 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         type(self).model_capabilities_payload = {"schema_version": 1, "providers": [], "options": []}
         type(self).poll_state = {"status": "succeeded", "current_recipe_matches": True, "output_kind": "image"}
         type(self).test_statuses = {}
+        type(self).comfy_workflows_payload = {"workflows": []}
+        type(self).comfy_workflow_detail_payloads = {}
+        type(self).comfy_workflow_detail_responses = []
+        type(self).comfy_workflow_detail_gets = []
+        type(self).comfy_workflow_detail_completions = []
 
     @classmethod
     def tearDownClass(cls):
@@ -499,6 +527,34 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
             "options": options, "catalog_revision": "fixture-revision",
         }
         type(self).module_model_options = {"audio": [options[0]], "voice": [options[1]]}
+
+    def seed_comfy_workflow(self, detail):
+        workflow_name = "fixture-workflow.json"
+        type(self).comfy_workflows_payload = {"workflows": [{
+            "name": workflow_name, "title": "Fixture workflow", "builtin": False,
+            "field_count": len(detail["config"]["fields"]),
+        }]}
+        type(self).comfy_workflow_detail_payloads = {workflow_name: detail}
+        self.seed_canvas([{
+            "id": "comfy-run", "type": "smart-comfy-workflow", "x": 100, "y": 100,
+            "runSettings": {"engine": "comfy", "comfyMode": "custom",
+                             "comfyWorkflow": workflow_name, "comfyParams": {}},
+        }])
+
+    def select_comfy_workflow_node(self):
+        self.open_hypit_canvas()
+        self.wait_for(lambda: bool(self.frame_evaluate("!!document.querySelector('.image-node[data-id=comfy-run]')")),
+                      "本地 Comfy 执行节点未加载")
+        self.frame_evaluate("document.querySelector('.image-node[data-id=comfy-run]').click(); true")
+        self.wait_for(lambda: bool(self.frame_evaluate(
+            "!!document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]')")),
+            "Comfy 工作流字段没有渲染到共享参数面板")
+
+    def wait_for_comfy_initial_refresh(self, *, allow_detail_pending=False):
+        self.wait_for(lambda: self.frame_evaluate(
+            "comfyWorkflowLoadState==='ready' && !configRefreshPromise && !configRefreshPending"
+            + ("" if allow_detail_pending else " && comfyWorkflowDetailPromises.size===0")),
+            "Comfy 目录/首轮设置刷新尚未稳定，不能开始 schema 变化回归")
 
     def seed_gpt_image_identity_catalog(self):
         from model_capabilities import ModelCapabilityRegistry
@@ -1778,6 +1834,140 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                       "动态 AI 应用 composer 未打开")
         time.sleep(0.2)
         self.assertEqual(self.model_option_requests, [], "动态 AI 应用候选不能套静态图片/音视频槽位过滤")
+
+    @staticmethod
+    def _comfy_detail(*, label, default, maximum=100):
+        return {
+            "name": "fixture-workflow.json",
+            "workflow": {"nodes": []},
+            "config": {"title": "Fixture workflow", "fields": [{
+                "id": "seed", "name": "seed", "label": label, "type": "number",
+                "default": default, "min": 0, "max": maximum, "step": 1,
+            }]},
+            "builtin": False,
+        }
+
+    def _notify_comfy_schema_changed(self):
+        # 走与 API 设置页相同的同源消息通道，覆盖生产 listener 到刷新器的完整调用路径。
+        return self.evaluate("""(()=>{
+          const frame=document.getElementById('hypitSettingsCanvasFrame');
+          const generation=frame.contentWindow.eval('comfyWorkflowCatalogGeneration');
+          frame.contentWindow.postMessage({type:'workflows-changed',reason:'workflow-schema-updated'},location.origin);
+          return generation;
+        })()""")
+
+    def wait_for_comfy_idle_snapshot(self, *, timeout=8, stable_ms=240):
+        # Wait for config refreshes, delayed parameter renders, and schema detail
+        # requests to stay idle together. Return the asserted UI state from the
+        # same evaluation so a timer cannot start between separate CDP reads.
+        expression = f"""(async()=>{{
+          const deadline=Date.now()+{int(timeout * 1000)};
+          let quietSince=0;
+          const isQuiet=()=>comfyWorkflowLoadState==='ready'
+            && !configRefreshPromise && !configRefreshPending
+            && !dynamicParamsRefreshTimer && !dynamicParamsRefreshIdle
+            && comfyWorkflowDetailPromises.size===0
+            && !comfyWorkflowDetailStale.has('fixture-workflow.json');
+          const snapshot=()=>({{
+            stable:isQuiet(),
+            sameInput:document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]')===window.__comfyDraftInput,
+            value:document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]')?.value,
+            pinned:document.querySelector('.capability-param-control[data-parameter-key=seed]')?.classList.contains('pinned'),
+            detail:comfyWorkflowCache['fixture-workflow.json']?.config?.fields?.[0]?.default,
+            detailGets:comfyWorkflowDetailPromises.size
+          }});
+          while(Date.now()<deadline){{
+            if(isQuiet()){{
+              if(!quietSince)quietSince=Date.now();
+              if(Date.now()-quietSince>={int(stable_ms)})return JSON.stringify(snapshot());
+            }}else quietSince=0;
+            await new Promise(resolve=>setTimeout(resolve,20));
+          }}
+          return JSON.stringify(snapshot());
+        }})()"""
+        return json.loads(self.frame_evaluate(expression))
+
+    def test_unchanged_comfy_schema_refresh_preserves_open_field_and_draft(self):
+        self.seed_comfy_workflow(self._comfy_detail(label="种子", default=3))
+        self.select_comfy_workflow_node()
+        self.wait_for_comfy_initial_refresh()
+        self.wait_for_comfy_idle_snapshot()
+        detail_requests_before = len(self.comfy_workflow_detail_gets)
+        self.frame_evaluate("document.querySelector('.capability-param-control[data-parameter-key=seed] .capability-param-pill').click(); true")
+        self.wait_for(lambda: bool(self.frame_evaluate(
+            "document.querySelector('.capability-param-control[data-parameter-key=seed]')?.classList.contains('pinned')")),
+            "Comfy 字段参数面板未打开")
+        self.frame_evaluate("""(()=>{
+          const input=document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]');
+          window.__comfyDraftInput=input; input.value='77'; settings.comfyParams={...(settings.comfyParams||{}),seed:77}; return true;
+        })()""")
+        before_summary = dict(self.comfy_workflows_payload)
+        generation_before = self._notify_comfy_schema_changed()
+        self.wait_for(lambda: self.frame_evaluate(f"comfyWorkflowCatalogGeneration>{int(generation_before)}"),
+                      "schema 刷新事件没有进入画布配置刷新")
+        self.wait_for(lambda: len(self.comfy_workflow_detail_gets) >= detail_requests_before + 1,
+                      "相同工作流事件后没有重取当前详情")
+        state = self.wait_for_comfy_idle_snapshot()
+        self.assertEqual(state, {"stable": True, "sameInput": True, "value": "77", "pinned": True, "detail": 3, "detailGets": 0}, state)
+        self.assertEqual(self.comfy_workflows_payload, before_summary, "该用例必须保持同名、同标题、同 field_count 的工作流目录摘要")
+        self.assertEqual(self.canvas_put_attempts, 0, "只读 schema 刷新不能保存画布或用户草稿")
+
+    def test_workflows_changed_reloads_same_name_same_field_count_schema(self):
+        self.seed_comfy_workflow(self._comfy_detail(label="旧字段", default=3, maximum=10))
+        self.select_comfy_workflow_node()
+        self.wait_for_comfy_initial_refresh()
+        before_summary = dict(self.comfy_workflows_payload)
+        type(self).comfy_workflow_detail_payloads["fixture-workflow.json"] = self._comfy_detail(
+            label="更新后的字段", default=5, maximum=90)
+        self.assertEqual(self.comfy_workflows_payload, before_summary, "schema 测试不能靠 title 或 field_count 变化触发刷新")
+        self._notify_comfy_schema_changed()
+        self.wait_for(lambda: len(self.comfy_workflow_detail_gets) >= 2
+                      and self.frame_evaluate("comfyWorkflowCache['fixture-workflow.json']?.config?.fields?.[0]?.label==='更新后的字段'"),
+                      "目录摘要未变化时，schema 更新事件仍必须重取同一工作流详情")
+        self.wait_for(lambda: self.frame_evaluate(
+            "document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]')?.max==='90'"),
+            "同名、同字段数的 schema 更新没有反映到参数控件")
+        self.assertGreaterEqual(len(self.comfy_workflow_detail_gets), 2, self.comfy_workflow_detail_gets)
+        self.assertEqual(self.comfy_workflows_payload, before_summary)
+        self.assertEqual(self.canvas_put_attempts, 0, "刷新工作流 schema 不应改写用户画布")
+
+    def test_late_comfy_detail_response_cannot_overwrite_new_schema(self):
+        initial = self._comfy_detail(label="旧字段", default=3, maximum=10)
+        current = self._comfy_detail(label="当前字段", default=8, maximum=80)
+        self.seed_comfy_workflow(initial)
+        first_started = threading.Event()
+        release_first = threading.Event()
+        self.addCleanup(release_first.set)
+        type(self).comfy_workflow_detail_responses = [
+            {"payload": initial, "started": first_started, "release": release_first},
+        ]
+        type(self).comfy_workflow_detail_payloads["fixture-workflow.json"] = current
+        self.open_hypit_canvas()
+        self.wait_for(lambda: bool(self.frame_evaluate("!!document.querySelector('.image-node[data-id=comfy-run]')")),
+                      "本地 Comfy 执行节点未加载")
+        self.frame_evaluate("document.querySelector('.image-node[data-id=comfy-run]').click(); true")
+        self.wait_for(first_started.is_set, "旧 schema 详情请求没有进入隔离延迟响应")
+        self.wait_for_comfy_initial_refresh(allow_detail_pending=True)
+        self._notify_comfy_schema_changed()
+        try:
+            self.wait_for(lambda: len(self.comfy_workflow_detail_gets) >= 2
+                          and self.frame_evaluate("comfyWorkflowCache['fixture-workflow.json']?.config?.fields?.[0]?.label==='当前字段'"),
+                          "刷新事件没有使用新 schema 完成第二次详情请求")
+            self.wait_for(lambda: self.frame_evaluate(
+                "document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]')?.max==='80'"),
+                "当前 schema 尚未投影到 Comfy 参数控件")
+            release_first.set()
+            self.wait_for(lambda: len(self.comfy_workflow_detail_completions) >= 2,
+                          "延迟的旧详情请求没有结束，无法检查过期响应保护")
+            final = json.loads(self.frame_evaluate("""JSON.stringify({
+              label:comfyWorkflowCache['fixture-workflow.json']?.config?.fields?.[0]?.label,
+              max:document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]')?.max,
+              gets:comfyWorkflowDetailPromises.size
+            })"""))
+            self.assertEqual(final, {"label": "当前字段", "max": "80", "gets": 0}, final)
+            self.assertEqual(self.canvas_put_attempts, 0, "旧详情回包不能触发画布写入")
+        finally:
+            release_first.set()
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ import copy
 import hashlib
 import inspect
 import mimetypes
+import math
+import re
 import time
 import uuid
 from typing import Any, Callable
@@ -20,6 +22,129 @@ from studio_execution import recipe, request_for, stable
 
 APP_NODE_TYPES = {'smart-ai-app', 'smart-comfy-workflow'}
 RUNNINGHUB_KINDS = {'ai_application', 'runninghub_workflow'}
+_ACCEPTED_DYNAMIC_SNAPSHOT_KEY = '_studioAcceptedDynamicSnapshot'
+_REQUEST_DYNAMIC_SNAPSHOT_KEY = '_studio_dynamic_snapshot'
+
+
+def _secret_identifier(value: Any) -> bool:
+    """Match the project's credential-field rule without rejecting token counts."""
+    secret_names = {
+        'api_key', 'apikey', 'access_token', 'accesstoken', 'auth_token', 'authtoken',
+        'bearer_token', 'bearertoken', 'session_token', 'sessiontoken', 'refresh_token',
+        'refreshtoken', 'id_token', 'idtoken', 'secret', 'token', 'password',
+        'authorization', 'credential', 'api_token', 'apitoken', 'token_value', 'tokenvalue',
+    }
+    secret_parts = ('api_key', 'apikey', 'secret', 'password', 'access_token', 'authorization', 'credential')
+    for part in re.split(r'::', str(value or '')):
+        normal = re.sub(r'[^a-z0-9]+', '_', part.lower()).strip('_')
+        compact = normal.replace('_', '')
+        if normal in secret_names or compact in secret_names or any(token in normal for token in secret_parts):
+            return True
+    return False
+
+
+def _schema_field_key(field: dict[str, Any], node_type: str) -> str:
+    if node_type == 'smart-comfy-workflow':
+        return str(field.get('id') or field.get('paramid') or field.get('paramId') or field.get('key') or '').strip()
+    node_id = str(field.get('nodeId') or field.get('node_id') or '').strip()
+    field_name = str(field.get('fieldName') or field.get('field_name') or field.get('inputName') or '').strip()
+    if not node_id or not field_name:
+        param_id = str(field.get('paramid') or field.get('paramId') or field.get('key') or '').strip()
+        if '::' in param_id:
+            node_id, field_name = (part.strip() for part in param_id.split('::', 1))
+    return f'{node_id}::{field_name}' if node_id or field_name else str(
+        field.get('key') or field.get('paramid') or field.get('paramId') or ''
+    ).strip()
+
+
+def _schema_field_media_kind(field: dict[str, Any], node_type: str) -> str:
+    raw = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
+    if raw in {'image', 'video', 'audio'}:
+        return raw
+    if node_type == 'smart-comfy-workflow':
+        name = ' '.join(str(field.get(key) or '') for key in ('input', 'name', 'fieldName')).lower()
+        return 'text' if raw == 'textarea' or any(
+            token in name for token in ('prompt', 'text', '提示词', '正向', '负向')
+        ) else ''
+    if raw in {'string', 'text', 'plain-text', 'textarea'}:
+        return 'text'
+    return ''
+
+
+def _safe_schema_fields(fields: list[dict[str, Any]], node_type: str) -> list[dict[str, Any]]:
+    result = []
+    for field in fields:
+        identities = [field.get(key) for key in (
+            'nodeId', 'node_id', 'fieldName', 'field_name', 'inputName', 'input', 'name',
+            'label', 'id', 'key', 'paramid', 'paramId',
+        )]
+        raw_type = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
+        if raw_type in {'password', 'secret', 'credential', 'token'} or any(
+            _secret_identifier(value) for value in identities if value
+        ):
+            continue
+        if _schema_field_key(field, node_type):
+            result.append(copy.deepcopy(field))
+    return result
+
+
+def _workflow_definition(resolved: Any, node_type: str, settings: dict[str, Any]) -> Any:
+    if not isinstance(resolved, dict):
+        return None
+    candidates = []
+    if node_type == 'smart-comfy-workflow':
+        candidates.extend([resolved.get('workflow'), resolved.get('workflow_json')])
+    else:
+        mode = str(settings.get('rhMode') or '').strip().lower()
+        config_key = str(settings.get('rhConfigKey') or '').strip().lower()
+        if mode == 'workflow' or config_key.startswith('workflow:'):
+            candidates.extend([resolved.get('workflowJson'), resolved.get('workflow_json')])
+    data = resolved.get('data') if isinstance(resolved.get('data'), dict) else {}
+    candidates.extend([data.get('workflowJson'), data.get('workflow_json'), data.get('workflow')])
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return copy.deepcopy(candidate)
+    if node_type == 'smart-comfy-workflow':
+        candidate = settings.get('comfyWorkflowDefinition') or settings.get('comfyWorkflowJson')
+        if isinstance(candidate, dict) and candidate:
+            return copy.deepcopy(candidate)
+    else:
+        candidate = settings.get('rhWorkflowJson')
+        if isinstance(candidate, dict) and candidate:
+            return copy.deepcopy(candidate)
+    return None
+
+
+def _validated_dynamic_snapshot(value: Any, node_type: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get('version') != 1 or value.get('node_type') != node_type:
+        raise ValueError('已接受的动态工作流快照不存在或与节点类型不匹配')
+    fields = value.get('fields')
+    if not isinstance(fields, list) or not fields or len(fields) > 1024:
+        raise ValueError('已接受的动态字段 Schema 无效')
+    safe_fields = _safe_schema_fields([field for field in fields if isinstance(field, dict)], node_type)
+    if len(safe_fields) != len(fields):
+        raise ValueError('已接受的动态字段 Schema 包含凭据字段')
+    snapshot = {'version': 1, 'node_type': node_type, 'fields': safe_fields}
+    definition = value.get('workflow_definition')
+    if definition is not None:
+        if not isinstance(definition, (dict, list)) or not definition:
+            raise ValueError('已接受的动态工作流定义无效')
+        _reject_dynamic_secrets(definition)
+        snapshot['workflow_definition'] = copy.deepcopy(definition)
+    if value.get('optional_image_mode'):
+        snapshot['optional_image_mode'] = str(value['optional_image_mode'])[:80]
+    return snapshot
+
+
+def _reject_dynamic_secrets(value: Any) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _secret_identifier(key):
+                raise ValueError('工作流定义包含不允许保存的凭据字段')
+            _reject_dynamic_secrets(child)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_dynamic_secrets(child)
 async def _invoke(callback: Callable[..., Any] | None, *args: Any) -> Any:
     """调用同步/异步回调，并兼容主控只接收所需前缀参数的函数。"""
     if callback is None:
@@ -310,21 +435,59 @@ class StudioAppExecution:
         self.max_polls = max(1, int(max_polls))
         self.handles: dict[str, asyncio.Task] = {}
 
-    async def _prepare_request(self, canvas: dict[str, Any], node: dict[str, Any], request_id: str) -> dict[str, Any]:
+    async def _prepare_request(
+        self,
+        canvas: dict[str, Any],
+        node: dict[str, Any],
+        request_id: str,
+        *,
+        freeze_dynamic_snapshot: bool = False,
+        resolved_schema: Any = None,
+        accepted_dynamic_snapshot: Any = None,
+    ) -> dict[str, Any]:
         node_type = node.get('type')
         settings = node.get('runSettings') or {}
+        dynamic_snapshot = None
         if node_type == 'smart-ai-app':
-            fields = []
-            resolved = None
-            if self.resolve_runninghub_fields:
+            if accepted_dynamic_snapshot is not None:
+                dynamic_snapshot = _validated_dynamic_snapshot(accepted_dynamic_snapshot, node_type)
+                resolved = {'fields': copy.deepcopy(dynamic_snapshot['fields'])}
+                if dynamic_snapshot.get('workflow_definition'):
+                    resolved['workflowJson'] = copy.deepcopy(dynamic_snapshot['workflow_definition'])
+                if dynamic_snapshot.get('optional_image_mode'):
+                    resolved['optionalImageMode'] = dynamic_snapshot['optional_image_mode']
+            elif resolved_schema is not None:
+                resolved = copy.deepcopy(resolved_schema)
+            elif self.resolve_runninghub_fields:
                 config_key = str(settings.get('rhConfigKey') or '').strip()
                 entry_id = config_key.split(':', 1)[1] if ':' in config_key else str(
                     settings.get('rhWorkflowId') or settings.get('rhAppId') or config_key
                 )
                 resolved = await _invoke(self.resolve_runninghub_fields, entry_id, node, canvas)
-                fields = _schema_fields(resolved)
-            if not fields and not self.resolve_runninghub_fields:
-                fields = _schema_fields(settings.get('rhFields') or settings.get('rhSchemaSnapshot'))
+            else:
+                resolved = {'fields': settings.get('rhFields') or settings.get('rhSchemaSnapshot') or []}
+            fields = _schema_fields(resolved)
+            if freeze_dynamic_snapshot:
+                enabled_flags_present = any(isinstance(field, dict) and 'enabled' in field for field in fields)
+                if enabled_flags_present:
+                    fields = [field for field in fields if field.get('enabled') is True]
+                fields = _safe_schema_fields(fields, node_type)
+            if not fields:
+                raise ValueError('AI 应用缺少安全、启用中的字段 Schema')
+            if freeze_dynamic_snapshot and dynamic_snapshot is None:
+                dynamic_snapshot = {
+                    'version': 1,
+                    'node_type': node_type,
+                    'fields': copy.deepcopy(fields),
+                }
+                definition = _workflow_definition(resolved, node_type, settings)
+                if definition is not None:
+                    _reject_dynamic_secrets(definition)
+                    dynamic_snapshot['workflow_definition'] = definition
+                optional_mode = (resolved.get('optionalImageMode') or resolved.get('optional_image_mode')) if isinstance(resolved, dict) else None
+                if optional_mode:
+                    dynamic_snapshot['optional_image_mode'] = str(optional_mode)[:80]
+                dynamic_snapshot = _validated_dynamic_snapshot(dynamic_snapshot, node_type)
             request_node = node
             mode = str(settings.get('rhMode') or '').strip().lower()
             config_key = str(settings.get('rhConfigKey') or '').strip().lower()
@@ -332,7 +495,7 @@ class StudioAppExecution:
                 workflow_json = resolved.get('workflowJson') or resolved.get('workflow_json')
                 if not workflow_json and isinstance(resolved.get('data'), dict):
                     workflow_json = resolved['data'].get('workflowJson') or resolved['data'].get('workflow_json')
-                if workflow_json and not settings.get('rhWorkflowJson'):
+                if workflow_json and (freeze_dynamic_snapshot or not settings.get('rhWorkflowJson')):
                     request_node = copy.deepcopy(node)
                     request_settings = request_node.setdefault('runSettings', {})
                     request_settings['rhWorkflowJson'] = copy.deepcopy(workflow_json)
@@ -341,15 +504,45 @@ class StudioAppExecution:
                         request_settings['rhOptionalImageMode'] = optional_mode
             request = request_for(canvas, request_node, app_fields=fields)
         elif node_type == 'smart-comfy-workflow':
-            fields = []
-            if self.resolve_comfy_fields:
+            if accepted_dynamic_snapshot is not None:
+                dynamic_snapshot = _validated_dynamic_snapshot(accepted_dynamic_snapshot, node_type)
+                resolved = {
+                    'config': {'fields': copy.deepcopy(dynamic_snapshot['fields'])},
+                }
+                if dynamic_snapshot.get('workflow_definition'):
+                    resolved['workflow'] = copy.deepcopy(dynamic_snapshot['workflow_definition'])
+            elif resolved_schema is not None:
+                resolved = copy.deepcopy(resolved_schema)
+            elif self.resolve_comfy_fields:
                 workflow_name = str(settings.get('comfyWorkflow') or '').strip()
-                fields = _schema_fields(await _invoke(self.resolve_comfy_fields, workflow_name, node, canvas), comfy=True)
-            if not fields and not self.resolve_comfy_fields:
-                fields = _schema_fields(settings.get('comfyFields') or settings.get('workflowFields'), comfy=True)
+                resolved = await _invoke(self.resolve_comfy_fields, workflow_name, node, canvas)
+            else:
+                resolved = {'fields': settings.get('comfyFields') or settings.get('workflowFields') or []}
+            fields = _schema_fields(resolved, comfy=True)
+            if freeze_dynamic_snapshot:
+                enabled_flags_present = any(isinstance(field, dict) and 'enabled' in field for field in fields)
+                if enabled_flags_present:
+                    fields = [field for field in fields if field.get('enabled') is True]
+                fields = _safe_schema_fields(fields, node_type)
+            if not fields:
+                raise ValueError('本地 ComfyUI 工作流缺少安全、启用中的字段 Schema')
+            if freeze_dynamic_snapshot and dynamic_snapshot is None:
+                dynamic_snapshot = {
+                    'version': 1,
+                    'node_type': node_type,
+                    'fields': copy.deepcopy(fields),
+                }
+                definition = _workflow_definition(resolved, node_type, settings)
+                if definition is not None:
+                    _reject_dynamic_secrets(definition)
+                    dynamic_snapshot['workflow_definition'] = definition
+                dynamic_snapshot = _validated_dynamic_snapshot(dynamic_snapshot, node_type)
             request = request_for(canvas, node, comfy_fields=fields)
         else:
             raise ValueError('此服务只接受 AI 应用和 ComfyUI 节点')
+        if freeze_dynamic_snapshot:
+            self._validate_explicit_dynamic_inputs(canvas, node, request, fields, node_type)
+            self._validate_dynamic_parameter_overrides(node, fields, node_type)
         request['request_id'] = str(request_id)
         request['client_id'] = str(settings.get('clientId') or settings.get('client_id') or request_id)
         if str(canvas.get('id') or '') == 'hypit-settings':
@@ -374,7 +567,63 @@ class StudioAppExecution:
             }
             if request.get('workflow'):
                 request['platform_request']['workflow'] = copy.deepcopy(request['workflow'])
+        if freeze_dynamic_snapshot and dynamic_snapshot is not None:
+            request[_REQUEST_DYNAMIC_SNAPSHOT_KEY] = copy.deepcopy(dynamic_snapshot)
         return request
+
+    @staticmethod
+    def _validate_explicit_dynamic_inputs(
+        canvas: dict[str, Any], node: dict[str, Any], request: dict[str, Any],
+        fields: list[dict[str, Any]], node_type: str,
+    ) -> None:
+        refs = request.get('references') if isinstance(request.get('references'), list) else []
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            target_key = str(ref.get('targetFieldKey') or ref.get('target_field_key') or '').strip()
+            if not target_key:
+                continue
+            field = next((entry for entry in fields if _schema_field_key(entry, node_type) == target_key), None)
+            if field is None or field.get('enabled') is False:
+                raise ValueError(f'显式动态字段 {target_key} 已不存在或未启用，请重新选择字段')
+            if _secret_identifier(target_key) or _schema_field_media_kind(field, node_type) != str(ref.get('kind') or '').strip().lower():
+                raise ValueError(f'显式动态字段 {target_key} 的类型与本次输入不匹配')
+
+    @staticmethod
+    def _validate_dynamic_parameter_overrides(
+        node: dict[str, Any], fields: list[dict[str, Any]], node_type: str,
+    ) -> None:
+        override_keys = node.get('hypitTaskParameterOverrideKeys')
+        if not isinstance(override_keys, list):
+            return
+        settings = node.get('runSettings') if isinstance(node.get('runSettings'), dict) else {}
+        values = settings.get('rhParams') if node_type == 'smart-ai-app' else settings.get('comfyParams')
+        values = values if isinstance(values, dict) else {}
+        field_by_key = {_schema_field_key(field, node_type): field for field in fields}
+        for raw_key in override_keys:
+            key = str(raw_key)
+            field = field_by_key.get(key)
+            if field is None or key not in values:
+                raise ValueError(f'动态流程参数 {key} 不属于当前启用的字段 Schema')
+            value = values[key]
+            if isinstance(value, dict) and 'value' in value:
+                value = value.get('value')
+            raw_type = str(field.get('fieldType') or field.get('type') or field.get('kind') or '').strip().lower()
+            valid = True
+            if raw_type in {'boolean', 'bool'}:
+                valid = isinstance(value, bool)
+            elif raw_type in {'integer', 'int'}:
+                valid = isinstance(value, int) and not isinstance(value, bool)
+            elif raw_type in {'number', 'float', 'slider'}:
+                valid = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+            elif raw_type in {'string', 'text', 'plain-text', 'textarea'}:
+                valid = isinstance(value, str)
+            elif raw_type in {'select', 'switch', 'combo', 'dropdown', 'list', 'enum'}:
+                valid = isinstance(value, str)
+            else:
+                valid = False
+            if not valid:
+                raise ValueError(f'动态流程参数 {key} 与当前字段类型不匹配')
 
     async def submit(self, canvas: dict[str, Any], node: dict[str, Any], request_id: str) -> dict[str, Any]:
         if node.get('type') not in APP_NODE_TYPES:

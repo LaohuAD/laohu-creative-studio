@@ -65,7 +65,7 @@
                         <button id="hypitSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openHypitSettings()">
                             <span class="provider-mark hypit-logo-mark" aria-hidden="true">H</span>
                             <span class="provider-info">
-                                <span class="provider-name" data-i18n="hypit.navLabel">Hypit</span>
+                                <span class="provider-name" data-i18n="hypit.navLabel">Hypit克隆</span>
                                 <span class="provider-meta" data-i18n="hypit.navMeta">生成模型</span>
                             </span>
                         </button>
@@ -76,6 +76,15 @@
                             <span class="provider-info">
                                 <span class="provider-name" data-i18n="articleSettings.navLabel">公众号文章</span>
                                 <span class="provider-meta" data-i18n="articleSettings.navMeta">文章生成配置</span>
+                            </span>
+                        </button>
+                    </div>
+                    <div id="musicSettingsSubnav" class="hypit-subnav article-settings-subnav music-settings-subnav">
+                        <button id="musicSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openMusicSettings()" aria-current="false">
+                            <span class="provider-mark"><i data-lucide="music-2" class="w-3.5 h-3.5"></i></span>
+                            <span class="provider-info">
+                                <span class="provider-name" data-i18n="musicSettings.navLabel">音乐创作</span>
+                                <span class="provider-meta" data-i18n="musicSettings.navMeta">音乐生成配置</span>
                             </span>
                         </button>
                     </div>
@@ -130,8 +139,8 @@
                                 <span class="api-settings-boot-en">Settings could not be loaded. Check the local service and try again.</span>
                             </p>
                             <p class="api-settings-boot-empty" hidden>
-                                <span class="api-settings-boot-zh">设置已读取，目前没有平台连接。左侧的 CLI、AI 应用和 Hypit 入口仍可使用。</span>
-                                <span class="api-settings-boot-en">Settings loaded with no platform connections. The CLI, AI Apps, and Hypit entries on the left remain available.</span>
+                    <span class="api-settings-boot-zh">设置已读取，目前没有平台连接。左侧的 CLI、AI 应用和 Hypit克隆入口仍可使用。</span>
+                    <span class="api-settings-boot-en">Settings loaded with no platform connections. The CLI, AI Apps, and Hypit Clone entries on the left remain available.</span>
                             </p>
                         </div>
                         <a id="apiSettingsBootRetry" class="api-settings-boot-retry" href="/static/api-settings.html" hidden>
@@ -450,6 +459,25 @@
                         <iframe id="articleSettingsCanvasFrame" class="hypit-settings-canvas" title="文章生成配置画布" data-i18n-title="articleSettings.canvasFrameTitle" loading="eager" hidden></iframe>
                     </section>
 
+                    <section id="musicSettingsBlock" class="hypit-settings-block music-settings-block" hidden>
+                        <div class="hypit-settings-toolbar">
+                            <div class="hypit-settings-heading">
+                                <div class="block-title" data-i18n="musicSettings.canvasTitle">音乐生成配置</div>
+                                <div class="block-desc" data-i18n="musicSettings.canvasDescription">在共享画布中配置歌曲与封面生成节点。</div>
+                            </div>
+                            <div class="hypit-settings-toolbar-actions">
+                                <button id="musicSettingsReset" class="action-btn" type="button" data-i18n-title="musicSettings.canvasResetTitle" title="重置配置">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span data-i18n="musicSettings.canvasReset">重置配置</span>
+                                </button>
+                                <button id="musicSettingsNewTab" class="action-btn" type="button" data-i18n-title="musicSettings.canvasNewTabTitle" title="打开画布编辑">
+                                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i><span data-i18n="musicSettings.canvasNewTab">打开画布编辑</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="musicSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
+                        <iframe id="musicSettingsCanvasFrame" class="hypit-settings-canvas" title="音乐生成配置画布" data-i18n-title="musicSettings.canvasFrameTitle" loading="eager" hidden></iframe>
+                    </section>
+
                     <section id="comfyuiSettingsBlock" class="comfyui-settings-block" hidden>
                         <section id="comfyuiLocalSection" class="comfyui-local-embed">
                             <div class="block-head">
@@ -511,10 +539,6 @@
                             <button type="button" data-region="global" onclick="selectRunningHubModelRegion('global')" data-i18n="api.rhRegionGlobalShort">AI站</button>
                             <button type="button" data-region="cn" onclick="selectRunningHubModelRegion('cn')" data-i18n="api.rhRegionCnShort">CN站</button>
                         </div>
-                        <label class="canvas-model-provider-field">
-                            <span class="label" data-i18n="api.canvasModelsProvider">配置平台</span>
-                            <select id="canvasModelProviderSelect" onchange="selectCanvasModelProvider(this.value)"></select>
-                        </label>
                     </div>
                     <div id="canvasModelCategoryTabs" class="canvas-model-category-tabs" role="tablist" aria-label="画布模型类别">
                         <button class="canvas-model-category-tab active" type="button" data-cat="all" onclick="selectCanvasModelCategory('all')" data-i18n="api.modelCategoryAll">全部</button>
@@ -815,11 +839,12 @@
     <script src="/static/js/i18n/asset-manager.js?v=2026.08.17.1786459099"></script>
     <script src="/static/js/smart-node-contract.js?v=2026.08.17.1787802614"></script>
     <script src="/static/js/i18n/api-settings.js?v=2026.08.17.1787068270"></script>
-    <script src="/static/js/api-settings.js?v=2026.08.17.1787833237"></script>
+    <script src="/static/js/settings-canvas-controller.js?v=2026.10.06.1"></script>
+    <script src="/static/js/api-settings.js?v=2026.10.06.1"></script>
     <script src="/static/js/smart-model-capabilities.js?v=2026.09.19.1"></script>
     <script src="/static/js/model-config-core.js"></script>
     <script src="/static/js/model-config-control.js"></script>
     <script src="/static/js/live-reload.js"></script>
-    <script src="/static/js/hypit-settings.js?v=2026.09.19.1"></script>
+    <script src="/static/js/hypit-settings.js?v=2026.10.06.1"></script>
 </body>
 </html>

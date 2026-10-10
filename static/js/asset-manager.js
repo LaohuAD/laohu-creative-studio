@@ -135,7 +135,7 @@ let activeCanvasAssetCanvasId = '';
 let selectedCanvasAssetId = '';
 let selectedCanvasAssetIds = new Set();
 let canvasAssetQuery = '';
-let canvasAssetSort = 'updated_desc';
+let canvasAssetTimeRange = 'all';
 let canvasAssetManageMode = false;
 let searchCompositionActive = false;
 let searchRenderTimer = null;
@@ -599,7 +599,7 @@ function canvasAssetViewTitle(){
     return activeCanvasAssetCategoryInfo()?.name || '生成结果';
 }
 function canvasAssetViewSubtitle(items){
-    return `${items.length} 个结果 / ${escapeHtml(canvasAssetSortLabel())}`;
+    return escapeHtml(i18nText('asset.resultCount', '{count} 个结果').replace('{count}', String(items.length)));
 }
 function canvasAssetKindLabel(item){
     if(StudioMedia.category(item)==='music') return i18nText('asset.music','音乐');
@@ -610,23 +610,61 @@ function canvasAssetKindLabel(item){
     if(kind === 'file') return '文件';
     return '图片';
 }
-function canvasAssetSortLabel(){
-    const map = {updated_desc:'最近生成', updated_asc:'最早生成', name_asc:'名称 A-Z', kind:'类型'};
-    return map[canvasAssetSort] || map.updated_desc;
+function canvasAssetTimestamp(item){
+    for(const value of [item?.created_at, item?.updated_at]){
+        if(value === null || value === undefined || String(value).trim() === '') continue;
+        const numeric = Number(value);
+        if(Number.isFinite(numeric)){
+            if(numeric <= 0) continue;
+            return numeric < 1e12 ? numeric * 1000 : numeric;
+        }
+        const parsed = Date.parse(String(value));
+        if(Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return null;
+}
+function canvasAssetMatchesTimeRange(item, range=canvasAssetTimeRange, now=Date.now()){
+    if(range === 'all') return true;
+    const timestamp = canvasAssetTimestamp(item);
+    if(timestamp === null) return false;
+    const age = now - timestamp;
+    if(age < 0) return false;
+    const day = 24 * 60 * 60 * 1000;
+    const month = 30 * day;
+    if(range === 'day') return age <= day;
+    if(range === 'week') return age <= 7 * day;
+    if(range === 'month') return age <= month;
+    if(range === 'older_month') return age > month;
+    return true;
+}
+function canvasAssetTimeRanges(){
+    const items = uniqueCanvasAssets(canvasAssetsData.items || []).filter(item => activeCanvasAssetCategory === 'all' || StudioMedia.category(item) === activeCanvasAssetCategory);
+    const now = Date.now();
+    return [
+        {id:'all', label:i18nText('asset.timeAll', '全部时间')},
+        {id:'day', label:i18nText('asset.timeDay', '一天内')},
+        {id:'week', label:i18nText('asset.timeWeek', '一周内')},
+        {id:'month', label:i18nText('asset.timeMonth', '一个月内')},
+        {id:'older_month', label:i18nText('asset.timeOlderMonth', '超过一个月')}
+    ].map(range => ({...range, count:range.id === 'all' ? items.length : items.filter(item => canvasAssetMatchesTimeRange(item, range.id, now)).length}));
 }
 function currentCanvasAssetItems(){
     const q = String(canvasAssetQuery || '').trim().toLowerCase();
+    const now = Date.now();
     let list = uniqueCanvasAssets(canvasAssetsData.items || []).filter(item => {
         if(activeCanvasAssetCategory !== 'all' && StudioMedia.category(item) !== activeCanvasAssetCategory) return false;
+        if(!canvasAssetMatchesTimeRange(item, canvasAssetTimeRange, now)) return false;
         if(!q) return true;
         return [item.name, item.display_name, item.original_name, item.url, canvasAssetKindLabel(item)].join(' ').toLowerCase().includes(q);
     });
-    list = list.slice();
-    const byTime = item => Number(item.created_at || item.updated_at || 0);
-    if(canvasAssetSort === 'updated_asc') list.sort((a, b) => byTime(a) - byTime(b));
-    else if(canvasAssetSort === 'name_asc') list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN', {numeric:true, sensitivity:'base'}));
-    else if(canvasAssetSort === 'kind') list.sort((a, b) => canvasAssetKindLabel(a).localeCompare(canvasAssetKindLabel(b), 'zh-Hans-CN') || byTime(b) - byTime(a));
-    else list.sort((a, b) => byTime(b) - byTime(a));
+    list.sort((a, b) => {
+        const aTime = canvasAssetTimestamp(a);
+        const bTime = canvasAssetTimestamp(b);
+        if(aTime === null && bTime !== null) return 1;
+        if(bTime === null && aTime !== null) return -1;
+        if(aTime !== null && bTime !== null && aTime !== bTime) return bTime - aTime;
+        return 0;
+    });
     return list;
 }
 function groupCanvasAssetItems(items){
@@ -830,6 +868,7 @@ function normalizePromptState(){
 function normalizeCanvasAssetState(){
     const cats = canvasAssetCategories();
     if(!cats.some(cat => cat.id === activeCanvasAssetCategory)) activeCanvasAssetCategory = defaultCanvasAssetCategory();
+    if(!canvasAssetTimeRanges().some(range => range.id === canvasAssetTimeRange)) canvasAssetTimeRange = 'all';
     activeCanvasAssetCanvasId = '';
     const items = currentCanvasAssetItems();
     if(selectedCanvasAssetId && !items.some(item => item.id === selectedCanvasAssetId)) selectedCanvasAssetId = '';
@@ -990,30 +1029,31 @@ function renderCanvasAssetsManager(){
     const detail = selectedCanvasAsset();
     root.innerHTML = `
         <aside class="asset-panel asset-nav">
-            <div class="panel-head"><div class="panel-title"><strong>结果类型</strong><span>按文件类型筛选</span></div></div>
-            <div class="nav-scroll">
+            <div class="nav-scroll canvas-asset-filter-scroll">
+                <section class="canvas-asset-filter-section">
+                    <div class="canvas-asset-filter-heading"><strong>${escapeHtml(i18nText('asset.resultType', '结果类型'))}</strong><span>${escapeHtml(i18nText('asset.filterByType', '按文件类型筛选'))}</span></div>
                 <div class="nav-tree canvas-asset-tree">
                     ${canvasAssetCategories().map(cat => renderCanvasAssetTreeBranch(cat)).join('')}
                 </div>
-                <div class="nav-hint">共 ${total} 个生成结果。删除画布不会影响这里已经保存的内容。</div>
+                </section>
+                <section class="canvas-asset-filter-section canvas-asset-time-section">
+                    <div class="canvas-asset-filter-heading"><strong>${escapeHtml(i18nText('asset.filterByTime', '按时间筛选'))}</strong><span>${escapeHtml(i18nText('asset.timeRangeHint', '按生成时间滚动计算：24 小时 / 7 天 / 30 天'))}</span></div>
+                    <div class="nav-tree canvas-asset-tree canvas-asset-time-tree">
+                        ${canvasAssetTimeRanges().map(range => renderCanvasAssetTimeRange(range)).join('')}
+                    </div>
+                </section>
+                <div class="nav-hint">${escapeHtml(i18nText('asset.resultsLibraryHint', '共 {count} 个生成结果。删除画布不会影响这里已经保存的内容。').replace('{count}', String(total)))}</div>
             </div>
         </aside>
         <section class="asset-panel asset-content ${canvasAssetManageMode ? 'manage-on' : ''}">
-            <div class="content-toolbar">
+            <div class="content-toolbar canvas-asset-toolbar">
                 <div class="content-heading">
                     <strong>${escapeHtml(canvasAssetViewTitle())}</strong>
                     <span>${canvasAssetViewSubtitle(items)}</span>
                 </div>
-                <div class="asset-tools">
-                    <button class="asset-btn" type="button" data-canvas-asset-refresh title="重新读取已保存的生成结果"><i data-lucide="refresh-cw"></i><span>刷新结果</span></button>
-                    <label class="asset-search-wrap"><i data-lucide="search"></i><input id="canvasAssetSearch" class="asset-search" type="search" value="${escapeAttr(canvasAssetQuery)}" placeholder="搜索生成结果"></label>
-                    <select id="canvasAssetSort" class="manage-select canvas-sort-select" title="排序方法">
-                        <option value="updated_desc" ${canvasAssetSort === 'updated_desc' ? 'selected' : ''}>最近生成</option>
-                        <option value="updated_asc" ${canvasAssetSort === 'updated_asc' ? 'selected' : ''}>最早生成</option>
-                        <option value="name_asc" ${canvasAssetSort === 'name_asc' ? 'selected' : ''}>结果名称</option>
-                        <option value="kind" ${canvasAssetSort === 'kind' ? 'selected' : ''}>类型</option>
-                    </select>
-                    <button class="asset-btn ${canvasAssetManageMode ? 'primary' : ''}" type="button" data-canvas-asset-manage ${total ? '' : 'disabled'}><i data-lucide="list-checks"></i><span>${canvasAssetManageMode ? '完成管理' : '批量管理'}</span></button>
+                <div class="asset-tools canvas-asset-tools">
+                    <label class="asset-search-wrap"><i data-lucide="search"></i><input id="canvasAssetSearch" class="asset-search" type="search" aria-label="${escapeAttr(i18nText('asset.searchResults', '搜索生成结果'))}" value="${escapeAttr(canvasAssetQuery)}" placeholder="${escapeAttr(i18nText('asset.searchResults', '搜索生成结果'))}"></label>
+                    <button class="asset-btn ${canvasAssetManageMode ? 'primary' : ''}" type="button" data-canvas-asset-manage ${total ? '' : 'disabled'}><i data-lucide="list-checks"></i><span>${canvasAssetManageMode ? escapeHtml(i18nText('asset.finishManaging', '完成管理')) : escapeHtml(i18nText('asset.batchManage', '批量管理'))}</span></button>
                 </div>
             </div>
             <div class="manage-tools">
@@ -1039,10 +1079,20 @@ function renderCanvasAssetsManager(){
 function renderCanvasAssetTreeBranch(cat){
     const icons = {all:'layers-3', text:'file-text', image:'image', video:'video', audio:'audio-lines', music:'music-2'};
     return `<div class="tree-branch">
-        <button class="tree-row tree-parent ${cat.id === activeCanvasAssetCategory ? 'active' : ''}" type="button" data-canvas-asset-cat="${escapeAttr(cat.id)}">
+        <button class="tree-row tree-parent ${cat.id === activeCanvasAssetCategory ? 'active' : ''}" type="button" aria-pressed="${cat.id === activeCanvasAssetCategory}" data-canvas-asset-cat="${escapeAttr(cat.id)}">
             <span class="tree-row-icon"><i data-lucide="${icons[cat.id] || 'file'}"></i></span>
             <span class="tree-row-name">${escapeHtml(cat.name || '全部')}</span>
             <span class="tree-row-count">${Number(cat.count || 0)}</span>
+        </button>
+    </div>`;
+}
+function renderCanvasAssetTimeRange(range){
+    const active = range.id === canvasAssetTimeRange;
+    return `<div class="tree-branch">
+        <button class="tree-row tree-parent ${active ? 'active' : ''}" type="button" aria-pressed="${active}" data-canvas-asset-time-range="${escapeAttr(range.id)}">
+            <span class="tree-row-icon"><i data-lucide="${range.id === 'all' ? 'calendar-days' : 'clock-3'}"></i></span>
+            <span class="tree-row-name">${escapeHtml(range.label)}</span>
+            <span class="tree-row-count">${Number(range.count || 0)}</span>
         </button>
     </div>`;
 }
@@ -2885,6 +2935,15 @@ async function handleClick(event){
         render();
         return;
     }
+    const canvasAssetTime = target.closest?.('[data-canvas-asset-time-range]');
+    if(canvasAssetTime){
+        canvasAssetTimeRange = canvasAssetTime.dataset.canvasAssetTimeRange || 'all';
+        activeCanvasAssetCanvasId = '';
+        selectedCanvasAssetId = '';
+        selectedCanvasAssetIds.clear();
+        render();
+        return;
+    }
     const canvasAssetCanvas = target.closest?.('[data-canvas-asset-canvas]');
     if(canvasAssetCanvas){
         activeCanvasAssetCategory = canvasAssetCanvas.dataset.canvasAssetCanvasCat || activeCanvasAssetCategory || 'all';
@@ -2900,7 +2959,6 @@ async function handleClick(event){
         render();
         return;
     }
-    if(target.closest?.('[data-canvas-asset-refresh]')){ await refreshCanvasAssets(); return; }
     if(target.closest?.('[data-canvas-asset-select-all]')){ toggleMaterialSelection(currentCanvasAssetItems(), selectedCanvasAssetIds); render(); return; }
     if(target.closest?.('[data-canvas-asset-clear-selection]')){ selectedCanvasAssetIds.clear(); render(); return; }
     if(target.closest?.('[data-canvas-asset-download-selected]')){ await downloadCanvasAssetItems([...selectedCanvasAssetIds]); return; }
@@ -4167,11 +4225,6 @@ root.addEventListener('change', event => {
             setStatus('已保存工作流名称');
         }).catch(err => setStatus(err.message || '保存失败'));
         return;
-    }
-    if(event.target?.id === 'canvasAssetSort'){
-        canvasAssetSort = event.target.value || 'updated_desc';
-        selectedCanvasAssetId = '';
-        render();
     }
     if(event.target?.id === 'assetMoveTarget'){
         assetMoveTarget = event.target.value || '';

@@ -2359,11 +2359,50 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
 
         providers[0]["audio_models"] = []
         catalog = main.build_model_capability_catalog(providers)
-        self.assertEqual(catalog["providers"][0]["models"], [])
+        self.assertEqual(catalog["providers"], [])
+        self.assertEqual(catalog["options"], [])
+
+        # 删除用户启用项只清空正式候选；管理目录仍保留可重新启用的精确档案。
+        management = main._build_model_management_catalog(providers)
+        option = next(
+            item for item in management["options"]
+            if item["connection_id"] == "ai-money"
+            and item["catalog_model_id"] == "doubao-seed-audio-1.0"
+            and item["node_type"] == "audio_generation"
+        )
+        self.assertFalse(option["enabled"])
+
+        with self.assertRaises(main.HTTPException) as context:
+            main.validate_model_capability_request(
+                "ai-money", "doubao-seed-audio-1.0", "audio_generation",
+                providers=providers,
+            )
+        self.assertIn("未启用模型", str(context.exception.detail))
 
         profile_path = ROOT / "data" / "model_capabilities" / "providers" / "ai-money.json"
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         self.assertTrue(any(item["model_id"] == "doubao-seed-audio-1.0" for item in profile["models"]))
+
+        # 管理开关通过既有精确 PATCH 路径恢复白名单后，正式候选重新出现；
+        # API 配置写入完全落在外接盘测试临时目录。
+        cache_root = ROOT / "cache" / "studio-tests" / "tmp"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="removed-model-reenable-", dir=cache_root) as directory:
+            config_path = Path(directory) / "api_providers.json"
+            config_path.write_text(json.dumps(providers), encoding="utf-8")
+            with patch.object(main, "API_PROVIDERS_FILE", str(config_path)):
+                result = main.patch_canvas_model_option_enabled(
+                    option["option_id"], True, management["catalog_revision"],
+                )
+                self.assertTrue(result["enabled"])
+                reenabled = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertIn("doubao-seed-audio-1.0", reenabled[0]["audio_models"])
+                reenabled_catalog = main.build_model_capability_catalog(reenabled)
+                runtime_provider = next(item for item in reenabled_catalog["providers"] if item["id"] == "ai-money")
+                self.assertIn(
+                    "doubao-seed-audio-1.0",
+                    {item["model_id"] for item in runtime_provider["models"]},
+                )
 
     def test_confirmed_profile_rejects_unsupported_reference_input(self):
         providers = [{

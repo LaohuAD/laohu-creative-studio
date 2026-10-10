@@ -20,10 +20,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 [hidden] { display: none !important; }
 
 .article-app { min-height: 100vh; background: var(--article-bg); }
-.article-toolbar { position: sticky; top: 0; z-index: 10; display: grid; grid-template-columns: auto minmax(120px,1fr) auto; align-items: center; gap: clamp(10px,2vw,24px); min-height: 72px; padding: 10px clamp(12px,3vw,32px); border-bottom: 1px solid var(--article-line); background: color-mix(in srgb, var(--article-surface) 94%, transparent); backdrop-filter: blur(14px); }
-.article-back { display: inline-flex; align-items: center; gap: 7px; color: var(--article-muted); text-decoration: none; font-size: 12px; font-weight: 700; white-space: nowrap; }
-.article-back:hover { color: var(--article-accent); }
-.article-back svg { width: 16px; height: 16px; }
+.article-toolbar { position: sticky; top: 0; z-index: 10; display: grid; grid-template-columns: minmax(120px,1fr) auto; align-items: center; gap: clamp(10px,2vw,24px); min-height: 72px; padding: 10px clamp(12px,3vw,32px); border-bottom: 1px solid var(--article-line); background: color-mix(in srgb, var(--article-surface) 94%, transparent); backdrop-filter: blur(14px); }
 .article-title-block { min-width: 0; }
 .article-kicker { color: var(--article-muted); font-size: 10px; letter-spacing: .06em; }
 .article-title-block h1 { overflow: hidden; margin: 2px 0 0; color: var(--article-text); font-size: clamp(15px,2vw,20px); line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
@@ -121,8 +118,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
 .article-cover-lightbox-hint { margin: 7px 0 0; color: var(--article-muted); font-size: 10px; text-align: center; }
 
 @media (max-width: 850px) {
-    .article-toolbar { grid-template-columns: auto minmax(80px,1fr); }
-    .article-toolbar-actions { grid-column: 1 / -1; justify-content: flex-start; }
+    .article-toolbar { grid-template-columns: minmax(0,1fr) auto; }
     .article-workspace { grid-template-columns: minmax(0,1fr); }
     .article-layout-rail { position: static; }
     .article-theme-choices { display: flex; overflow-x: auto; overscroll-behavior-x: contain; padding: 2px 2px 7px; }

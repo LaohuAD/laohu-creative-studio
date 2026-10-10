@@ -1,13 +1,15 @@
-/* 共用项目列表：canvas 与 hypit 两个模块共用渲染和交互，不复制项目数据。 */
+/* 共用项目列表：各模块共用项目存储和交互，不复制项目数据。 */
 (function(){
     'use strict';
 
     const page = document.querySelector('.studio-project-page');
     if(!page) return;
 
-    const requestedModule = String(document.body?.dataset?.studioModule || 'canvas').toLowerCase();
-    const module = ['canvas','hypit','article'].includes(requestedModule) ? requestedModule : 'canvas';
     const params = new URLSearchParams(location.search);
+    const supportedModules = ['canvas','hypit','article','music'];
+    const requestedModule = String(params.has('module') ? params.get('module') : (document.body?.dataset?.studioModule || 'canvas')).trim().toLowerCase();
+    const moduleIsValid = supportedModules.includes(requestedModule);
+    const module = moduleIsValid ? requestedModule : null;
     const focusedProjectId = params.get('id') || '';
     const state = { projects: [], loading: true, query: '', blockedProject: null, trashCount: 0, loadError: '', templates: [], templatesLoading: true, templatesError: '', selectedTemplateId: '' };
 
@@ -17,12 +19,16 @@
             en: { title:'Canvas', description:'Organise assets, connect canvas nodes and build each piece step by step.', listTitle:'Canvas projects', empty:'No canvas projects yet', emptyHint:'Create a project, then choose Open project on its card.', newName:'New canvas project', prepared:'Canvas environment', module:'Canvas' }
         },
         hypit: {
-            zh: { title:'Hypit', description:'管理视频复刻项目，连接外部 Agent，并查看制作内容与结果。', listTitle:'Hypit 项目', empty:'还没有 Hypit 项目', emptyHint:'创建项目后，点击卡片上的“Agent 接入”复制指令，或点击“打开项目”查看作品。', newName:'新 Hypit 项目', prepared:'Hypit 环境', module:'Hypit' },
-            en: { title:'Hypit', description:'Manage video recreation projects, connect an external Agent and review the work.', listTitle:'Hypit projects', empty:'No Hypit projects yet', emptyHint:'Create a project, then choose Connect Agent to copy the instructions or Open project to review your work.', newName:'New Hypit project', prepared:'Hypit environment', module:'Hypit' }
+            zh: { title:'Hypit克隆', description:'管理 Hypit 视频复刻项目，连接外部 Agent，并查看制作内容与结果。', listTitle:'Hypit克隆项目', empty:'还没有 Hypit克隆项目', emptyHint:'创建项目后，点击卡片上的“Agent 接入”复制指令，或点击“打开项目”查看作品。', newName:'新 Hypit克隆项目', prepared:'准备创作技能', module:'Hypit克隆' },
+            en: { title:'Hypit Clone', description:'Manage Hypit video recreation projects, connect an external Agent and review the work.', listTitle:'Hypit Clone projects', empty:'No Hypit Clone projects yet', emptyHint:'Create a project, then choose Connect Agent to copy the instructions or Open project to review your work.', newName:'New Hypit Clone project', prepared:'Prepare creative skills', module:'Hypit Clone' }
         },
         article: {
             zh: { title:'公众号文章', description:'创建文章项目，接入外部 Agent，按需准备技能，再打开文章复制标题、封面和正文。', listTitle:'文章项目', empty:'还没有文章项目', emptyHint:'创建并命名文章项目后，接入 Agent；完成文章后点击“打开项目”预览和复制。', newName:'新文章项目', prepared:'准备创作技能', module:'文章', templateTitle:'排版示例', templateDescription:'了解正文的结构、色彩与排版；封面和标题在文章页单独管理。示例不等于已为当前文章生成排版。', templateLoading:'正在读取版式示例…', templateFailed:'版式示例读取失败', templateEmpty:'暂时没有可用的版式示例', templateRetry:'重试读取示例', templatePreview:'当前示例预览', templateExample:'示例', templateDirectory:'六种正文版式', templateUnavailable:'预览暂不可用' },
             en: { title:'Articles', description:'Create an article project, connect an external Agent, prepare skills if needed, then open the article to copy its title, cover and body.', listTitle:'Article projects', empty:'No article projects yet', emptyHint:'Create and name a project, connect an Agent, then choose Open project to review and copy the article.', newName:'New article project', prepared:'Prepare creative skills', module:'Articles', templateTitle:'Layout examples', templateDescription:'Explore body structure, color and layout. Titles and covers are managed separately on the article page. Examples are not layouts generated for your article.', templateLoading:'Loading layout examples…', templateFailed:'Could not load layout examples', templateEmpty:'No layout examples are available yet', templateRetry:'Retry loading examples', templatePreview:'Selected example', templateExample:'Example', templateDirectory:'Six body layouts', templateUnavailable:'Preview unavailable' }
+        },
+        music: {
+            zh: { title:'音乐创作', description:'管理歌曲作品，接入外部 Agent，并查看歌词、乐谱与音频结果。', listTitle:'音乐项目', empty:'还没有音乐项目', emptyHint:'新建并命名音乐项目，再从项目卡片复制接入指令。创作完成后打开项目查看内容与试听。', newName:'新音乐项目', prepared:'准备创作技能', module:'音乐创作' },
+            en: { title:'Music Creation', description:'Manage song projects, connect an external Agent, and review lyrics, scores and audio results.', listTitle:'Music projects', empty:'No music projects yet', emptyHint:'Create and name a music project, then copy its Agent instructions. Open the project to review the content and listen to results.', newName:'New music project', prepared:'Prepare creative skills', module:'Music Creation' }
         }
     };
 
@@ -40,6 +46,38 @@
     function escapeHtml(value){ return String(value == null ? '' : value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])); }
     function refreshIcons(){ if(window.lucide?.createIcons) window.lucide.createIcons(); }
     function setText(id, value){ const node = document.getElementById(id); if(node) node.textContent = value; }
+
+    function renderUnavailableModule(){
+        const english = isEnglish();
+        const text = english
+            ? {title:'Module unavailable', heading:'This creative module is unavailable', hint:'The module identifier in this link is invalid. Choose a module from the main navigation and try again.'}
+            : {title:'模块不可用', heading:'无法打开这个创作模块', hint:'链接中的模块标识无效。请从主菜单选择模块后再试。'};
+        document.documentElement.lang = english ? 'en' : 'zh-CN';
+        document.title = text.title;
+        setText('studioProjectListTitle', text.title);
+        setText('studioProjectDescription', text.hint);
+        const actions = page.querySelector('.studio-project-toolbar-actions');
+        if(actions){ actions.hidden = true; actions.style.display = 'none'; }
+        const stateNode = document.getElementById('studioProjectState');
+        if(stateNode){ stateNode.hidden = false; }
+        const grid = document.getElementById('studioProjectGrid');
+        if(grid) grid.replaceChildren();
+        document.getElementById('studioProjectGuide')?.remove();
+        page.querySelectorAll('button, input').forEach(control => { control.disabled = true; });
+        setState('error', text.heading, text.hint);
+        refreshIcons();
+    }
+
+    if(!moduleIsValid){
+        window.addEventListener('studio-lang-change', renderUnavailableModule);
+        window.addEventListener('message', event => {
+            if(event.origin !== location.origin || event.source !== window.parent) return;
+            if(event.data?.type === 'studio-lang' && event.data.lang && window.StudioI18n) window.StudioI18n.set(event.data.lang);
+            renderUnavailableModule();
+        });
+        renderUnavailableModule();
+        return;
+    }
 
     function formatTime(value){
         const numeric = Number(value || 0);
@@ -113,8 +151,9 @@
         page.querySelectorAll('[data-copy="trashKicker"]').forEach(node => { node.textContent = common.trashKicker; });
         page.querySelectorAll('[data-copy="trashTitle"]').forEach(node => { node.textContent = common.trashTitle; });
         page.querySelectorAll('[data-module-label="canvas"]').forEach(node => { node.textContent = L('画布','Canvas'); });
-        page.querySelectorAll('[data-module-label="hypit"]').forEach(node => { node.textContent = 'Hypit'; });
+        page.querySelectorAll('[data-module-label="hypit"]').forEach(node => { node.textContent = L('Hypit克隆','Hypit Clone'); });
         page.querySelectorAll('[data-module-label="article"]').forEach(node => { node.textContent = L('公众号文章','Articles'); });
+        page.querySelectorAll('[data-module-label="music"]').forEach(node => { node.textContent = L('音乐创作','Music Creation'); });
         const tabs = page.querySelector('[data-role="module-tabs"]');
         if(tabs) tabs.setAttribute('aria-label', L('创作模块','Creative modules'));
         setText('studioModuleTitle', text.title);
@@ -158,15 +197,16 @@
     function cardMarkup(project){
         const isHypit = project.module === 'hypit';
         const isArticle = module === 'article' || project.module === 'article';
+        const isMusic = project.module === 'music';
         const selected = focusedProjectId && focusedProjectId === project.id ? ' selected' : '';
-        const icon = isHypit ? 'flask-conical' : isArticle ? 'notebook-pen' : 'layers-3';
-        const utility = isHypit || isArticle ? '' : `<div class="studio-card-utilities">
+        const icon = isHypit ? 'flask-conical' : isArticle ? 'notebook-pen' : isMusic ? 'music-2' : 'layers-3';
+        const utility = isHypit || isArticle || isMusic ? '' : `<div class="studio-card-utilities">
                 <button class="studio-card-utility" type="button" data-card-action="export-json" data-project-id="${escapeHtml(project.id)}">${escapeHtml(copy().exportJson)}</button>
                 <button class="studio-card-utility" type="button" data-card-action="export-zip" data-project-id="${escapeHtml(project.id)}">${escapeHtml(copy().exportZip)}</button>
             </div>`;
         return `<article class="studio-project-card${selected}" data-project-id="${escapeHtml(project.id)}">
             <div class="studio-project-card-head">
-                <div class="studio-project-card-icon${isHypit ? ' hypit' : isArticle ? ' article' : ''}"><i data-lucide="${icon}" aria-hidden="true"></i></div>
+            <div class="studio-project-card-icon${isHypit ? ' hypit' : isArticle ? ' article' : isMusic ? ' music' : ''}"><i data-lucide="${icon}" aria-hidden="true"></i></div>
                 <div class="studio-project-card-head-copy">
                     <h3 class="studio-project-card-title">${escapeHtml(project.name || '')}</h3>
                 </div>
@@ -330,7 +370,7 @@
     }
 
     function navigatePopup(popup, project){
-        const path = project?.url || (module === 'article' ? `/static/article.html?id=${encodeURIComponent(project?.id || '')}` : '');
+        const path = project?.url || (module === 'article' ? `/static/article.html?id=${encodeURIComponent(project?.id || '')}` : module === 'music' ? `/static/music.html?id=${encodeURIComponent(project?.id || '')}` : '');
         if(!path) return;
         const target = new URL(path, location.origin).href;
         if(popup){
@@ -396,7 +436,12 @@
     function renderGuide(){
         let guide = document.getElementById('studioProjectGuide');
         if(!guide){guide=document.createElement('section');guide.id='studioProjectGuide';guide.className='studio-project-guide';document.querySelector('.studio-project-toolbar').after(guide);}
-        const steps = module === 'article' ? [
+        const steps = module === 'music' ? [
+            [L('创建项目','Create a project'),L('点击“新建项目”并命名；项目会保存在音乐项目列表中。','Choose New project and name it. The project stays in the music list.')],
+            [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('点击“准备创作技能”，把共享准备说明交给外部 Agent；它会检查官方仓库和入口，发现更新先告知并询问。此操作不会自动开始创作。','Choose Prepare creative skills to share the common preparation guide with your Agent. It checks the official repository and entry, and asks before updating. This does not start creative work.')],
+            [L('接入外部 Agent','Connect an external Agent'),L('从项目卡片复制该歌曲的接入说明。Agent 负责创作歌词、歌名、乐谱和风格内容。','Copy the project-specific instructions from its card. Your Agent creates titles, lyrics, style and scores.')],
+            [L('查看与试听','Review and listen'),L('打开项目查看已保存内容与真实音频结果；选中结果或播放音频不会改写作品。','Open the project to review saved content and audio. Listening does not change the work.')]
+        ] : module === 'article' ? [
             [L('创建项目','Create a project'),L('点击“新建项目”并命名；项目卡片会留在当前列表。','Choose New project and name it. The project card stays in this list.')],
             [L('接入 Agent','Connect an Agent'),L('从项目卡片复制接入说明给外部 Agent；连接本身不会创作文章。','Copy the connection instructions from the project card to an external Agent. Connecting does not create the article.')],
             [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('点击“准备创作技能”，让 Agent 检查已安装技能和可选更新；是否更新由你确认，不会自动覆盖。','Choose Prepare creative skills to have your Agent check installed skills and available updates. You decide whether to update; nothing is overwritten automatically.')],

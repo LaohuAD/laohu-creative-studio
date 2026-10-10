@@ -55,12 +55,20 @@ class HypitSettingsUiTests(unittest.TestCase):
             self.skipTest("node is required for the frontend behavior fixture")
         fixture = r'''const fs = require('fs');
 const source = fs.readFileSync('static/js/hypit-settings.js', 'utf8');
+const controllerSource = fs.readFileSync('static/js/settings-canvas-controller.js', 'utf8');
 const listeners = Object.create(null);
 const requests = [];
 const layout = {classList:{contains:()=>false,add(){},remove(){}}};
 const elements = new Map();
 const document = {
-  getElementById(id) { return id === 'hypitSlots' ? null : (elements.get(id) || null); },
+  getElementById(id) {
+    if (id === 'hypitSlots') return null;
+    if (id === 'hypitSettingsCanvasFrame') {
+      if (!elements.has(id)) elements.set(id, {src:'',contentWindow:{postMessage(){}},getAttribute(){return this.src||null;},addEventListener(){},removeEventListener(){},setAttribute(){},removeAttribute(){}});
+      return elements.get(id);
+    }
+    return elements.get(id) || null;
+  },
   querySelector(selector) { return selector === '.layout' ? layout : null; },
   querySelectorAll() { return []; },
   addEventListener(type, handler) { (listeners[type] ||= []).push(handler); },
@@ -73,6 +81,7 @@ global.window = {
   StudioI18n:{register(){},apply(){},t:key=>key,lang:()=> 'zh'},
   refreshIcons(){},
 };
+eval(controllerSource);
 global.fetch = async (url, options={}) => {
   requests.push({url,method:options.method||'GET'});
   if (url === '/api/hypit/settings-canvas') return {ok:true,json:async()=>({id:'hypit-settings',canvas:{id:'hypit-settings'},url:'/static/smart-canvas.html?id=hypit-settings&mode=hypit-settings'})};

@@ -1979,7 +1979,8 @@ def _filter_disabled_model_options(catalog, providers):
         connection_id = str(provider.get("id") or "").strip().lower()
         configured = configured_by_id.get(connection_id)
         if not configured:
-            filtered_providers.append(provider)
+            if provider.get("models"):
+                filtered_providers.append(provider)
             continue
         kept_models = []
         for model in provider.get("models") or []:
@@ -2016,7 +2017,10 @@ def _filter_disabled_model_options(catalog, providers):
             kept_models.append(model)
         provider["models"] = kept_models
         provider["families"] = MODEL_CAPABILITY_REGISTRY._family_catalog(kept_models)
-        filtered_providers.append(provider)
+        # 正式候选目录不返回已被精确停用项全部清空的平台空壳。
+        # 连接配置、能力档案和 AI 应用目录由各自接口管理，不在这里删除。
+        if kept_models:
+            filtered_providers.append(provider)
     catalog["providers"] = filtered_providers
     return catalog
 
@@ -20630,16 +20634,19 @@ from studio_projects import StudioProjectStore, create_studio_projects_router
 from studio_connection import create_connection_router
 from studio_articles import StudioArticleStore, create_studio_articles_router
 from studio_article_generation import StudioArticleGenerationBridge
+from studio_music import StudioMusicStore
+from studio_music_generation import StudioMusicGenerationBridge
 from studio_hypit import create_hypit_router
 from hypit_runtime import HypitRuntime
-from studio_execution import StudioExecution, input_media as studio_input_media, recipe as studio_node_recipe, request_for as studio_request_for, stable as studio_stable
+from studio_execution import StudioExecution, input_media as studio_input_media, project_workflow_fields as studio_project_workflow_fields, recipe as studio_node_recipe, request_for as studio_request_for, stable as studio_stable
 from studio_app_execution import StudioAppExecution, _schema_fields as studio_app_schema_fields
-from studio_hypit_models import create_hypit_models_router, _reject_secrets
+from studio_hypit_models import create_hypit_models_router, _reject_secrets, _is_secret_identifier, _validate_parameters
 from studio_hypit_flow import HypitFlowRunner
 from canvas_core.hypit_config import (
     HYPIT_OUTPUT_KINDS,
     HYPIT_OUTPUT_SLOTS,
     HYPIT_SETTINGS_CANVAS_ID,
+    SETTINGS_CANVAS_MODULES,
     hypit_execution_recipe_fingerprint,
     legacy_hypit_defaults_to_canvas,
     plan_hypit_slot,
@@ -20650,6 +20657,8 @@ from canvas_core.hypit_config import (
 from studio_hypit_canvas import (
     ARTICLE_SETTINGS_CANVAS_ID,
     ARTICLE_SETTINGS_CANVAS_URL,
+    MUSIC_SETTINGS_CANVAS_ID,
+    MUSIC_SETTINGS_CANVAS_URL,
     HypitSettingsCanvasService,
     create_hypit_settings_canvas_router,
     filter_settings_canvas_records,
@@ -20722,6 +20731,25 @@ def studio_article_resolve_media(asset_id, result_id):
     }
 
 
+def studio_music_read_score_content(asset_id, result_id):
+    """只从共享素材/结果存储读取受限大小的乐谱字节用于格式校验。"""
+    if bool(asset_id) == bool(result_id):
+        return None
+    item_id = str(asset_id or result_id)
+    item = PROJECT_STORAGE.get_material(item_id) if asset_id else PROJECT_STORAGE.get_result(item_id)
+    path = PROJECT_STORAGE.material_path(item_id) if asset_id and item else (
+        PROJECT_STORAGE.result_path(item_id) if result_id and item else None
+    )
+    if not item or path is None or not path.is_file() or path.stat().st_size <= 0 or path.stat().st_size > 5 * 1024 * 1024:
+        return None
+    try:
+        with path.open("rb") as stream:
+            content = stream.read(5 * 1024 * 1024 + 1)
+    except OSError:
+        return None
+    return content if len(content) <= 5 * 1024 * 1024 else None
+
+
 def studio_article_find_shared_media_by_hash(digest, kind):
     """按确切内容哈希查共享素材/结果，复用文件而不复制媒体。"""
     if not re.fullmatch(r"[a-f0-9]{64}", str(digest or "")) or kind not in {"image", "video", "audio", "text"}:
@@ -20768,6 +20796,11 @@ STUDIO_ARTICLES = StudioArticleStore(
     resolve_media_reference=studio_article_resolve_media,
     register_managed_result=PROJECT_STORAGE.register_managed_result,
     find_shared_media_by_hash=studio_article_find_shared_media_by_hash,
+)
+STUDIO_MUSIC = StudioMusicStore(
+    STUDIO_PROJECTS,
+    resolve_media_reference=studio_article_resolve_media,
+    read_media_reference=studio_music_read_score_content,
 )
 
 
@@ -20884,20 +20917,32 @@ def studio_article_supported_output_slots(node, request):
     }.get(kind, [])
 
 
+def studio_music_supported_output_slots(node, request):
+    """音乐配置图只接受歌曲音频或封面图片；动态节点仍按真实结果类型校验。"""
+    node_type = str(node.get("type") or "")
+    if node_type in {"smart-ai-app", "smart-comfy-workflow"}:
+        return ["music", "image"]
+    supported = studio_hypit_supported_output_slots(node, request)
+    return [slot for slot in supported if slot in {"music", "image"}]
+
+
 def studio_hypit_task_metadata(canvas, node, request):
     """把模块配置图运行的配方指纹和槽位契约写入服务端任务记录。"""
     canvas_id = str(canvas.get("id") or "")
-    if canvas_id not in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID}:
+    if canvas_id not in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID, MUSIC_SETTINGS_CANVAS_ID}:
         return {}
-    module_id = "hypit" if canvas_id == HYPIT_SETTINGS_CANVAS_ID else "article"
-    supported_slots = (studio_hypit_supported_output_slots(node, request)
-                       if module_id == "hypit" else studio_article_supported_output_slots(node, request))
+    module_id = SETTINGS_CANVAS_MODULES[canvas_id]
+    supported_slots = (
+        studio_hypit_supported_output_slots(node, request) if module_id == "hypit" else
+        studio_article_supported_output_slots(node, request) if module_id == "article" else
+        studio_music_supported_output_slots(node, request)
+    )
     if not supported_slots:
         if module_id == "hypit":
             rejection = studio_hypit_profile_rejection(node, request)
             if rejection:
                 raise HTTPException(status_code=400, detail=rejection)
-        module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+        module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}[module_id]
         raise HTTPException(status_code=400, detail=f"当前生成节点不符合 {module_name} 输出契约，请检查模型设置")
     return {
         "hypit_source_node_id": str(node.get("id") or ""),
@@ -20910,12 +20955,15 @@ def studio_hypit_task_metadata(canvas, node, request):
 
 async def studio_preflight(canvas, node, request, request_id, *, record_run=True):
     settings_canvas_id = str(canvas.get("id") or "")
-    if settings_canvas_id in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID}:
-        module_id = "hypit" if settings_canvas_id == HYPIT_SETTINGS_CANVAS_ID else "article"
-        supported_slots = (studio_hypit_supported_output_slots(node, request)
-                           if module_id == "hypit" else studio_article_supported_output_slots(node, request))
+    if settings_canvas_id in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID, MUSIC_SETTINGS_CANVAS_ID}:
+        module_id = SETTINGS_CANVAS_MODULES[settings_canvas_id]
+        supported_slots = (
+            studio_hypit_supported_output_slots(node, request) if module_id == "hypit" else
+            studio_article_supported_output_slots(node, request) if module_id == "article" else
+            studio_music_supported_output_slots(node, request)
+        )
         if not supported_slots:
-            module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+            module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}[module_id]
             raise HTTPException(status_code=400, detail=f"当前生成节点不符合 {module_name} 输出契约，请检查模型设置")
         by_id = {str(item.get("id") or ""): item for item in canvas.get("nodes", []) if isinstance(item, dict)}
         connected_slots = [
@@ -20927,7 +20975,7 @@ async def studio_preflight(canvas, node, request, request_id, *, record_run=True
         ]
         unsupported = [slot for slot in connected_slots if slot not in supported_slots]
         if unsupported:
-            module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+            module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}[module_id]
             raise HTTPException(status_code=400, detail=f"当前模型不适用于 {module_name} {unsupported[0]} 输出用途")
     preflight_payload = CanvasPreflightRequest(
         canvas_id=canvas['id'] if record_run else '',
@@ -21504,6 +21552,11 @@ def _project_article_test_statuses(canvas_id, canvas):
     return studio_hypit_test_statuses(canvas_id, canvas, module_id="article")
 
 
+def _project_music_test_statuses(canvas_id, canvas):
+    # 音乐设置图复用共享执行状态投影；它只读取任务和受管结果，不会触发生成。
+    return studio_hypit_test_statuses(canvas_id, canvas, module_id="music")
+
+
 HYPIT_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
     load_canvas=load_canvas,
     save_canvas=save_canvas,
@@ -21535,6 +21588,24 @@ ARTICLE_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
     title="文章生成配置",
     migrate_legacy=False,
 )
+MUSIC_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
+    load_canvas=load_canvas,
+    save_canvas=save_canvas,
+    lock=CANVAS_LOCK,
+    load_legacy_settings=lambda: None,
+    backup_legacy_settings=lambda _record: None,
+    migrate_legacy_settings=legacy_hypit_defaults_to_canvas,
+    validate_canvas=validate_hypit_settings_canvas,
+    test_statuses=_project_music_test_statuses,
+    backup_scaffold=None,
+    broadcast_canvas_updated=manager.broadcast_canvas_updated,
+    now_ms=now_ms,
+    canvas_id=MUSIC_SETTINGS_CANVAS_ID,
+    module_id="music",
+    canvas_url=MUSIC_SETTINGS_CANVAS_URL,
+    title="音乐生成配置",
+    migrate_legacy=False,
+)
 
 
 def validate_canvas_settings_canvas(canvas):
@@ -21560,6 +21631,7 @@ CANVAS_SETTINGS_SERVICE = CanvasSettingsService(
 SETTINGS_CANVAS_SERVICES = {
     HYPIT_SETTINGS_CANVAS_ID: HYPIT_SETTINGS_CANVAS_SERVICE,
     ARTICLE_SETTINGS_CANVAS_ID: ARTICLE_SETTINGS_CANVAS_SERVICE,
+    MUSIC_SETTINGS_CANVAS_ID: MUSIC_SETTINGS_CANVAS_SERVICE,
     CANVAS_SETTINGS_CANVAS_ID: CANVAS_SETTINGS_SERVICE,
 }
 
@@ -21592,6 +21664,11 @@ app.include_router(create_hypit_settings_canvas_router(
 app.include_router(create_hypit_settings_canvas_router(
     service=ARTICLE_SETTINGS_CANVAS_SERVICE,
     base_path="/api/studio/articles/settings-canvas",
+    include_test_routes=False,
+))
+app.include_router(create_hypit_settings_canvas_router(
+    service=MUSIC_SETTINGS_CANVAS_SERVICE,
+    base_path="/api/studio/music/settings-canvas",
     include_test_routes=False,
 ))
 app.include_router(create_canvas_settings_router(
@@ -21671,7 +21748,13 @@ async def studio_app_preflight(canvas, node, request, request_id, *, record_run=
             nodes=canvas['nodes'], connections=canvas.get('connections', [])))
     graph = validate_canvas_preflight_graph(canvas['nodes'], canvas.get('connections', []))
     if request['kind'] == 'comfy':
-        get_workflow(request['workflow_json'])  # 核对受管理工作流路径，禁止随意读取文件。
+        accepted = request.get('_studio_dynamic_snapshot')
+        accepted_definition = accepted.get('workflow_definition') if isinstance(accepted, dict) else None
+        if accepted_definition is not None:
+            if not isinstance(accepted_definition, dict) or not accepted_definition:
+                raise HTTPException(400, '已接受的 ComfyUI 工作流快照无效')
+        else:
+            get_workflow(request['workflow_json'])  # 普通 Canvas 继续核对当前受管理路径。
         if not COMFYUI_INSTANCES:
             raise HTTPException(400, '请先配置 ComfyUI 服务')
     elif request['kind'] == 'runninghub_workflow':
@@ -21688,9 +21771,15 @@ async def studio_app_preflight(canvas, node, request, request_id, *, record_run=
 async def studio_runninghub_submit(request):
     payload = request['platform_request']
     snapshot = request.get('_hypit_execution_snapshot')
+    dynamic_snapshot = request.get('_studio_dynamic_snapshot')
+    if not isinstance(snapshot, dict) and isinstance(dynamic_snapshot, dict):
+        snapshot = dynamic_snapshot
     trusted_fields = snapshot.get('fields') if isinstance(snapshot, dict) else None
     if request['kind'] == 'runninghub_workflow':
-        trusted_workflow = request.get('workflow') if isinstance(snapshot, dict) else None
+        trusted_workflow = (
+            snapshot.get('workflow_definition') if isinstance(snapshot, dict) and snapshot.get('workflow_definition')
+            else request.get('workflow') if isinstance(snapshot, dict) else None
+        )
         return await _runninghub_workflow_submit(RunningHubWorkflowSubmitRequest(**payload),
             trusted_fields=trusted_fields, trusted_workflow=trusted_workflow)
     return await _runninghub_submit(RunningHubSubmitRequest(**payload), trusted_fields=trusted_fields)
@@ -21700,8 +21789,11 @@ def studio_local_comfy_generate(request):
     """内部适配器可携带经校验的快照；HTTP GenerateRequest 不暴露原始工作流入口。"""
     payload = request['platform_request']
     snapshot = request.get('_hypit_execution_snapshot')
+    if not isinstance(snapshot, dict):
+        dynamic_snapshot = request.get('_studio_dynamic_snapshot')
+        snapshot = dynamic_snapshot if isinstance(dynamic_snapshot, dict) else None
     if isinstance(snapshot, dict):
-        graph = snapshot.get('workflow_json')
+        graph = snapshot.get('workflow_json') or snapshot.get('workflow_definition')
         if not isinstance(graph, dict) or not graph:
             raise HTTPException(400, 'Hypit ComfyUI 工作流快照无效')
         return generate_request(GenerateRequest(**payload), trusted_workflow_snapshot=copy.deepcopy(graph))
@@ -21746,6 +21838,13 @@ async def studio_app_fields(app_id, node, canvas):
     return next((item for item in provider.get('rh_apps', []) if str(item.get('id') or item.get('appId')) == str(app_id)), {})
 
 
+def studio_music_comfy_fields(workflow_name, node=None, canvas=None):
+    # Return the selected managed definition as well as its fields so settings-flow
+    # tasks can freeze both at acceptance. Ordinary Canvas callers still consume only
+    # the field projection returned by StudioAppExecution.
+    return get_workflow(workflow_name)
+
+
 STUDIO_APP_EXECUTION = StudioAppExecution(load_canvas=load_canvas, save_canvas=save_canvas,
     lock=CANVAS_LOCK, storage=PROJECT_STORAGE, preflight=studio_app_preflight,
     collect=studio_collect, notify=studio_notify,
@@ -21754,7 +21853,7 @@ STUDIO_APP_EXECUTION = StudioAppExecution(load_canvas=load_canvas, save_canvas=s
     runninghub_submit=studio_runninghub_submit,
     runninghub_query=studio_runninghub_query,
     resolve_runninghub_fields=studio_app_fields,
-    resolve_comfy_fields=lambda name, *_: get_workflow(name)['config']['fields'],
+    resolve_comfy_fields=studio_music_comfy_fields,
     upload_runninghub_asset=studio_runninghub_upload, upload_comfy_media=studio_comfy_upload)
 
 
@@ -21799,6 +21898,7 @@ async def studio_hypit_prepare_node_request(canvas, node, request_id, upstream_r
         run_settings["textSystemEnabled"] = True
         run_settings["textSystemPrompt"] = requested_system_prompt
 
+    resolved_schema = None
     if preflight and node.get("type") in {"smart-ai-app", "smart-comfy-workflow"}:
         if any(
             isinstance(value, dict) and value.get("placeholder") is True
@@ -21806,11 +21906,26 @@ async def studio_hypit_prepare_node_request(canvas, node, request_id, upstream_r
                  or str(value.get("kind") or "").strip().lower() == "dynamic")
             for source_id, value in (upstream_results or {}).items()
         ):
-            await studio_hypit_add_dynamic_field_placeholders(canvas, node)
+            resolved_schema = await studio_hypit_add_dynamic_field_placeholders(canvas, node)
 
     step_request_id = _hypit_step_request_id(request_id, node_id)
     if node.get("type") in {"smart-ai-app", "smart-comfy-workflow"}:
-        request = await STUDIO_APP_EXECUTION._prepare_request(canvas, node, step_request_id)
+        settings = node.get("runSettings") if isinstance(node.get("runSettings"), dict) else {}
+        if preflight:
+            request = await STUDIO_APP_EXECUTION._prepare_request(
+                canvas, node, step_request_id,
+                freeze_dynamic_snapshot=True,
+                resolved_schema=resolved_schema,
+            )
+        else:
+            accepted_snapshot = settings.get("_studioAcceptedDynamicSnapshot")
+            if not isinstance(accepted_snapshot, dict):
+                raise ValueError("已接受任务缺少动态 Schema 快照；请查询原任务，不要重新提交")
+            request = await STUDIO_APP_EXECUTION._prepare_request(
+                canvas, node, step_request_id,
+                freeze_dynamic_snapshot=True,
+                accepted_dynamic_snapshot=accepted_snapshot,
+            )
         # 动态输出必须依赖供应商真实 MIME/类型或受管文件类型，不能沿用旧的
         # 通用图片兜底分类。
         request["strict_result"] = True
@@ -21859,10 +21974,11 @@ async def studio_hypit_add_dynamic_field_placeholders(canvas, node):
             resolved = await resolved
         fields = studio_app_schema_fields(resolved, comfy=True)
     else:
-        return
-    enabled_fields = [field for field in fields if field.get("enabled") is True]
-    if enabled_fields:
-        fields = enabled_fields
+        return None
+    if isinstance(fields, list):
+        has_enabled_flags = any(isinstance(field, dict) and "enabled" in field for field in fields)
+        if has_enabled_flags:
+            fields = [field for field in fields if isinstance(field, dict) and field.get("enabled") is True]
 
     secret_field_names = {
         "api_key", "apikey", "secret", "password", "access_token", "refresh_token",
@@ -21926,6 +22042,7 @@ async def studio_hypit_add_dynamic_field_placeholders(canvas, node):
         node["manualInputRefs"] = [
             *copy.deepcopy(node.get("manualInputRefs") or []), *added_refs,
         ]
+    return resolved
 
 
 async def studio_hypit_preflight_node(canvas, node, request, request_id):
@@ -21935,15 +22052,18 @@ async def studio_hypit_preflight_node(canvas, node, request, request_id):
     target_slot = str(request.get("_hypit_output_slot") or "").strip().lower()
     if target_slot:
         canvas_id = str(canvas.get("id") or "")
-        module_id = "hypit" if canvas_id == HYPIT_SETTINGS_CANVAS_ID else "article"
-        supported_slots = (studio_hypit_supported_output_slots(node, request)
-                           if module_id == "hypit" else studio_article_supported_output_slots(node, request))
+        module_id = SETTINGS_CANVAS_MODULES.get(canvas_id, "")
+        supported_slots = (
+            studio_hypit_supported_output_slots(node, request) if module_id == "hypit" else
+            studio_article_supported_output_slots(node, request) if module_id == "article" else
+            studio_music_supported_output_slots(node, request) if module_id == "music" else []
+        )
         if module_id == "hypit":
             rejection = studio_hypit_profile_rejection(node, request, target_slot)
             if rejection:
                 raise HTTPException(status_code=400, detail=rejection)
         if target_slot not in supported_slots:
-            module_name = "Hypit" if module_id == "hypit" else "文章配置图"
+            module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}.get(module_id, "设置图")
             raise HTTPException(status_code=400, detail=f"当前模型不适用于 {module_name} {target_slot} 输出用途")
     return resolved
 
@@ -22084,6 +22204,386 @@ async def studio_hypit_publish_node_result(canvas_snapshot, source_node, media, 
     return True
 
 
+def studio_music_dynamic_field_key(field, node_type):
+    """Return the exact dynamic-field key used by the shared execution path."""
+    if not isinstance(field, dict):
+        return ""
+    if node_type == "smart-comfy-workflow":
+        return str(field.get("id") or field.get("paramid") or field.get("paramId") or field.get("key") or "").strip()
+    field_node = str(field.get("nodeId") or field.get("node_id") or "").strip()
+    field_name = str(field.get("fieldName") or field.get("field_name") or field.get("inputName") or "").strip()
+    if not field_node or not field_name:
+        param_id = str(field.get("paramid") or field.get("paramId") or field.get("key") or "").strip()
+        if "::" in param_id:
+            field_node, field_name = (part.strip() for part in param_id.split("::", 1))
+    return f"{field_node}::{field_name}" if field_node or field_name else str(
+        field.get("key") or field.get("paramid") or field.get("paramId") or ""
+    ).strip()
+
+
+def studio_music_dynamic_field_kind(field, node_type):
+    """Classify only fields the shared executor can safely consume as role inputs."""
+    if not isinstance(field, dict):
+        return ""
+    raw_type = field.get("fieldType") or field.get("type") or field.get("kind") or ""
+    if isinstance(raw_type, (list, tuple)):
+        raw_type = raw_type[0] if raw_type else ""
+    if isinstance(raw_type, dict):
+        raw_type = raw_type.get("type") or raw_type.get("kind") or ""
+    raw_type = str(raw_type).strip().lower()
+    key = studio_music_dynamic_field_key(field, node_type)
+    identities = [str(field.get(name) or "") for name in (
+        "nodeId", "node_id", "fieldName", "field_name", "inputName", "input", "name",
+        "label", "id", "key", "paramid", "paramId",
+    )]
+    if (_is_secret_identifier(key) or any(_is_secret_identifier(value) for value in identities)
+            or raw_type in {"password", "secret", "credential", "token"}):
+        return ""
+    if raw_type == "audio":
+        return "audio"
+    if node_type == "smart-comfy-workflow":
+        name = " ".join(str(field.get(name) or "") for name in ("input", "name", "fieldName")).lower()
+        if raw_type == "textarea" or any(token in name for token in ("prompt", "text", "提示词", "正向", "负向")):
+            return "text"
+        return ""
+    if raw_type in {"audio", "text", "string", "plain-text", "textarea"}:
+        return "audio" if raw_type == "audio" else "text"
+    return ""
+
+
+def studio_music_public_dynamic_fields(fields, node_type):
+    """Expose safe, exact text/audio choices without returning raw provider schemas."""
+    if not isinstance(fields, list):
+        return []
+    result, seen = [], set()
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        key = studio_music_dynamic_field_key(field, node_type)
+        if not key or key in seen or len(key) > 240:
+            continue
+        identities = [str(field.get(name) or "") for name in (
+            "nodeId", "node_id", "fieldName", "field_name", "inputName", "name", "label",
+            "id", "key", "paramid", "paramId",
+        )]
+        del identities
+        kind = studio_music_dynamic_field_kind(field, node_type)
+        if kind not in {"text", "audio"}:
+            continue
+        label = str(field.get("label") or field.get("fieldName") or field.get("field_name")
+                    or field.get("inputName") or field.get("name") or key).strip()
+        result.append({"targetFieldKey": key, "label": label[:160], "kind": kind,
+                       "required": field.get("required") is True})
+        seen.add(key)
+    return result
+
+
+async def _studio_music_await(value):
+    return await value if hasattr(value, "__await__") else value
+
+
+def studio_music_safe_dynamic_schema(fields, node_type):
+    """Keep an execution-ready private schema while stripping credential fields."""
+    if not isinstance(fields, list):
+        return []
+    enabled = [field for field in fields if isinstance(field, dict) and field.get("enabled") is True]
+    has_enabled_flags = any(isinstance(field, dict) and "enabled" in field for field in fields)
+    candidates = enabled if has_enabled_flags else [field for field in fields if isinstance(field, dict)]
+    safe = []
+    for field in candidates:
+        key = studio_music_dynamic_field_key(field, node_type)
+        identities = [str(field.get(name) or "") for name in (
+            "nodeId", "node_id", "fieldName", "field_name", "inputName", "input", "name",
+            "label", "id", "key", "paramid", "paramId",
+        )]
+        raw_type = field.get("fieldType") or field.get("type") or field.get("kind") or ""
+        if (_is_secret_identifier(key) or any(_is_secret_identifier(value) for value in identities)
+                or str(raw_type).strip().lower() in {"password", "secret", "credential", "token"}):
+            continue
+        safe.append(copy.deepcopy(field))
+    return safe
+
+
+async def studio_music_resolve_dynamic_schema(canvas, node):
+    """Read the current selected node schema through the existing safe resolver."""
+    node_type = str(node.get("type") or "")
+    settings = node.get("runSettings") if isinstance(node.get("runSettings"), dict) else {}
+    if node_type == "smart-comfy-workflow":
+        resolver = STUDIO_APP_EXECUTION.resolve_comfy_fields
+        resolved = (resolver(str(settings.get("comfyWorkflow") or ""), node, canvas) if resolver else
+                    settings.get("comfyFields") or settings.get("workflowFields") or [])
+        resolved = await _studio_music_await(resolved)
+        fields = studio_app_schema_fields(resolved, comfy=True)
+    else:
+        config_key = str(settings.get("rhConfigKey") or "").strip()
+        config_kind, _, config_id = config_key.partition(":")
+        workflow_mode = str(settings.get("rhMode") or "").strip().lower() == "workflow" or config_kind == "workflow"
+        app_id = str(
+            (settings.get("rhWorkflowId") or (config_id if config_kind == "workflow" else ""))
+            if workflow_mode else (settings.get("rhAppId") or (config_id if config_kind == "app" else config_key))
+        ).strip()
+        resolved = await _studio_music_await(studio_app_fields(app_id, node, canvas))
+        fields = studio_app_schema_fields(resolved)
+    if not isinstance(fields, list):
+        fields = []
+    safe = studio_music_safe_dynamic_schema(fields, node_type)
+    return safe, resolved
+
+
+async def studio_music_dynamic_input_fields(output_node_id):
+    """Resolve exact text/audio fields only from the selected output's dependency closure."""
+    canvas = MUSIC_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+    nodes = {str(node.get("id") or ""): node for node in canvas.get("nodes") or [] if isinstance(node, dict)}
+    output = nodes.get(str(output_node_id or "").strip())
+    if not output or output.get("type") != "smart-hypit-output":
+        raise HTTPException(status_code=400, detail="音乐配置图中找不到所选输出节点")
+    slot = str(output.get("hypitSlot") or "").strip().lower()
+    if slot not in {"music", "image"}:
+        raise HTTPException(status_code=400, detail="音乐输出节点用途无效")
+    try:
+        plan = plan_hypit_slot(canvas, slot, output_node_id,
+                               canvas_id=MUSIC_SETTINGS_CANVAS_ID, module_id="music")
+    except (TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    choices = []
+    for node_id in plan.get("node_ids") or []:
+        node = nodes.get(str(node_id))
+        node_type = str(node.get("type") or "") if node else ""
+        if node_type not in {"smart-ai-app", "smart-comfy-workflow"}:
+            continue
+        schema, _resolved = await studio_music_resolve_dynamic_schema(canvas, node)
+        choices.append({
+            "node_id": str(node.get("id") or ""),
+            "node_type": node_type,
+            "title": str(node.get("title") or "")[:160],
+            "fields": studio_music_public_dynamic_fields(schema, node_type),
+        })
+    return {"canvas_revision": max(1, int(canvas.get("revision") or 1)),
+            "output_node_id": str(output_node_id), "slot": slot, "nodes": choices}
+
+
+@app.get("/api/studio/music/settings-canvas/input-fields")
+async def studio_music_settings_input_fields(output_node_id: str):
+    return await studio_music_dynamic_input_fields(output_node_id)
+
+
+async def studio_music_prepare_generation_request(*, canvas, purpose, slot, output_node_id, song, source_snapshot, request):
+    """按选中执行节点的确切模型契约映射歌曲字段，不拼接或猜测字段。"""
+    if not isinstance(request, dict):
+        raise HTTPException(status_code=400, detail="音乐生成 request 必须是对象")
+    unknown = set(request) - {"parameters", "input_fields"}
+    if unknown:
+        raise HTTPException(status_code=400, detail="音乐生成仅接受 parameters 与 input_fields 映射")
+    parameters = request.get("parameters") or {}
+    if not isinstance(parameters, dict):
+        raise HTTPException(status_code=400, detail="音乐生成 parameters 必须是对象")
+    canvas_id = str(canvas.get("id") or "")
+    try:
+        plan = plan_hypit_slot(canvas, slot, output_node_id, canvas_id=canvas_id, module_id="music")
+    except (TypeError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    by_id = {str(node.get("id") or ""): node for node in canvas.get("nodes", []) if isinstance(node, dict)}
+    executable = [by_id[node_id] for node_id in plan.get("node_ids") or []
+                  if node_id in by_id and by_id[node_id].get("type") in {
+                      "smart-text-generator", "smart-image-generator", "smart-video-generator",
+                      "smart-audio-generator", "smart-music-generator", "smart-ai-app", "smart-comfy-workflow",
+                  }]
+    if not executable:
+        raise HTTPException(status_code=400, detail="音乐配置图没有可执行的生成节点")
+    target = executable[-1]
+    node_type = str(target.get("type") or "")
+    snapshot = dict(source_snapshot)
+    user_parameters = copy.deepcopy(parameters)
+
+    if node_type in {"smart-ai-app", "smart-comfy-workflow"}:
+        mappings = request.get("input_fields") or {}
+        if not isinstance(mappings, dict):
+            raise HTTPException(status_code=400, detail="动态流程 input_fields 必须是字段角色映射对象")
+        allowed_roles = {"title", "lyrics", "style_prompt", "notes", "cover_prompt", "reference_audio"}
+        if set(mappings) - allowed_roles:
+            raise HTTPException(status_code=400, detail="动态流程只接受明确的音乐字段角色映射")
+        execution_ids = {str(node.get("id") or "") for node in executable}
+        fields = []
+        used_targets = set()
+        schema_by_node = {}
+        for dynamic_node in executable:
+            dynamic_id = str(dynamic_node.get("id") or "")
+            dynamic_type = str(dynamic_node.get("type") or "")
+            if dynamic_type not in {"smart-ai-app", "smart-comfy-workflow"}:
+                continue
+            schema, resolved = await studio_music_resolve_dynamic_schema(canvas, dynamic_node)
+            if not schema:
+                raise HTTPException(status_code=400, detail=f"动态节点 {dynamic_id} 当前没有可用的安全字段 Schema")
+            schema_by_node[dynamic_id] = schema
+        content_roles = ("lyrics", "style_prompt") if purpose == "song" else ("cover_prompt",)
+        for role in ("title", "lyrics", "style_prompt", "notes", "cover_prompt", "reference_audio"):
+            value = snapshot.get(role)
+            if role == "reference_audio":
+                values = snapshot.get("reference_audio_refs") or []
+                if not values:
+                    continue
+            else:
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                values = [value]
+            mapping = mappings.get(role)
+            if mapping is None:
+                if role in content_roles or role == "reference_audio":
+                    raise HTTPException(status_code=400, detail=f"配置图没有为“{role}”提供明确的 node_id 与 targetFieldKey 映射")
+                continue
+            if not isinstance(mapping, dict):
+                raise HTTPException(status_code=400, detail=f"input_fields.{role} 必须提供 node_id 与 targetFieldKey")
+            node_id = str(mapping.get("node_id") or "").strip()
+            target_field_key = str(mapping.get("targetFieldKey") or "").strip()
+            mapped_node = by_id.get(node_id)
+            if (node_id not in execution_ids or not mapped_node
+                    or mapped_node.get("type") not in {"smart-ai-app", "smart-comfy-workflow"}
+                    or len(target_field_key) > 240 or not target_field_key):
+                raise HTTPException(status_code=400, detail=f"input_fields.{role} 必须指向依赖流程中的动态节点和精确字段")
+            field = next((entry for entry in schema_by_node[node_id]
+                          if studio_music_dynamic_field_key(entry, str(mapped_node.get("type") or "")) == target_field_key), None)
+            if field is None:
+                raise HTTPException(status_code=400, detail=f"input_fields.{role} 指向的字段已不存在、已停用或不可作为音乐输入")
+            actual_kind = studio_music_dynamic_field_kind(field, str(mapped_node.get("type") or ""))
+            expected_kind = "audio" if role == "reference_audio" else "text"
+            if actual_kind != expected_kind:
+                raise HTTPException(status_code=400, detail=f"input_fields.{role} 字段类型与音乐输入不匹配")
+            identity = (node_id, target_field_key)
+            if identity in used_targets:
+                raise HTTPException(status_code=400, detail="不同音乐字段不能映射到同一个动态输入字段")
+            used_targets.add(identity)
+            for item in values:
+                if role == "reference_audio":
+                    if not isinstance(item, dict) or not item.get("available") or not str(item.get("url") or "").startswith(("/api/materials/", "/api/results/")):
+                        raise HTTPException(status_code=400, detail="参考音频不可访问，请重新选择受管素材")
+                    fields.append({"node_id": node_id, "targetFieldKey": target_field_key, "kind": "audio",
+                                   "value": {key: item[key] for key in ("url", "name", "mime", "kind") if key in item}})
+                else:
+                    fields.append({"node_id": node_id, "targetFieldKey": target_field_key,
+                                   "kind": "text", "value": str(item)})
+        mapped_targets = {(str(entry.get("node_id") or ""), str(entry.get("targetFieldKey") or "")) for entry in fields}
+        target_id = str(target.get("id") or "")
+        if user_parameters:
+            target_schema = schema_by_node.get(target_id) or []
+            known_keys = {studio_music_dynamic_field_key(field, node_type) for field in target_schema}
+            unknown_parameters = set(user_parameters) - known_keys
+            if unknown_parameters:
+                raise HTTPException(status_code=400, detail="动态流程参数包含当前节点 Schema 未声明的字段")
+            if any((target_id, str(key)) in mapped_targets for key in user_parameters):
+                raise HTTPException(status_code=400, detail="动态流程参数不能覆盖本次已映射的音乐输入字段")
+            normalized_parameters = {}
+            for key, value in user_parameters.items():
+                parameter_field = next(field for field in target_schema
+                                       if studio_music_dynamic_field_key(field, node_type) == str(key))
+                raw_type = parameter_field.get("fieldType") or parameter_field.get("type") or parameter_field.get("kind") or ""
+                raw_type = str(raw_type).strip().lower()
+                if raw_type in {"boolean", "bool"}:
+                    valid_type = isinstance(value, bool)
+                elif raw_type in {"integer", "int"}:
+                    valid_type = isinstance(value, int) and not isinstance(value, bool)
+                elif raw_type in {"number", "float", "slider"}:
+                    valid_type = isinstance(value, (int, float)) and not isinstance(value, bool)
+                elif raw_type in {"string", "text", "plain-text", "textarea"}:
+                    valid_type = isinstance(value, str)
+                elif raw_type in {"select", "switch", "combo", "dropdown", "list", "enum"}:
+                    valid_type = isinstance(value, str)
+                else:
+                    valid_type = False
+                if not valid_type:
+                    raise HTTPException(status_code=400, detail=f"动态流程参数 {key} 类型与当前 Schema 不匹配")
+                try:
+                    validated = studio_project_workflow_fields(
+                        [parameter_field],
+                        engine="comfy" if node_type == "smart-comfy-workflow" else "runninghub",
+                        prompt="",
+                        references=[],
+                        task_values={str(key): value},
+                    )
+                except (TypeError, ValueError, KeyError) as exc:
+                    raise HTTPException(status_code=400, detail=f"动态流程参数 {key} 格式无效：{exc}") from exc
+                if str(key) not in (validated.get("field_values") or {}):
+                    raise HTTPException(status_code=400, detail=f"动态流程参数 {key} 类型未确认")
+                normalized_parameters[str(key)] = validated["field_values"][str(key)]
+            user_parameters = normalized_parameters
+        if purpose == "song" and not any(entry.get("kind") == "text" for entry in fields):
+            raise HTTPException(status_code=400, detail="歌曲至少需要明确映射歌词或风格提示词到动态流程字段")
+        if purpose == "cover" and not any(entry.get("kind") == "text" for entry in fields):
+            raise HTTPException(status_code=400, detail="封面生成需要把封面提示词映射到动态流程字段")
+        return {"field_inputs": fields, "parameters": user_parameters}
+
+    expected_node_type = "smart-music-generator" if purpose == "song" else "smart-image-generator"
+    expected_kind = "music" if purpose == "song" else "image"
+    if node_type != expected_node_type:
+        raise HTTPException(status_code=400, detail="音乐/封面静态生成必须使用匹配的音乐或图片生成节点")
+    settings = target.get("runSettings") if isinstance(target.get("runSettings"), dict) else {}
+    model_request = {
+        "kind": expected_kind,
+        "provider_id": str(settings.get("musicProvider" if expected_kind == "music" else "provider_id") or ""),
+        "model": str(settings.get("musicModel" if expected_kind == "music" else "model") or ""),
+    }
+    profile = studio_hypit_model_profile(target, model_request)
+    if not isinstance(profile, dict) or profile.get("runnable") is False:
+        raise HTTPException(status_code=400, detail="所选音乐/图片模型缺少可运行的确切能力档案")
+    mapping = profile.get("request_mapping") if isinstance(profile.get("request_mapping"), dict) else {}
+    parameter_schema = profile.get("parameters") if isinstance(profile.get("parameters"), dict) else {}
+    if "prompt" not in mapping:
+        raise HTTPException(status_code=400, detail="所选模型没有已确认的 prompt 输入映射")
+
+    prompt = ""
+    if purpose == "cover":
+        prompt = str(snapshot.get("cover_prompt") or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="请先保存封面提示词")
+    elif str(profile.get("operation") or "") == "music_song":
+        prompt = str(snapshot.get("lyrics") or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="歌曲模型需要已保存的歌词")
+    elif str(profile.get("operation") or "") == "music":
+        if str(snapshot.get("lyrics") or "").strip():
+            raise HTTPException(status_code=400, detail="当前模型只声明了背景音乐 prompt，不能接收歌曲歌词")
+        prompt = str(snapshot.get("style_prompt") or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="背景音乐模型需要已保存的风格提示词")
+    else:
+        raise HTTPException(status_code=400, detail="所选音乐模型未声明受支持的歌曲生成操作")
+
+    resolved_parameters = {}
+    for field in ("title", "style_prompt", "notes"):
+        value = str(snapshot.get(field) or "").strip()
+        if value and field in mapping and field in parameter_schema:
+            resolved_parameters[field] = value
+    if (purpose == "song" and str(profile.get("operation") or "") == "music_song"
+            and str(snapshot.get("style_prompt") or "").strip()):
+        if "style_prompt" not in mapping or "style_prompt" not in parameter_schema:
+            raise HTTPException(status_code=400, detail="所选歌曲模型没有确认的 style_prompt 参数映射")
+    try:
+        if user_parameters:
+            if not parameter_schema or set(user_parameters) - set(parameter_schema):
+                raise HTTPException(status_code=400, detail="音乐生成参数包含所选模型未声明的字段")
+            _validate_parameters(profile, user_parameters)
+        if resolved_parameters:
+            if not parameter_schema or set(resolved_parameters) - set(parameter_schema):
+                raise HTTPException(status_code=400, detail="音乐内容映射到模型未声明的参数")
+            _validate_parameters(profile, resolved_parameters)
+    except HTTPException:
+        raise
+    resolved_parameters.update(user_parameters)
+    inputs = {}
+    if snapshot.get("reference_audio_refs"):
+        supported_reference_audio = any(
+            str(spec.get("role") or key) == "reference_audio"
+            for key, spec in (profile.get("inputs") or {}).items() if isinstance(spec, dict)
+        )
+        if not supported_reference_audio:
+            raise HTTPException(status_code=400, detail="所选模型不支持已保存的参考音频素材")
+        refs = snapshot["reference_audio_refs"]
+        if any(not isinstance(item, dict) or not item.get("available") or
+               not str(item.get("url") or "").startswith(("/api/materials/", "/api/results/")) for item in refs):
+            raise HTTPException(status_code=400, detail="参考音频不可访问，请重新选择受管素材")
+        inputs["reference_audio"] = [str(item["url"]) for item in refs]
+    return {"prompt": prompt, "parameters": resolved_parameters, "inputs": inputs}
+
+
 HYPIT_FLOW_RUNNER = HypitFlowRunner(
     load_canvas=lambda canvas_id: HYPIT_SETTINGS_CANVAS_SERVICE.ensure_canvas()
         if canvas_id == HYPIT_SETTINGS_CANVAS_ID else load_canvas(canvas_id),
@@ -22126,12 +22626,50 @@ ARTICLE_GENERATION_BRIDGE = StudioArticleGenerationBridge(
 ARTICLE_FLOW_RUNNER.publish_node_result = ARTICLE_GENERATION_BRIDGE.publish_node_result
 
 
+MUSIC_FLOW_RUNNER = HypitFlowRunner(
+    load_canvas=lambda canvas_id: MUSIC_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+        if canvas_id == MUSIC_SETTINGS_CANVAS_ID else load_canvas(canvas_id),
+    storage=PROJECT_STORAGE,
+    prepare_node_request=studio_hypit_prepare_node_request,
+    preflight_node=studio_hypit_preflight_node,
+    execute_node=studio_hypit_execute_node,
+    collect_results=studio_hypit_collect_results,
+    notify=lambda canvas_id, run_id, status: manager.broadcast_canvas_updated(
+        canvas_id, int(now_ms()), max(1, int(studio_load_canvas(canvas_id).get("revision") or 1)), ""),
+    lock=CANVAS_LOCK,
+    now_ms=now_ms,
+    canvas_id=MUSIC_SETTINGS_CANVAS_ID,
+    module_id="music",
+)
+
+MUSIC_GENERATION_BRIDGE = StudioMusicGenerationBridge(
+    music_store=STUDIO_MUSIC,
+    runner=MUSIC_FLOW_RUNNER,
+    storage=PROJECT_STORAGE,
+    settings_service=MUSIC_SETTINGS_CANVAS_SERVICE,
+    prepare_request=studio_music_prepare_generation_request,
+)
+MUSIC_FLOW_RUNNER.publish_node_result = MUSIC_GENERATION_BRIDGE.publish_node_result
+
+
 async def studio_article_submit_generation(project_id, payload, accepted_context):
     return await ARTICLE_GENERATION_BRIDGE.submit(project_id, payload, accepted_context)
 
 
 async def studio_article_get_generation(project_id, run_id):
     return await ARTICLE_GENERATION_BRIDGE.get(project_id, run_id)
+
+
+async def studio_music_submit_generation(project_id, payload, accepted_context):
+    return await MUSIC_GENERATION_BRIDGE.submit(project_id, payload, accepted_context)
+
+
+async def studio_music_get_generation(project_id, run_id):
+    return await MUSIC_GENERATION_BRIDGE.get(project_id, run_id)
+
+
+async def studio_music_list_generations(project_id):
+    return await MUSIC_GENERATION_BRIDGE.list(project_id)
 
 
 # Article 的静态配置图路由已在上方先注册；随后才注册动态 /{project_id} 文章路由。
@@ -22144,6 +22682,11 @@ app.include_router(create_studio_articles_router(
     submit_generation=studio_article_submit_generation,
     get_generation=studio_article_get_generation,
 ))
+app.include_router(STUDIO_MUSIC.router(
+    submit_generation=studio_music_submit_generation,
+    get_generation=studio_music_get_generation,
+    list_generations=studio_music_list_generations,
+))
 
 
 def studio_hypit_test_statuses(canvas_id, canvas, *, module_id="hypit"):
@@ -22151,7 +22694,7 @@ def studio_hypit_test_statuses(canvas_id, canvas, *, module_id="hypit"):
     service = studio_settings_canvas_service(canvas_id)
     if (service is None or service.module_id != module_id or not isinstance(canvas, dict)
             or canvas.get("id") != canvas_id):
-        module_name = "Hypit" if module_id == "hypit" else "文章"
+        module_name = {"hypit": "Hypit", "article": "文章", "music": "音乐"}.get(module_id, "模块")
         raise ValueError(f"{module_name} 运行状态只能读取对应保留配置图")
     return project_hypit_execution_statuses(
         canvas,
@@ -22207,6 +22750,16 @@ async def studio_task_status(task_id: str):
         projected = await ARTICLE_GENERATION_BRIDGE.get(project_id, task_id)
         if not isinstance(projected, dict):
             raise HTTPException(404, '文章生成任务不存在')
+        return projected
+    if task.get("kind") == "music_settings_flow":
+        flow = MUSIC_FLOW_RUNNER.get(task_id)
+        context = flow.get("trusted_context") if isinstance(flow, dict) else None
+        project_id = str(context.get("project_id") or "") if isinstance(context, dict) else ""
+        if not project_id:
+            raise HTTPException(404, '音乐生成任务不存在')
+        projected = await MUSIC_GENERATION_BRIDGE.get(project_id, task_id)
+        if not isinstance(projected, dict):
+            raise HTTPException(404, '音乐生成任务不存在')
         return projected
     return task
 

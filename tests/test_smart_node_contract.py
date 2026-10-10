@@ -2519,9 +2519,43 @@ console.log(JSON.stringify([managerWithoutInput,managerWithWrongInput,formalWith
         self.assertIn('data-asset-tab="result"', html)
         self.assertIn("画布工作流", html)
         self.assertIn("生成结果", html)
-        self.assertIn("fetch('/api/results?kind=all')", source)
-        self.assertIn("assetTab === 'result'", source)
-        self.assertIn("sourceKind:'result'", source)
+
+        load_block = source[
+            source.index("async function loadAssetLibrary"):
+            source.index("function refreshAssetLibrarySoon")
+        ]
+        self.assertIn("Promise.allSettled([", load_block)
+        self.assertIn("fetch('/api/asset-library'", load_block)
+        self.assertIn("fetch('/api/local-assets'", load_block)
+        self.assertIn("fetch('/api/results?kind=all'", load_block)
+        self.assertIn("setAssetLibraryFromResponse(libraryResult.value", load_block)
+        self.assertIn("localAssetLibrary={items:Array.isArray(localResult.value.items)", load_block)
+        self.assertIn("generationResults={", load_block)
+        self.assertIn("items:Array.isArray(resultResult.value.items)", load_block)
+        self.assertIn("canvases:Array.isArray(resultResult.value.canvases)", load_block)
+
+        workflow_library = source[
+            source.index("function workflowAssetLibraries"):
+            source.index("function assetLibraries")
+        ]
+        self.assertIn("assetLibraries().filter", workflow_library)
+        self.assertIn("cat.type || 'image') === 'workflow'", workflow_library)
+        workflow_loader = source[
+            source.index("async function loadConfigAuxiliary"):
+            source.index("async function refreshSmartConfigFromSettings")
+        ]
+        self.assertIn("fetch('/api/workflows'", workflow_loader)
+        self.assertIn("comfyWorkflows=workflowsResult.value.workflows", workflow_loader)
+
+        render_block = source[
+            source.index("function renderAssetLibrary"):
+            source.index("function bindResultAssetItemEvents", source.index("function renderAssetLibrary"))
+        ]
+        self.assertIn("const imageMode = assetTab === 'image'", render_block)
+        self.assertIn("const workflowMode = assetTab === 'workflow'", render_block)
+        self.assertIn("const resultMode = assetTab === 'result'", render_block)
+        self.assertIn("(generationResults.items || []).forEach", render_block)
+        self.assertIn('data-source-kind="result"', render_block)
 
     def test_workflow_library_mutations_use_the_workflow_library_id(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
