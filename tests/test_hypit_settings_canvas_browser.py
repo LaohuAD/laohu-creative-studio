@@ -514,12 +514,64 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         while not self.canvas_gets and time.time() < deadline:
             time.sleep(0.05)
         self.assertEqual(self.canvas_gets, 1, "嵌入画布必须只通过标准 canvas GET 加载专用 ID")
+        self.wait_for(lambda: self.frame_evaluate("canvas?.id===canvasId&&canvasSyncBase?.id===canvasId"),
+                      "共享画布标准 GET 尚未完成，不能对静态工具栏提前交互")
         expected_ids = [str(node.get("id", "")) for node in type(self).canvas.get("nodes", []) if node.get("id")]
         if expected_ids:
             encoded_ids = json.dumps(expected_ids)
             self.wait_for(lambda: self.frame_evaluate(
                 f"(()=>{{const ids={encoded_ids};return ids.every(id=>!!document.querySelector('.image-node[data-id='+JSON.stringify(id)+']'));}})()"),
                 "专用画布的fixture节点尚未完成真实DOM挂载")
+
+    def start_hypit_execution_node(self, node_id, prompt="mock flow"):
+        """开始真实 UI 运行前，等待当前节点的用途候选预检完成。"""
+        node_selector = json.dumps(f".image-node[data-id={node_id}]")
+        self.frame_evaluate(f"document.querySelector({node_selector})?.click(); true")
+        node_id_json = json.dumps(node_id)
+        self.wait_for(
+            lambda: self.frame_evaluate(
+                f"(()=>{{const node=selectedNode();const button=document.getElementById('runBtn');"
+                f"return node?.id==={node_id_json}&&document.getElementById('composer')?.classList.contains('open')"
+                "&&settingsNodeModelOptionsReady(node)&&!!button;})()"
+            ),
+            lambda: "当前节点的模型用途核验尚未完成，不能开始运行：" + str(self.frame_evaluate(
+                "JSON.stringify({selectedId,buttonDisabled:document.getElementById('runBtn')?.disabled,"
+                "composer:document.getElementById('composer')?.className,nodeType:selectedNode()?.type,"
+                "runnable:isSmartRunnableNode(selectedNode()),context:hypitModelSlotContext(selectedNode()),"
+                "options:[...hypitSlotModelOptions.entries()].map(([slot,state])=>({slot,status:state.status,count:state.options?.length})),"
+                "loads:[...hypitSlotModelOptionLoads.keys()],toast:document.querySelector('[role=alert]')?.textContent})")),
+        )
+        prompt_json = json.dumps(prompt, ensure_ascii=False)
+        self.frame_evaluate(
+            f"promptInput.textContent={prompt_json};"
+            "promptInput.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:promptInput.textContent}));"
+        )
+        self.wait_for(
+            lambda: self.frame_evaluate(
+                f"(()=>{{const node=selectedNode();const button=document.getElementById('runBtn');"
+                f"return node?.id==={node_id_json}&&settingsNodeModelOptionsReady(node)&&button&&!button.disabled"
+                "&&String(promptInput?.textContent||'').trim().length>0;})()"
+            ),
+            lambda: "运行按钮尚未按当前候选与提示词状态启用：" + str(self.frame_evaluate(
+                "JSON.stringify({selectedId,buttonDisabled:document.getElementById('runBtn')?.disabled,"
+                "isRunnable:isSmartRunnableNode(selectedNode()),inFlight:smartNodeInFlight(selectedNode()),"
+                "loopRunning:smartCascadeIsLoopRunning(selectedNode()?.id),optionsReady:settingsNodeModelOptionsReady(selectedNode()),"
+                "prompt:promptInput?.textContent,settings:settings,toast:document.querySelector('[role=alert]')?.textContent})")),
+        )
+        self.wait_for(
+            lambda: self.frame_evaluate(
+                "(()=>{const local=canvasSyncCurrentSnapshot();return Boolean(canvasSyncBase)"
+                "&&!canvasSyncInFlight&&!canvasSyncSaveQueued&&!canvasSyncSaveBlocked"
+                "&&!canvasSyncHasLocalChanges(local,canvasSyncBase);})()"
+            ),
+            lambda: "运行前当前配方尚未持久到服务端，不能提交普通运行：" + str(self.frame_evaluate(
+                f"(()=>{{const id={node_id_json};const local=canvasSyncComparableSnapshot(canvasSyncCurrentSnapshot());"
+                "const base=canvasSyncComparableSnapshot(canvasSyncBase);return JSON.stringify({"
+                "inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued,blocked:canvasSyncSaveBlocked,"
+                "timer:Boolean(saveTimer),baseRevision:canvasSyncBase?.revision,revision:canvas?.revision,"
+                "localNode:local?.nodes?.find(item=>item.id===id),baseNode:base?.nodes?.find(item=>item.id===id)});})()")),
+        )
+        self.frame_evaluate("document.getElementById('runBtn').click(); true")
 
     def seed_canvas(self, nodes, connections=(), test_statuses=None):
         type(self).canvas = {**self._empty_canvas(), "nodes": nodes, "connections": list(connections)}
@@ -751,8 +803,9 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                             "核心画布初始化不应等待页面全部静态资源 load")
             self.assertLess(options[0]["at"], observation["optionClick"],
                             "script settings 的文本白名单应在文本节点首次打开前预取")
-            self.assertLess(observation["option_click_to_ready_ms"], 100,
-                            "预取后的首次文本候选面板不应再等待候选网络请求")
+            self.assertEqual(len(options), 1,
+                             "首次打开面板应复用启动阶段的同一候选请求，而不是再发一遍网络请求")
+            self.assertTrue(observation["optionReady"] >= options[0]["at"], observation)
         finally:
             if installed.get("identifier"):
                 self.cdp("Page.removeScriptToEvaluateOnNewDocument", {"identifier": installed["identifier"]})
@@ -1001,6 +1054,8 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=ordinary-fixture"})
         self.wait_for(lambda: self.evaluate("document.querySelector('.image-node[data-id=text-run]') !== null"),
                       "测试文本节点未加载")
+        self.wait_for(lambda: self.evaluate("lastConfigRefreshAt>0 && !configRefreshPromise && !window.__smartConfigLoadError && !modelCapabilityLoadError"),
+                      "画布启动阶段的 API 配置与能力目录尚未稳定")
         self.evaluate("document.querySelector('.image-node[data-id=text-run]').click(); true")
         self.wait_for(lambda: self.evaluate("document.getElementById('composer')?.classList.contains('open')"),
                       "文本生成节点 composer 未打开")
@@ -1045,13 +1100,25 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                         f"收起后应恢复原prompt和mention DOM：{prompt_closed}")
         self.assertEqual(prompt_closed["selection"], 1, f"收起时应恢复当前文本光标：{prompt_closed}")
 
+        self.wait_for(lambda: self.evaluate("canvasExpandedTextField===null && !canvasTextFieldDeferredParamsRender "
+                                            "&& document.querySelectorAll('#dynamicParams [data-text-system-prompt]').length===1 "
+                                            "&& !!document.querySelector('#dynamicParams [data-canvas-text-expand=system]')"),
+                      "提示词语言重绘尚未结束，系统提示词编辑器还未稳定")
         self.evaluate("document.querySelector('[data-canvas-text-expand=system]').click(); true")
         self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldDialog')?.open"),
                       "系统提示词放大对话框未打开")
-        self.assertTrue(self.evaluate("document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]') === document.querySelector('[data-text-system-prompt]')"),
-                        "放大必须复用原系统提示词 textarea")
+        self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]') === document.querySelector('[data-text-system-prompt]')"),
+                      lambda: "放大必须复用原系统提示词 textarea：" + str(self.evaluate(
+                          "JSON.stringify({open:document.getElementById('canvasTextFieldDialog')?.open,"
+                          "host:!!document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]'),"
+                          "all:document.querySelectorAll('[data-text-system-prompt]').length,"
+                          "deferred:canvasTextFieldDeferredParamsRender})")))
         self.wait_for(lambda: self.evaluate("document.activeElement===document.querySelector('[data-text-system-prompt]')"),
-                      "系统提示词输入框未在放大器中获得焦点")
+                      lambda: "系统提示词输入框未在放大器中获得焦点：" + str(self.evaluate(
+                          "JSON.stringify({active:document.activeElement?.outerHTML?.slice(0,180),"
+                          "system:document.querySelector('[data-text-system-prompt]')?.outerHTML?.slice(0,180),"
+                          "open:document.getElementById('canvasTextFieldDialog')?.open,"
+                          "host:!!document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]')})")))
         self.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))")
         system_shot = self.cdp("Page.captureScreenshot", {"format":"png", "fromSurface":True})
         (type(self).cache / "canvas-text-editor-system-expanded.png").write_bytes(base64.b64decode(system_shot["data"]))
@@ -1106,8 +1173,18 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.open_hypit_canvas()
         self.assertEqual(self.frame_evaluate("document.querySelector('#hypitOutputDrawerToggle span')?.textContent.trim()"),
                          "添加输出端口", "输出抽屉入口应使用具体操作名称")
-        self.frame_evaluate("document.getElementById('hypitOutputDrawerToggle').click(); document.querySelector('[data-hypit-slot=image]').click(); true")
-        self.wait_for(lambda: bool(self.canvas_puts), "添加用途输出后没有通过标准画布 PUT 自动保存")
+        self.frame_evaluate("document.getElementById('hypitOutputDrawerToggle').click(); true")
+        self.wait_for(lambda: self.frame_evaluate("!document.getElementById('hypitOutputDrawer').hidden "
+                                                  "&& document.getElementById('hypitOutputDrawerToggle').getAttribute('aria-expanded')==='true'"),
+                      "输出用途抽屉没有完成打开")
+        self.frame_evaluate("document.querySelector('#hypitOutputDrawer [data-hypit-slot=image]').click(); true")
+        self.wait_for(lambda: any(node.get("type") == "smart-hypit-output" and node.get("hypitSlot") == "image"
+                                  for node in self.canvas.get("nodes", [])),
+                      lambda: "添加用途输出后没有通过标准画布 PUT 自动保存：" + str(
+                          self.frame_evaluate("JSON.stringify({drawer:!document.getElementById('hypitOutputDrawer').hidden,"
+                                              "nodes:nodes.filter(n=>isHypitOutputNode(n)).map(n=>({id:n.id,slot:n.hypitSlot})),"
+                                              "timer:Boolean(saveTimer),inFlight:canvasSyncInFlight,queued:canvasSyncSaveQueued})")))
+        self.assertTrue(self.canvas_puts, "输出节点已出现在客户端，但没有取得标准画布 PUT 成功回执")
         saved = self.canvas_puts[-1]
         outputs = [node for node in saved.get("nodes", []) if node.get("type") == "smart-hypit-output" and node.get("hypitSlot") == "image"]
         self.assertEqual(len(outputs), 1, saved)
@@ -1294,18 +1371,20 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.assertEqual(self.test_posts, [], "输出端口不应调用独立流程测试接口")
 
     def test_hypit_normal_run_uses_shared_command_once_and_waits_for_server_projection(self):
+        self.seed_image_model_catalog()
         self.seed_canvas([
             {"id": "image-run", "type": "smart-image-generator", "x": 100, "y": 100,
-             "runSettings": {"imageProvider": "fixture", "imageModel": "fixture-image"},
+             "runSettings": {"engine": "api", "apiKind": "image", "provider_id": "fixture-provider",
+                             "model": "fixture-image-valid", "imageFamilyId": "allowed-family"},
              "promptDraftText": "mock flow"},
             {"id": "image-output", "type": "smart-hypit-output", "hypitSlot": "image", "outputKind": "image", "x": 540, "y": 100},
         ], [{"id": "edge-image", "from": "image-run", "to": "image-output", "kind": "input"}])
         self.open_hypit_canvas()
         self.wait_for(lambda: not self.frame_evaluate("canvasSyncInFlight"),
                       "共享画布初始化保存未结束：" + str(self.frame_evaluate("JSON.stringify({base:canvasSyncBase?.revision,revision:canvas?.revision,queued:canvasSyncSaveQueued,timer:Boolean(saveTimer)})")))
-        self.frame_evaluate("document.querySelector('.image-node[data-id=image-run]').click(); promptInput.textContent='mock flow'; promptInput.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'mock flow'})); document.getElementById('runBtn').click(); true")
+        self.start_hypit_execution_node("image-run")
         self.wait_for(lambda: any(item.get("action") == "run_node" for item in self.agent_command_posts),
-                      lambda: "Hypit 普通运行没有进入共享服务端 run_node 命令：" + str(self.frame_evaluate("(()=>{const local=canvasSyncComparableSnapshot(canvasSyncCurrentSnapshot()),base=canvasSyncComparableSnapshot(canvasSyncBase);const keys=[...new Set([...Object.keys(local||{}),...Object.keys(base||{})])];const diff=keys.filter(key=>JSON.stringify(local?.[key])!==JSON.stringify(base?.[key])).map(key=>[key,String(JSON.stringify(local?.[key])).slice(0,300),String(JSON.stringify(base?.[key])).slice(0,300)]);return JSON.stringify({mode:isHypitSettingsMode,selectedId,buttonDisabled:document.getElementById('runBtn')?.disabled,operation:hypitNodeRunOperations.has('image-run'),syncInFlight:canvasSyncInFlight,saveQueued:canvasSyncSaveQueued,saveBlocked:canvasSyncSaveBlocked,hasSaveTimer:Boolean(saveTimer),baseRevision:canvasSyncBase?.revision,canvasRevision:canvas?.revision,diff,toast:document.querySelector('[role=alert]')?.textContent})})()")) + f" fixtureRevision={self.canvas.get('revision')} writes={self.write_paths} putAttempts={self.canvas_put_attempts} puts={len(self.canvas_puts)}", timeout=1)
+                      lambda: "Hypit 普通运行没有进入共享服务端 run_node 命令：" + str(self.frame_evaluate("(()=>{const local=canvasSyncComparableSnapshot(canvasSyncCurrentSnapshot()),base=canvasSyncComparableSnapshot(canvasSyncBase);const keys=[...new Set([...Object.keys(local||{}),...Object.keys(base||{})])];const diff=keys.filter(key=>JSON.stringify(local?.[key])!==JSON.stringify(base?.[key])).map(key=>[key,String(JSON.stringify(local?.[key])).slice(0,300),String(JSON.stringify(base?.[key])).slice(0,300)]);return JSON.stringify({mode:isHypitSettingsMode,selectedId,buttonDisabled:document.getElementById('runBtn')?.disabled,operation:hypitNodeRunOperations.has('image-run'),syncInFlight:canvasSyncInFlight,saveQueued:canvasSyncSaveQueued,saveBlocked:canvasSyncSaveBlocked,hasSaveTimer:Boolean(saveTimer),baseRevision:canvasSyncBase?.revision,canvasRevision:canvas?.revision,diff,toast:document.querySelector('[role=alert]')?.textContent})})()")) + f" fixtureRevision={self.canvas.get('revision')} writes={self.write_paths} putAttempts={self.canvas_put_attempts} puts={len(self.canvas_puts)}")
         run_commands = [item for item in self.agent_command_posts if item.get("action") == "run_node"]
         self.assertEqual(len(run_commands), 1, run_commands)
         self.assertEqual(run_commands[0].get("args"), {"node_id": "image-run"}, run_commands)
@@ -1332,11 +1411,26 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
             "image-output": {"run_id": task_id, "status": "passed", "test_passed": True,
                              "current_recipe_matches": True, "output_kind": "image"}
         }
+        # 真实服务在任务终态/输出投影持久化时推进画布 revision；只改 fixture 内存对象会让
+        # 客户端的 meta 检查看不到新快照，无法证明它依据服务端最新记录变绿。
+        type(self).canvas["revision"] += 1
+        type(self).canvas["updated_at"] += 1
         self.assertEqual(self.frame_evaluate("document.querySelector('.hypit-output-node').dataset.hypitStatus"), "ready",
                          "本地任务状态不能代替服务端画布投影")
         self.wait_for(lambda: not self.frame_evaluate("hypitNodeRunOperations.has('image-run')")
                       and self.frame_evaluate("document.querySelector('.hypit-output-node')?.dataset.hypitStatus === 'passed'"),
-                      "普通 Studio task 成功且服务端确认配方/物理类型后仍未显示绿色")
+                      lambda: "普通 Studio task 成功且服务端确认配方/物理类型后仍未显示绿色：" + str(self.frame_evaluate(
+                          "JSON.stringify({operation:hypitNodeRunOperations.has('image-run'),"
+                          "status:document.querySelector('.hypit-output-node')?.dataset.hypitStatus,"
+                          "testStatus:hypitTestStatuses['image-output'],"
+                          "signature:hypitRecipeSignature('image-output'),"
+                          "serverSignature:hypitServerPassedSignatures.get('image-output'),"
+                          "snapshotSignature:hypitRecipeSignature('image-output',hypitServerSignatureSnapshot),"
+                          "snapshotRevision:hypitServerSignatureSnapshot?.revision,"
+                          "localNode:(()=>{const n=nodes.find(n=>n.id==='image-run');return n&&{id:n.id,creationId:n.creationId,creationParentId:n.creationParentId,creationOwnerNodeId:n.creationOwnerNodeId,creationRevision:n.creationRevision,creationSignature:n.creationSignature,runSettings:n.runSettings}})(),"
+                          "serverNode:(()=>{const n=hypitServerSignatureSnapshot?.nodes?.find(n=>n.id==='image-run');return n&&{id:n.id,creationId:n.creationId,creationParentId:n.creationParentId,creationOwnerNodeId:n.creationOwnerNodeId,creationRevision:n.creationRevision,creationSignature:n.creationSignature,runSettings:n.runSettings}})(),"
+                          "node:nodes.find(n=>n.id==='image-run')?.creationTasks?.map(t=>({id:t.id,status:t.runStatus,pending:t.pending})),"
+                          "server:canvasSyncBase?.test_statuses})")))
         self.assertFalse(self.frame_evaluate("Boolean(hypitStoredRunRequestId('image-run'))"),
                          "任务终态和最终画布同步完成后应释放 request_id，允许用户之后重新运行")
         self.assertFalse(self.test_posts)
@@ -1345,16 +1439,18 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                             for path in self.write_paths), self.write_paths)
 
     def test_hypit_multi_task_waits_for_all_tasks_after_one_is_cancelled(self):
+        self.seed_image_model_catalog()
         self.seed_canvas([
             {"id": "image-run", "type": "smart-image-generator", "x": 100, "y": 100,
-             "runSettings": {"imageProvider": "fixture", "imageModel": "fixture-image"},
+             "runSettings": {"engine": "api", "apiKind": "image", "provider_id": "fixture-provider",
+                             "model": "fixture-image-valid", "imageFamilyId": "allowed-family"},
              "promptDraftText": "mock flow"},
             {"id": "image-output", "type": "smart-hypit-output", "hypitSlot": "image", "outputKind": "image", "x": 540, "y": 100},
         ], [{"id": "edge-image", "from": "image-run", "to": "image-output", "kind": "input"}])
         type(self).agent_task_count = 2
         self.open_hypit_canvas()
         self.wait_for(lambda: not self.frame_evaluate("canvasSyncInFlight"), "共享画布初始化保存未结束")
-        self.frame_evaluate("document.querySelector('.image-node[data-id=image-run]').click(); promptInput.textContent='mock flow'; promptInput.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'mock flow'})); document.getElementById('runBtn').click(); true")
+        self.start_hypit_execution_node("image-run")
         self.wait_for(lambda: any(item.get("action") == "run_node" for item in self.agent_command_posts),
                       "无法为多任务回归创建隔离 Studio 命令")
         run_command = next(item for item in self.agent_command_posts if item.get("action") == "run_node")
@@ -1382,15 +1478,17 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                             "含取消任务的多任务运行不可将输出端口标为绿色")
 
     def test_hypit_recoverable_task_keeps_request_id_for_manual_reconciliation(self):
+        self.seed_image_model_catalog()
         self.seed_canvas([
             {"id": "image-run", "type": "smart-image-generator", "x": 100, "y": 100,
-             "runSettings": {"imageProvider": "fixture", "imageModel": "fixture-image"},
+             "runSettings": {"engine": "api", "apiKind": "image", "provider_id": "fixture-provider",
+                             "model": "fixture-image-valid", "imageFamilyId": "allowed-family"},
              "promptDraftText": "mock flow"},
             {"id": "image-output", "type": "smart-hypit-output", "hypitSlot": "image", "outputKind": "image", "x": 540, "y": 100},
         ], [{"id": "edge-image", "from": "image-run", "to": "image-output", "kind": "input"}])
         self.open_hypit_canvas()
         self.wait_for(lambda: not self.frame_evaluate("canvasSyncInFlight"), "共享画布初始化保存未结束")
-        self.frame_evaluate("document.querySelector('.image-node[data-id=image-run]').click(); promptInput.textContent='mock flow'; promptInput.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'mock flow'})); document.getElementById('runBtn').click(); true")
+        self.start_hypit_execution_node("image-run")
         self.wait_for(lambda: any(item.get("action") == "run_node" for item in self.agent_command_posts),
                       "无法为 recoverable 回归创建隔离 Studio 命令")
         run = next(item for item in self.agent_command_posts if item.get("action") == "run_node")
@@ -1421,14 +1519,16 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.assertFalse(self.test_posts)
 
     def test_hypit_server_task_cancel_uses_one_shared_cancel_command(self):
+        self.seed_image_model_catalog()
         self.seed_canvas([
             {"id": "image-run", "type": "smart-image-generator", "x": 100, "y": 100,
-             "runSettings": {"imageProvider": "fixture", "imageModel": "fixture-image"},
+             "runSettings": {"engine": "api", "apiKind": "image", "provider_id": "fixture-provider",
+                             "model": "fixture-image-valid", "imageFamilyId": "allowed-family"},
              "promptDraftText": "mock flow"},
             {"id": "image-output", "type": "smart-hypit-output", "hypitSlot": "image", "outputKind": "image", "x": 540, "y": 100},
         ], [{"id": "edge-image", "from": "image-run", "to": "image-output", "kind": "input"}])
         self.open_hypit_canvas()
-        self.frame_evaluate("document.querySelector('.image-node[data-id=image-run]').click(); promptInput.textContent='mock flow'; promptInput.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'mock flow'})); document.getElementById('runBtn').click(); true")
+        self.start_hypit_execution_node("image-run")
         self.wait_for(lambda: any(item.get("action") == "run_node" for item in self.agent_command_posts),
                       "无法为取消回归创建隔离 Studio task")
         self.wait_for(lambda: bool(self.frame_evaluate("!!document.querySelector('.creation-task [data-cancel-run]')")),

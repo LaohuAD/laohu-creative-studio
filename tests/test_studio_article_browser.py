@@ -203,6 +203,7 @@ class StudioArticleBrowserTests(unittest.TestCase):
             "article_restore_conflict_once": False,
             "article_canvas": article_settings_canvas(), "article_canvas_bootstraps": 0,
             "article_canvas_gets": 0, "article_canvas_puts": [], "article_canvas_resets": [],
+            "article_canvas_get_gate": None,
             "article_model_option_requests": [],
             "article_put_conflict_once": False,
             "article_template_reads": 0,
@@ -258,6 +259,9 @@ class StudioArticleBrowserTests(unittest.TestCase):
                     return
                 if path == "/api/canvases/article-settings":
                     cls.fixture["article_canvas_gets"] += 1
+                    gate = cls.fixture.get("article_canvas_get_gate")
+                    if gate is not None:
+                        gate.wait(timeout=10)
                     canvas = json.loads(json.dumps(cls.fixture["article_canvas"], ensure_ascii=False))
                     self._json(200, {"canvas": canvas})
                     return
@@ -590,6 +594,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         type(self).fixture["article_canvas"] = article_settings_canvas()
         type(self).fixture["article_canvas_bootstraps"] = 0
         type(self).fixture["article_canvas_gets"] = 0
+        type(self).fixture["article_canvas_get_gate"] = None
         type(self).fixture["article_canvas_puts"] = []
         type(self).fixture["article_canvas_resets"] = []
         type(self).fixture["article_model_option_requests"] = []
@@ -1468,8 +1473,15 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.assertTrue(any(item["method"] == "GET" and item["path"] == "/api/studio/articles/article-fixture" for item in type(self).fixture["requests"]))
 
     def test_article_settings_embeds_the_shared_canvas_and_resets_atomically(self):
+        # Hold the canvas snapshot response until the iframe is listening for
+        # canvas-ready. Counting the GET alone is too early: loadCanvas still
+        # installs the response into the graph after the request has started.
+        canvas_get_gate = threading.Event()
+        type(self).fixture["article_canvas_get_gate"] = canvas_get_gate
+        self.addCleanup(canvas_get_gate.set)
         self.navigate("/static/api-settings.html")
         self.wait_for("document.querySelector('#articleSettingsNav')", "API 设置没有公众号文章配置入口")
+        self.wait_for("(()=>{const root=document.querySelector('#settingsContent');return root&&root.getAttribute('aria-busy')==='false'&&(!root.dataset.apiStartup||root.dataset.apiStartup==='empty');})()", "API 设置初始化没有结束")
         self.evaluate("document.querySelector('#articleSettingsNav').click()")
         self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentWindow?.location?.search.includes('id=article-settings')", "文章配置没有挂载专用共享画布")
         self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.documentElement?.dataset?.canvasMode==='article-settings'", "画布没有识别文章配置模式")
@@ -1477,12 +1489,17 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and type(self).fixture["article_canvas_gets"] == 0:
             time.sleep(0.025)
+        self.assertEqual(type(self).fixture["article_canvas_gets"], 1, "共享画布快照 GET 尚未开始")
+        self.evaluate("(()=>{const frame=document.querySelector('#articleSettingsCanvasFrame');const child=frame.contentWindow;child.addEventListener('canvas-ready',()=>{child.document.documentElement.dataset.testCanvasReady='true';},{once:true});return true;})()")
+        canvas_get_gate.set()
+        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.documentElement?.dataset?.testCanvasReady==='true'", "共享画布尚未应用快照并完成首次渲染")
         self.assertEqual(type(self).fixture["article_canvas_bootstraps"], 1)
         self.assertEqual(type(self).fixture["article_canvas_gets"], 1, self.evaluate("JSON.stringify({title:document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('#smartTitle')?.textContent,body:document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.body?.innerText?.slice(0,120)})"))
 
         self.evaluate("document.querySelector('#articleSettingsCanvasFrame').contentDocument.querySelector('#hypitOutputDrawerToggle').click()")
+        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('#hypitOutputDrawerToggle')?.getAttribute('aria-expanded')==='true' && !document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('#hypitOutputDrawer')?.hidden", "文章配置输出端口菜单没有展开")
         self.evaluate("document.querySelector('#articleSettingsCanvasFrame').contentDocument.querySelector('#hypitOutputDrawer [data-hypit-slot=image]').click()")
-        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('.hypit-output-node[data-hypit-slot=image')", "文章配置画布未创建共享图片输出端口")
+        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('.hypit-output-node[data-hypit-slot=\"image\"]')", "文章配置画布未创建共享图片输出端口")
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and not type(self).fixture["article_canvas_puts"]:
             time.sleep(0.025)

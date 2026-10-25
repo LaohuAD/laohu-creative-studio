@@ -198,7 +198,12 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
                         self.send_error(500, "smart-canvas fixture head is missing")
                         return
                     ready_listener = (
-                        '<script>window.__hypitCanvasReadyListenerInstalled=true;'
+                        '<script>window.__hypitRuntimeErrorsForTest=[];'
+                        'window.addEventListener("error",event=>window.__hypitRuntimeErrorsForTest.push('
+                        'String(event.message||event.error||"script error")),true);'
+                        'window.addEventListener("unhandledrejection",event=>window.__hypitRuntimeErrorsForTest.push('
+                        'String(event.reason?.stack||event.reason||"unhandled rejection")));'
+                        'window.__hypitCanvasReadyListenerInstalled=true;'
                         'window.addEventListener("canvas-ready",()=>{'
                         'window.__hypitCanvasReadyForTest=true;},{once:true});</script>'
                     )
@@ -458,6 +463,32 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
           return false;
         }})()""")
 
+    def wait_for_canvas_document(self, timeout=8):
+        """Wait for the iframe document/script lifecycle, not its static canvas shell."""
+        return self.evaluate(f"""(async()=>{{
+          const deadline=Date.now()+{int(timeout * 1000)};
+          while(Date.now()<deadline){{
+            const frame=document.getElementById('hypitSettingsCanvasFrame');
+            try{{
+              const win=frame?.contentWindow;
+              if(win?.document?.readyState==='complete'
+                &&win.__hypitCanvasReadyListenerInstalled===true
+                &&win.location.pathname==='/static/smart-canvas.html'
+                &&new URLSearchParams(win.location.search).get('id')==='hypit-settings'
+                &&new URLSearchParams(win.location.search).get('mode')==='hypit-settings')return true;
+            }}catch(_){{}}
+            await new Promise(resolve=>setTimeout(resolve,25));
+          }}
+          return false;
+        }})()""")
+
+    def canvas_request_counts(self):
+        with self.state.condition:
+            return {
+                key: getattr(self.state, key)
+                for key in ("settings_canvas_calls", "canvas_get_calls", "canvas_get_responses", "canvas_put_calls")
+            }
+
     def wait_for_canvas_sync(self, timeout=12, quiet_ms=500):
         return self.evaluate(f"""(async()=>{{
           const deadline=Date.now()+{int(timeout * 1000)};
@@ -471,6 +502,10 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
               const raw=frame?.contentWindow?.eval(`JSON.stringify({{
                 ready:window.__hypitCanvasReadyForTest===true,
                 listenerInstalled:window.__hypitCanvasReadyListenerInstalled===true,
+                startupStarted:Boolean(smartCanvasStartupPromise),
+                startupError:window.__hypitRuntimeErrorsForTest||[],
+                configError:String(window.__smartConfigLoadError||''),
+                capabilityError:String(modelCapabilityLoadError||''),
                 settingsMode:typeof isSettingsCanvasMode==='boolean'&&isSettingsCanvasMode,
                 canvasPath:location.pathname+location.search,
                 documentReady:document.readyState==='complete',
@@ -540,10 +575,12 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
         self.assertEqual(self.state.settings_canvas_calls, 1, "显式等待应复用启动中的预取请求")
         self.assertEqual(self.state.canvas_get_calls, 0, "失败的后台预取不应挂载标准画布")
         self.evaluate("window.openHypitSettings(); true")
-        self.assertTrue(self.wait_for_canvas(), "bootstrap 失败后点击 Hypit 应重试并打开共享画布")
+        self.assertTrue(self.wait_for_canvas_document(), "bootstrap 失败后点击 Hypit 应重试并加载共享画布文档")
         self.assertTrue(self.state.wait_for("settings_canvas_calls", target=2, timeout=3), "失败 bootstrap 必须允许新请求重试")
-        self.assertTrue(self.state.wait_for("canvas_get_responses", target=1, timeout=3),
-                        "重试后的共享画布 GET 必须完整返回后再检查读取次数")
+        sync = json.loads(self.wait_for_canvas_sync(timeout=12, quiet_ms=500))
+        self.assertTrue(sync["ok"], f"重试后画布未完成真实启动/同步：{sync}; requests={self.canvas_request_counts()}")
+        self.assertEqual(self.state.canvas_get_responses, 1,
+                         f"ready 事件应建立在标准画布 GET 完整返回后：{self.canvas_request_counts()}")
         self.assertTrue(self.evaluate("!document.getElementById('hypitSettingsCanvasFrame')?.hidden"),
                         "成功重试后应显示共享画布")
         self.assertEqual(self.state.canvas_get_calls, 1)
@@ -575,9 +612,9 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
     def test_legacy_save_hook_cannot_write_defaults_in_shared_canvas_mode(self):
         self.open_page()
         self.evaluate("window.openHypitSettings(); true")
-        self.assertTrue(self.wait_for_canvas(), "专用画布未加载")
+        self.assertTrue(self.wait_for_canvas_document(), "专用画布文档/启动脚本未加载")
         sync = json.loads(self.wait_for_canvas_sync(quiet_ms=500))
-        self.assertTrue(sync["ok"], f"旧 hook 检查前画布初始化/同步未结束：{sync}")
+        self.assertTrue(sync["ok"], f"旧 hook 检查前画布初始化/同步未结束：{sync}; requests={self.canvas_request_counts()}")
         self.assertEqual(self.state.canvas_put_calls, 0, f"旧 hook 调用前不应混入启动迁移 PUT：{sync}")
         result = self.evaluate("window.saveHypitSettings()")
         self.assertFalse(result, "真实页面的旧六槽 save hook 必须拒绝写入")

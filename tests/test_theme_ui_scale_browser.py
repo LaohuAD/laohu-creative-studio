@@ -235,7 +235,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         for width in (1280, 390):
             self.open_api_page(width)
             snapshots.append(self.evaluate("""(() => ({
-              viewport: document.documentElement.clientWidth,
+              viewport: window.innerWidth,
+              layoutViewport: document.documentElement.clientWidth,
+              visualViewport: window.visualViewport ? window.visualViewport.width : null,
               mode: window.StudioScale.getMode(),
               scale: window.StudioScale.getScale(),
               cssScale: getComputedStyle(document.documentElement).getPropertyValue('--studio-ui-scale').trim(),
@@ -247,15 +249,20 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
             }))()"""))
         for expected_width, result in zip((1280, 390), snapshots):
             with self.subTest(width=expected_width):
+                # innerWidth reflects the emulated browser viewport. clientWidth is
+                # the usable layout width and excludes a classic vertical scrollbar.
                 self.assertEqual(result["viewport"], expected_width, result)
+                self.assertGreater(result["layoutViewport"], 0, result)
+                self.assertLessEqual(result["layoutViewport"], result["viewport"], result)
+                self.assertLess(result["viewport"] - result["layoutViewport"], 32, result)
                 self.assertEqual(result["mode"], "auto", result)
                 self.assertAlmostEqual(result["scale"], 1.0, places=3, msg=str(result))
                 self.assertAlmostEqual(float(result["cssScale"]), 1.0, places=3, msg=str(result))
                 self.assertFalse(result["scaledClass"], result)
                 self.assertEqual(result["bodyTransform"], "none", result)
                 self.assertEqual(result["titleFontSize"], "14px", result)
-                self.assertLessEqual(result["pageScrollWidth"], expected_width + 1, result)
-                self.assertLessEqual(result["bodyScrollWidth"], expected_width + 1, result)
+                self.assertLessEqual(result["pageScrollWidth"], result["layoutViewport"] + 1, result)
+                self.assertLessEqual(result["bodyScrollWidth"], result["layoutViewport"] + 1, result)
 
     def test_manual_scale_preference_and_canvas_viewport_coordinates_remain_independent(self):
         self.set_viewport(1280)

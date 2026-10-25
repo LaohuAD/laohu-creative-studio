@@ -224,7 +224,15 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     }})()""")
                     self.assertEqual(report["ids"], [refresh_id, language_id, theme_id], report)
                     self.assertEqual(report["metrics"], [{"width": 34, "height": 34, "radius": "9px"}] * 3, report)
-                    self.assertEqual(report["gap"], "7px" if width > 420 else "5px", report)
+                    # 各作品页按各自 CSS 断点断言，不套用同一套窄屏阈值。
+                    gap_rule = {
+                        ".article-toolbar-actions": (520, "4px"),
+                        ".music-toolbar-actions": (520, "5px"),
+                        ".hypit-toolbar-actions": (650, "5px"),
+                    }[group_selector]
+                    breakpoint, narrow_gap = gap_rule
+                    expected_gap = narrow_gap if width <= breakpoint else "7px"
+                    self.assertEqual(report["gap"], expected_gap, report)
                     self.assertEqual(report["managementLinks"], 0, report)
                     self.assertFalse(report["agentButton"] or report["connectionDialog"], report)
                     self.assertFalse(report["overflow"], report)

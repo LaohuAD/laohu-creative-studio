@@ -36,6 +36,9 @@ class CanvasInputShortcutTests(unittest.TestCase):
               <textarea id="notes" data-creation-notes></textarea><button data-text-editor-save></button>
             </div><textarea id="unrelated"></textarea>`;
             var nodes = [{id:'n1',type:'image'}];
+            // canvasInputEnterAction also checks the full-page text-field dialog. The
+            // isolated fixture has no product DOM, so declare its closed state here.
+            var canvasTextFieldDialog = null;
             var runBtn = document.getElementById('runBtn');
             var counts = {run:0,save:0,change:0};
             var busy = false;

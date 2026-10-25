@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -492,10 +493,18 @@ console.log(JSON.stringify({
         self.assertIn('aria-label="${escapeAttr(tr(\'smart.systemTemplate\'))}"', section)
         self.assertNotIn('<span>${escapeHtml(tr(\'smart.template\'))}</span>', section)
         self.assertIn(".text-generation-system-row { grid-column:1 / -1; position:relative; overflow:visible;", css)
-        self.assertIn("padding:8px 42px 8px 10px", css)
+        system_row = re.search(r"\.dynamic-params \.text-generation-system-row textarea\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(system_row)
+        padding = re.search(r"padding:\s*8px\s+(\d+)px\s+8px\s+(\d+)px", system_row.group(1))
+        self.assertIsNotNone(padding)
+        # The expanded editor control and template control each occupy 28px plus
+        # an 8px inset. Keep both text edges clear of those overlapping buttons.
+        self.assertGreaterEqual(int(padding.group(1)), 36)
+        self.assertGreaterEqual(int(padding.group(2)), 36)
         self.assertIn(".dynamic-params .text-generation-system-row textarea:focus", css)
         self.assertIn("box-shadow:inset 0 0 0 1px var(--strong)", css)
         self.assertIn(".text-generation-template-btn { position:absolute; top:8px; right:8px; width:28px; height:28px;", css)
+        self.assertIn(".system-text-expand-btn { top:8px; left:8px; }", css)
 
     def test_execution_model_picker_uses_compatible_providers_without_silently_replacing_saved_choice(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -1220,7 +1229,7 @@ console.log(JSON.stringify(request));
     def test_canvas_load_restores_run_state_from_backend_ledger(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
         restore_start = source.index("async function restoreCanvasRuns")
-        load_start = source.index("async function loadCanvas()", restore_start)
+        load_start = source.index("async function loadCanvas(", restore_start)
         load = source[load_start:source.index("function scheduleSave", load_start)]
         restore = source[restore_start:load_start]
 
@@ -4279,7 +4288,7 @@ console.log(JSON.stringify({text:c.textContentForNode(node)}));
         self.assertNotIn("inputRefs:meta.inputRefs || meta.promptRefs", stripped)
 
         restore_start = source.index("async function restoreCanvasRuns")
-        load_start = source.index("async function loadCanvas()", restore_start)
+        load_start = source.index("async function loadCanvas(", restore_start)
         restored = source[restore_start:load_start]
         self.assertIn("function smartRunRecordedReferences", restored)
         self.assertIn("run?.standard_request?.inputs", restored)
