@@ -44,6 +44,18 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
         cls.canvas_schema_version = int(schema_match.group(1))
         cls.reset_state()
 
+        def track_api_request(method):
+            def wrapped(self):
+                path = urlsplit(self.path).path
+                if not path.startswith("/api/"):
+                    return method(self)
+                self.server.begin_api_request(path)
+                try:
+                    return method(self)
+                finally:
+                    self.server.finish_api_request(path)
+            return wrapped
+
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -66,6 +78,7 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
             def _body(self):
                 return json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
 
+            @track_api_request
             def do_GET(self):
                 path = urlsplit(self.path).path
                 owner = type(self).owner
@@ -128,6 +141,7 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                     return
                 super().do_GET()
 
+            @track_api_request
             def do_PATCH(self):
                 path = urlsplit(self.path).path
                 body = self._body()
@@ -161,6 +175,7 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                 self._json(200, {"option_id": option["option_id"], "enabled": option["enabled"],
                                  "catalog_revision": type(self).owner.state["catalog_revision"]})
 
+            @track_api_request
             def do_PUT(self):
                 path = urlsplit(self.path).path
                 body = self._body()
@@ -189,6 +204,7 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                     return
                 self._json(403, {"detail": "isolated fixture blocks provider/config writes"})
 
+            @track_api_request
             def do_POST(self):
                 path = urlsplit(self.path).path
                 body = self._body()
@@ -245,35 +261,35 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
             daemon_threads = True
 
             def __init__(self, *args, **kwargs):
-                self._active_requests = 0
-                self._active_requests_condition = threading.Condition()
+                self._active_api_requests = 0
+                self._active_api_paths = {}
+                self._active_api_condition = threading.Condition()
                 super().__init__(*args, **kwargs)
 
-            def process_request(self, request, client_address):
-                with self._active_requests_condition:
-                    self._active_requests += 1
-                try:
-                    return super().process_request(request, client_address)
-                except Exception:
-                    self._finish_tracked_request()
-                    raise
+            def begin_api_request(self, path):
+                with self._active_api_condition:
+                    self._active_api_requests += 1
+                    self._active_api_paths[path] = self._active_api_paths.get(path, 0) + 1
 
-            def process_request_thread(self, request, client_address):
-                try:
-                    return super().process_request_thread(request, client_address)
-                finally:
-                    self._finish_tracked_request()
+            def finish_api_request(self, path):
+                with self._active_api_condition:
+                    self._active_api_requests = max(0, self._active_api_requests - 1)
+                    remaining = self._active_api_paths.get(path, 0) - 1
+                    if remaining > 0:
+                        self._active_api_paths[path] = remaining
+                    else:
+                        self._active_api_paths.pop(path, None)
+                    self._active_api_condition.notify_all()
 
-            def _finish_tracked_request(self):
-                with self._active_requests_condition:
-                    self._active_requests = max(0, self._active_requests - 1)
-                    self._active_requests_condition.notify_all()
-
-            def wait_for_idle(self, timeout):
-                with self._active_requests_condition:
-                    return self._active_requests_condition.wait_for(
-                        lambda: self._active_requests == 0, timeout=timeout,
+            def wait_for_api_idle(self, timeout):
+                with self._active_api_condition:
+                    return self._active_api_condition.wait_for(
+                        lambda: self._active_api_requests == 0, timeout=timeout,
                     )
+
+            def active_api_paths(self):
+                with self._active_api_condition:
+                    return dict(self._active_api_paths)
 
         Handler.owner = cls
         cls.server = BrowserFixtureServer(("127.0.0.1", 0), Handler)
@@ -473,16 +489,19 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
     def setUp(self):
         self.cdp("Page.navigate", {"url": "about:blank"})
         self.assertTrue(self.evaluate("(async()=>{for(let i=0;i<80;i++){if(location.href==='about:blank')return true;await new Promise(r=>setTimeout(r,10));}return false;})()"))
-        # Navigation cancels the old document's fetches, but its server-side
+        # Navigation cancels the old document's fetches, but stateful API
         # handlers can still be completing. A fixture barrier queues behind
-        # already-open connections; drain handlers before replacing shared
-        # state so responses from a prior case cannot mutate the next case.
+        # already-open connections; drain API handlers before replacing shared
+        # state. Static asset transfers are intentionally not part of this
+        # barrier because they do not touch the fixture state and may finish
+        # after the browser has canceled them.
         import urllib.request
         with urllib.request.urlopen(f"http://127.0.0.1:{type(self).port}/__fixture_barrier", timeout=5) as response:
             self.assertEqual(response.status, 200)
             self.assertEqual(json.loads(response.read().decode("utf-8")), {"ok": True})
-        self.assertTrue(type(self).server.wait_for_idle(timeout=5),
-                        "前一用例仍有 HTTP fixture handler 未结束，不能重置共享状态")
+        self.assertTrue(type(self).server.wait_for_api_idle(timeout=5),
+                        "前一用例仍有 API fixture handler 未结束，不能重置共享状态；"
+                        f"active={type(self).server.active_api_paths()}")
         type(self).reset_state()
 
     def wait_for(self, expression, message, timeout=12):
