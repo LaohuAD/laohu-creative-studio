@@ -635,12 +635,35 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                         "模拟的旧 about:blank 文档应满足原就绪判断")
         self.assertFalse(self.evaluate(ready_expression),
                          "模拟的旧文档不得满足绑定目标 URL、脚本及画布身份的就绪判断")
+        canvas_snapshot_gate = threading.Event()
+        type(self).state["delayed_api"] = {"/api/canvases/canvas-settings": canvas_snapshot_gate}
+        type(self).state["delayed_api_started"].clear()
+        type(self).state["delayed_api_started_paths"] = []
         navigation = self.cdp("Page.navigate", {"url": canvas_url})
         self.assertFalse(navigation.get("errorText"), f"普通画布页导航失败：{navigation}")
-        self.wait_for(ready_expression,
-                      lambda: "普通画布页没有完成当前 URL、共享脚本及目标画布加载：" + str(self.evaluate(
-                          "JSON.stringify({url:location.href,readyState:document.readyState,world:!!document.getElementById('world'),loader:{type:typeof loadSmartCanvasPersonalization,name:typeof loadSmartCanvasPersonalization==='function'?loadSmartCanvasPersonalization.name:null,scripts:[...document.scripts].filter(item=>item.src.includes('smart-canvas.js')).map(item=>item.src)},canvas:{id:typeof canvas==='undefined'?null:canvas?.id,schema:typeof canvas==='undefined'?null:canvas?.node_schema_version,contract:typeof SmartNodeContract==='undefined'?null:SmartNodeContract.SCHEMA_VERSION,migrationPending:typeof smartNodeMigrationPending==='undefined'?null:smartNodeMigrationPending,inFlight:typeof canvasSyncInFlight==='undefined'?null:canvasSyncInFlight,saveQueued:typeof canvasSyncSaveQueued==='undefined'?null:canvasSyncSaveQueued},navigation:performance.getEntriesByType('navigation').map(item=>({name:item.name,type:item.type,domComplete:Math.round(item.domComplete),loadEventEnd:Math.round(item.loadEventEnd)}))})"
-                      )))
+        try:
+            self.wait_for(
+                f"location.href==={json.dumps(canvas_url)}&&document.readyState==='complete'&&!!document.getElementById('world')&&"
+                "typeof loadSmartCanvasPersonalization==='function'&&Array.from(document.scripts).some(script=>{try{return new URL(script.src,location.href).pathname==='/static/js/smart-canvas.js'}catch(e){return false}})",
+                lambda: "普通画布页没有完成目标文档及共享脚本加载：" + str(self.evaluate(
+                    "JSON.stringify({url:location.href,readyState:document.readyState,world:!!document.getElementById('world'),loader:typeof loadSmartCanvasPersonalization,scripts:[...document.scripts].filter(item=>item.src.includes('smart-canvas.js')).map(item=>item.src)})"
+                )))
+            self.assertTrue(type(self).state["delayed_api_started"].wait(timeout=8),
+                            "普通画布页没有开始读取共享画布快照")
+            self.assertIn("/api/canvases/canvas-settings", type(self).state["delayed_api_started_paths"])
+            self.assertFalse(self.evaluate(ready_expression),
+                             "共享画布 GET 被阻塞时，目标 canvas 身份尚未准备好，不应进入只读交互")
+            self.evaluate("window.__formalCanvasReady=false;window.addEventListener('canvas-ready',()=>{window.__formalCanvasReady=true;},{once:true});true")
+            canvas_snapshot_gate.set()
+            self.wait_for(ready_expression + "&&window.__formalCanvasReady===true",
+                          lambda: "普通画布页没有应用目标快照并完成 canvas-ready：" + str(self.evaluate(
+                              "JSON.stringify({url:location.href,readyState:document.readyState,ready:window.__formalCanvasReady===true,canvas:{id:typeof canvas==='undefined'?null:canvas?.id,schema:typeof canvas==='undefined'?null:canvas?.node_schema_version,contract:typeof SmartNodeContract==='undefined'?null:SmartNodeContract.SCHEMA_VERSION,migrationPending:typeof smartNodeMigrationPending==='undefined'?null:smartNodeMigrationPending,inFlight:typeof canvasSyncInFlight==='undefined'?null:canvasSyncInFlight,saveQueued:typeof canvasSyncSaveQueued==='undefined'?null:canvasSyncSaveQueued},navigation:performance.getEntriesByType('navigation').map(item=>({name:item.name,type:item.type,domComplete:Math.round(item.domComplete),loadEventEnd:Math.round(item.loadEventEnd)}))})"
+                          )))
+        finally:
+            canvas_snapshot_gate.set()
+            type(self).state["delayed_api"].pop("/api/canvases/canvas-settings", None)
+        self.assertGreater(type(self).state["canvas_get_responses"], 0,
+                           "canvas-ready 必须发生在共享画布 GET 响应完成之后")
         self.wait_for("document.documentElement.dataset.canvasSettings!=='true'",
                       "正式画布不能进入设置管理模式")
         deadline = time.time() + 8
