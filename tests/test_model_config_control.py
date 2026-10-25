@@ -1509,6 +1509,13 @@ class BrowserBehaviourTests(unittest.TestCase):
               scrollWidth:tabs.scrollWidth,clientWidth:tabs.clientWidth,scrollLeft:tabs.scrollLeft};
           })()`);
           const wheelResult=await wheel('.agent-default-tabs',{deltaX:700});
+          // CDP acknowledges dispatch before every platform has applied the
+          // renderer's wheel default action. Poll the actual scroller instead
+          // of treating the helper's short settling delay as completion.
+          for(let attempt=0;attempt<30&&wheelResult.after.left<=wheelResult.before.left;attempt+=1){
+            await delay(50);
+            wheelResult.after=await evaluate(`(()=>{const tabs=document.querySelector('.agent-default-tabs');return {top:tabs.scrollTop,left:tabs.scrollLeft};})()`);
+          }
           const after=await evaluate(`(()=>{
             const tabs=document.querySelector('.agent-default-tabs'),last=tabs.querySelector('[data-agent-kind="comfy"]');
             const a=tabs.getBoundingClientRect(),b=last.getBoundingClientRect();
