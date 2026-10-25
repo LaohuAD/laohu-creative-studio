@@ -1104,7 +1104,14 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                                             "&& document.querySelectorAll('#dynamicParams [data-text-system-prompt]').length===1 "
                                             "&& !!document.querySelector('#dynamicParams [data-canvas-text-expand=system]')"),
                       "提示词语言重绘尚未结束，系统提示词编辑器还未稳定")
-        self.evaluate("document.querySelector('[data-canvas-text-expand=system]').click(); true")
+        # A DOM-visible button immediately after a language change is not
+        # enough to show that the params row has settled. Wait through two
+        # frames and verify the same connected button before the synthetic
+        # click, so the test cannot click a row while it is being replaced.
+        self.wait_for(lambda: self.evaluate("new Promise(resolve=>{const button=document.querySelector('#dynamicParams [data-canvas-text-expand=system]');requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(Boolean(button&&button.isConnected&&button===document.querySelector('#dynamicParams [data-canvas-text-expand=system]')&&canvasExpandedTextField===null&&!canvasTextFieldDeferredParamsRender&&document.querySelectorAll('#dynamicParams [data-text-system-prompt]').length===1))))})"),
+                      "系统提示词语言重绘尚未跨过稳定帧")
+        opened = json.loads(self.evaluate("(()=>{const button=document.querySelector('#dynamicParams [data-canvas-text-expand=system]');button?.click();return JSON.stringify({buttonConnected:!!button?.isConnected,open:!!document.getElementById('canvasTextFieldDialog')?.open,expanded:canvasExpandedTextField?.kind||null,system:!!document.querySelector('[data-text-system-prompt]')})})()"))
+        self.assertEqual(opened["expanded"], "system", f"稳定的系统提示词按钮应打开同一编辑框：{opened}")
         self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldDialog')?.open"),
                       "系统提示词放大对话框未打开")
         self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]') === document.querySelector('[data-text-system-prompt]')"),
@@ -2501,6 +2508,12 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
             release_first.set()
             self.wait_for(lambda: len(self.comfy_workflow_detail_completions) >= 2,
                           "延迟的旧详情请求没有结束，无法检查过期响应保护")
+            # The fixture records completion when the response bytes are
+            # written; the browser still needs to consume the body and run the
+            # fetch promise's finally handler that removes its in-flight map
+            # entry. Wait for both sides to finish before inspecting state.
+            self.wait_for(lambda: self.frame_evaluate("comfyWorkflowDetailPromises.size===0"),
+                          "详情响应已到达浏览器后，进行中的请求记录仍未清理")
             final = json.loads(self.frame_evaluate("""JSON.stringify({
               label:comfyWorkflowCache['fixture-workflow.json']?.config?.fields?.[0]?.label,
               max:document.querySelector('.capability-param-control[data-parameter-key=seed] input[data-capability-param=seed]')?.max,

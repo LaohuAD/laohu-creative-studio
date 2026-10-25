@@ -69,6 +69,9 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
             def do_GET(self):
                 path = urlsplit(self.path).path
                 owner = type(self).owner
+                if path == "/__fixture_barrier":
+                    self._json(200, {"ok": True})
+                    return
                 if path.startswith("/api/"):
                     owner.state["api_requests"].append(path)
                     gate = owner.state["delayed_api"].get(path)
@@ -102,15 +105,19 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                 if path == "/api/smart-canvas/personalization":
                     self._json(200, type(self).owner.state["personalization"])
                     type(self).owner.state["personalization_get_responses"] += 1
+                    type(self).owner.state["api_responses"].append(path)
                     return
                 if path == "/api/providers":
                     self._json(200, {"providers": type(self).owner.state["providers"]})
+                    type(self).owner.state["api_responses"].append(path)
                     return
                 if path == "/api/config":
                     self._json(200, {"api_providers": type(self).owner.state["providers"], "comfy_instances": []})
+                    type(self).owner.state["api_responses"].append(path)
                     return
                 if path == "/api/model-capabilities":
                     self._json(200, type(self).owner.capability_payload())
+                    type(self).owner.state["api_responses"].append(path)
                     return
                 if path == "/api/app-info":
                     self._json(200, {"version": "fixture"})
@@ -230,8 +237,46 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                     return
                 self._json(403, {"detail": "isolated fixture blocks generation/provider submissions"})
 
+        class BrowserFixtureServer(ThreadingHTTPServer):
+            # A browser opens several independent same-origin requests during
+            # startup. The stdlib default listen backlog is only five, which
+            # can drop requests on Windows before a handler thread is created.
+            request_queue_size = 64
+            daemon_threads = True
+
+            def __init__(self, *args, **kwargs):
+                self._active_requests = 0
+                self._active_requests_condition = threading.Condition()
+                super().__init__(*args, **kwargs)
+
+            def process_request(self, request, client_address):
+                with self._active_requests_condition:
+                    self._active_requests += 1
+                try:
+                    return super().process_request(request, client_address)
+                except Exception:
+                    self._finish_tracked_request()
+                    raise
+
+            def process_request_thread(self, request, client_address):
+                try:
+                    return super().process_request_thread(request, client_address)
+                finally:
+                    self._finish_tracked_request()
+
+            def _finish_tracked_request(self):
+                with self._active_requests_condition:
+                    self._active_requests = max(0, self._active_requests - 1)
+                    self._active_requests_condition.notify_all()
+
+            def wait_for_idle(self, timeout):
+                with self._active_requests_condition:
+                    return self._active_requests_condition.wait_for(
+                        lambda: self._active_requests == 0, timeout=timeout,
+                    )
+
         Handler.owner = cls
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.server = BrowserFixtureServer(("127.0.0.1", 0), Handler)
         cls.port = cls.server.server_address[1]
         cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.server_thread.start()
@@ -316,7 +361,8 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
                  }},
             ],
             "catalog_revision": "fixture-catalog-1", "bootstrap_gets": 0, "canvas_gets": 0, "canvas_get_responses": 0,
-            "catalog_gets": 0, "personalization_get_responses": 0, "api_reads": [], "api_requests": [], "delayed_api": {},
+            "catalog_gets": 0, "personalization_get_responses": 0, "api_reads": [], "api_requests": [],
+            "api_responses": [], "delayed_api": {},
             "delayed_api_started": threading.Event(), "delayed_api_started_paths": [],
             "writes": [], "agent_commands": [],
         }
@@ -427,6 +473,16 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
     def setUp(self):
         self.cdp("Page.navigate", {"url": "about:blank"})
         self.assertTrue(self.evaluate("(async()=>{for(let i=0;i<80;i++){if(location.href==='about:blank')return true;await new Promise(r=>setTimeout(r,10));}return false;})()"))
+        # Navigation cancels the old document's fetches, but its server-side
+        # handlers can still be completing. A fixture barrier queues behind
+        # already-open connections; drain handlers before replacing shared
+        # state so responses from a prior case cannot mutate the next case.
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{type(self).port}/__fixture_barrier", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read().decode("utf-8")), {"ok": True})
+        self.assertTrue(type(self).server.wait_for_idle(timeout=5),
+                        "前一用例仍有 HTTP fixture handler 未结束，不能重置共享状态")
         type(self).reset_state()
 
     def wait_for(self, expression, message, timeout=12):
@@ -664,6 +720,15 @@ class CanvasSettingsManagementBrowserTests(unittest.TestCase):
             type(self).state["delayed_api"].pop("/api/canvases/canvas-settings", None)
         self.assertGreater(type(self).state["canvas_get_responses"], 0,
                            "canvas-ready 必须发生在共享画布 GET 响应完成之后")
+        startup_contract = {
+            "/api/smart-canvas/personalization", "/api/config", "/api/model-capabilities",
+        }
+        deadline = time.time() + 8
+        while time.time() < deadline and not startup_contract.issubset(set(type(self).state["api_responses"])):
+            time.sleep(0.03)
+        self.assertTrue(startup_contract.issubset(set(type(self).state["api_responses"])),
+                        "目标画布启动所需的个性化、配置和能力请求必须由隔离服务端完整响应；"
+                        f"requests={type(self).state['api_requests']}，responses={type(self).state['api_responses']}")
         self.wait_for("document.documentElement.dataset.canvasSettings!=='true'",
                       "正式画布不能进入设置管理模式")
         deadline = time.time() + 8

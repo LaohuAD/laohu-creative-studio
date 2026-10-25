@@ -1241,6 +1241,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         with self.fixture["lock"]:
             self.fixture["unknown_next_generation_response"] = True
         original = self.fixture["novel"]["chapter"]["body_markdown"]
+        self.wait(page, "!!document.querySelector('[data-inline-optimize=\\\"novel-chapter:chapter-1\\\"]') && !document.querySelector('[data-inline-optimize=\\\"novel-chapter:chapter-1\\\"]').disabled", 12)
         self.evaluate(page, "document.querySelector('[data-inline-optimize=\\\"novel-chapter:chapter-1\\\"]').click()")
         self.wait(page, "!!document.querySelector('.sm-optimization-dialog')")
         self.evaluate(page, "document.querySelector('.sm-optimization-prompt').value='精简句子，不改变事实。'")
@@ -1252,6 +1253,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
 
         self.cdp("Page.reload", {}, page["session"])
         self.wait(page, "document.readyState==='complete' && !!document.querySelector('[data-inline-optimize=\\\"novel-chapter:chapter-1\\\"]')")
+        self.wait(page, "!!document.querySelector('[data-inline-optimize=\\\"novel-chapter:chapter-1\\\"]') && !document.querySelector('[data-inline-optimize=\\\"novel-chapter:chapter-1\\\"]').disabled", 12)
         self.evaluate(page, "document.querySelector('[data-inline-optimize=\\\"novel-chapter:chapter-1\\\"]').click()")
         self.wait(page, "!document.querySelector('[aria-label=\\\"优化结果预览\\\"]').hidden && document.querySelector('[aria-label=\\\"优化结果预览\\\"]').value.includes('优化结果')", 10)
         with self.fixture["lock"]:
@@ -1347,18 +1349,22 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.screenshot_viewport(page, "text-settings-script-shared-canvas.png")
 
         self.cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True}, session_id=page["session"])
-        self.wait(page, "document.documentElement.clientWidth===390 && document.getElementById('scriptSettingsCanvasFrame')?.contentDocument?.documentElement?.clientWidth<=900", 12)
+        self.wait(page, "(()=>{const frame=document.getElementById('scriptSettingsCanvasFrame'),d=frame?.contentDocument;return document.documentElement.clientWidth===390&&d?.readyState==='complete'&&d.documentElement.clientWidth<=900&&d.documentElement.clientWidth===frame.clientWidth})()", 12)
         narrow = self.evaluate(page, "(()=>{const d=document.getElementById('scriptSettingsCanvasFrame').contentDocument,t=d.getElementById('settingsCanvasToolbar'),r=t.getBoundingClientRect(),title=d.getElementById('smartTitle').getBoundingClientRect();return {viewport:d.documentElement.clientWidth,toolbar:{left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,scrollWidth:t.scrollWidth,clientWidth:t.clientWidth,scrollLeft:t.scrollLeft},title:{top:title.top,bottom:title.bottom},buttons:[...t.querySelectorAll(':scope > button')].map(b=>({id:b.id,display:getComputedStyle(b).display,disabled:b.disabled})),settings:d.documentElement.dataset.textOptimizationSettings};})()")
         self.assertEqual(narrow["settings"], "true")
         self.assertGreater(narrow["toolbar"]["width"], 0, narrow)
-        self.assertGreater(narrow["toolbar"]["scrollWidth"], narrow["toolbar"]["clientWidth"], "窄屏工具栏应横向滚动而不互相覆盖")
+        self.assertLessEqual(narrow["viewport"], 900, f"窄屏需进入共享画布响应式工具栏布局：{narrow}")
+        if narrow["toolbar"]["scrollWidth"] <= narrow["toolbar"]["clientWidth"]:
+            fit = self.evaluate(page, "(()=>{const d=document.getElementById('scriptSettingsCanvasFrame').contentDocument,t=d.getElementById('settingsCanvasToolbar'),r=t.getBoundingClientRect(),buttons=[...t.querySelectorAll('button')].filter(b=>getComputedStyle(b).display!=='none').map(b=>{const q=b.getBoundingClientRect(),hit=d.elementFromPoint(q.left+q.width/2,q.top+q.height/2);return{id:b.id,left:q.left,right:q.right,top:q.top,bottom:q.bottom,visible:q.left>=r.left&&q.right<=r.right&&q.top>=r.top&&q.bottom<=r.bottom,hit:hit===b||b.contains(hit),disabled:b.disabled}});const overlaps=[];for(let i=0;i<buttons.length;i++)for(let j=i+1;j<buttons.length;j++){const a=buttons[i],b=buttons[j];if(a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom)overlaps.push([a.id,b.id]);}return {buttons,overlaps};})()")
+            self.assertTrue(all(item["visible"] and item["hit"] and not item["disabled"] for item in fit["buttons"]), f"工具栏不需滚动时，所有控件须可见、可点且未禁用：{fit}; {narrow}")
+            self.assertEqual(fit["overlaps"], [], f"窄屏工具栏控件不可重叠：{fit}; {narrow}")
         self.assertGreaterEqual(narrow["toolbar"]["top"], narrow["title"]["bottom"], f"窄屏工具栏不能遮住配置图标题：{narrow}")
         display_by_id = {item["id"]: item["display"] for item in narrow["buttons"]}
         self.assertEqual(display_by_id.get("smartShortcutToggle"), "flex", f"窄屏快捷键入口仍可用：{narrow}")
         self.assertEqual(display_by_id.get("smartPriceToggle"), "flex", f"窄屏价格入口仍可用：{narrow}")
-        self.evaluate(page, "(()=>{const d=document.getElementById('scriptSettingsCanvasFrame').contentDocument,t=d.getElementById('settingsCanvasToolbar');t.scrollLeft=t.scrollWidth;return true})()")
+        self.evaluate(page, "(()=>{const d=document.getElementById('scriptSettingsCanvasFrame').contentDocument,t=d.getElementById('settingsCanvasToolbar');if(t.scrollWidth>t.clientWidth)t.scrollLeft=t.scrollWidth;return true})()")
         final_toolbar_button = self.evaluate(page, "(()=>{const d=document.getElementById('scriptSettingsCanvasFrame').contentDocument,t=d.getElementById('settingsCanvasToolbar'),b=d.getElementById('assetToggle'),r=b.getBoundingClientRect(),p=d.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return {id:b.id,visible:r.left>=t.getBoundingClientRect().left&&r.right<=t.getBoundingClientRect().right,hit:p===b||b.contains(p),disabled:b.disabled};})()")
-        self.assertEqual(final_toolbar_button, {"id": "assetToggle", "visible": True, "hit": True, "disabled": False}, f"滚动后末尾工具仍应能点击：{final_toolbar_button}")
+        self.assertEqual(final_toolbar_button, {"id": "assetToggle", "visible": True, "hit": True, "disabled": False}, f"末尾工具应可见并可点击：{final_toolbar_button}")
         self.evaluate(page, "document.getElementById('scriptSettingsCanvasFrame').contentDocument.getElementById('settingsCanvasToolbar').scrollLeft=0")
         self.evaluate(page, "document.getElementById('scriptSettingsCanvasFrame').scrollIntoView({block:'center'})")
         self.screenshot_viewport(page, "text-settings-script-shared-canvas-mobile-390px.png")
@@ -2017,14 +2023,14 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         # 明暗主题保留配色身份；中英文标签切换；作品页工具栏仅保留三个共用图标。
         original_theme = self.evaluate(novel_page, "document.documentElement.dataset.studioTheme")
         original_appearance = self.evaluate(novel_page, "document.documentElement.dataset.studioAppearance")
-        color_samples = self.evaluate(novel_page, "(async()=>{const root=document.documentElement,themeApi=window.StudioTheme,previous=themeApi.getPreference(),ids=['studio-violet','sunlit','vermilion','forest','classic'],out=[];for(const theme of ids)for(const appearance of ['light','dark']){themeApi.setPreference({version:1,themeId:theme,appearance});await new Promise(resolve=>setTimeout(resolve,180));const selected=document.querySelector('#smDirectory [aria-current=\"page\"]'),input=document.querySelector('.sm-inline-input'),tab=document.querySelector('.sm-tab.active'),style=n=>getComputedStyle(n);out.push({theme,appearance,rootAccentText:style(root).getPropertyValue('--studio-accent-text').trim(),bodyAccentText:style(document.body).getPropertyValue('--studio-accent-text').trim(),selectedText:style(selected).color,selectedWash:style(selected).backgroundColor,surface:style(document.querySelector('.sm-directory')).backgroundColor,inputText:style(input).color,inputSurface:style(input).backgroundColor,page:style(document.getElementById('smWorkspace')).backgroundColor,tabText:style(tab).color,tabPage:style(document.getElementById('smNovelTabs')).backgroundColor,focus:style(root).getPropertyValue('--studio-focus').trim()})}themeApi.setPreference(previous);return out})()")
+        color_samples = self.evaluate(novel_page, "(async()=>{const root=document.documentElement,themeApi=window.StudioTheme,previous=themeApi.getPreference(),ids=['studio-violet','sunlit','vermilion','forest','classic'],out=[];for(const theme of ids)for(const appearance of ['light','dark']){themeApi.setPreference({version:1,themeId:theme,appearance});await new Promise(resolve=>{let previous='',stable=0;const deadline=performance.now()+1800;const sample=()=>{const selected=document.querySelector('#smDirectory [aria-current=\"page\"]'),input=document.querySelector('.sm-inline-input'),tab=document.querySelector('.sm-tab.active'),style=n=>getComputedStyle(n),signature=[root.dataset.studioTheme,root.dataset.studioAppearance,style(root).getPropertyValue('--studio-focus').trim(),style(document.querySelector('.sm-directory')).backgroundColor,style(selected).color,style(selected).backgroundColor,style(input).color,style(input).backgroundColor,style(tab).color,style(document.getElementById('smNovelTabs')).backgroundColor].join('|');if(signature===previous)stable++;else stable=0;previous=signature;if(stable>=3||performance.now()>=deadline)resolve();else requestAnimationFrame(sample)};requestAnimationFrame(sample)});if(root.dataset.studioTheme!==theme||root.dataset.studioAppearance!==appearance)throw new Error('theme did not settle: '+root.dataset.studioTheme+'/'+root.dataset.studioAppearance+' expected '+theme+'/'+appearance);const selected=document.querySelector('#smDirectory [aria-current=\"page\"]'),input=document.querySelector('.sm-inline-input'),tab=document.querySelector('.sm-tab.active'),style=n=>getComputedStyle(n);out.push({theme,appearance,rootAccentText:style(root).getPropertyValue('--studio-accent-text').trim(),bodyAccentText:style(document.body).getPropertyValue('--studio-accent-text').trim(),selectedText:style(selected).color,selectedWash:style(selected).backgroundColor,surface:style(document.querySelector('.sm-directory')).backgroundColor,inputText:style(input).color,inputSurface:style(input).backgroundColor,page:style(document.getElementById('smWorkspace')).backgroundColor,tabText:style(tab).color,tabPage:style(document.getElementById('smNovelTabs')).backgroundColor,focus:style(root).getPropertyValue('--studio-focus').trim()})}themeApi.setPreference(previous);return out})()")
         self.assertEqual(len(color_samples), 10)
         for sample in color_samples:
             selected_bg = composite(sample["selectedWash"], sample["surface"])
             input_bg = composite(sample["inputSurface"], sample["page"])
             for label, foreground, background in (("selected", sample["selectedText"], selected_bg), ("input", sample["inputText"], input_bg), ("tab", sample["tabText"], sample["tabPage"])):
                 self.assertGreaterEqual(contrast_ratio(foreground, background), 4.5, f"{sample['theme']} {sample['appearance']} {label}: {foreground} / {background}; root={sample['rootAccentText']} body={sample['bodyAccentText']}")
-            self.assertGreaterEqual(contrast_ratio(sample["focus"], sample["surface"]), 3.0, f"{sample['theme']} {sample['appearance']} focus")
+            self.assertGreaterEqual(contrast_ratio(sample["focus"], sample["surface"]), 3.0, f"{sample['theme']} {sample['appearance']} focus: {sample['focus']} / {sample['surface']}")
         self.evaluate(novel_page, "document.getElementById('smThemeButton').click()")
         dark_state = self.evaluate(novel_page, "({theme:document.documentElement.dataset.studioTheme,appearance:document.documentElement.dataset.studioAppearance})")
         self.assertEqual(dark_state["theme"], original_theme)

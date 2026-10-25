@@ -177,8 +177,10 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
         cls.cdp("Runtime.enable")
         cls.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": """(() => {
           window.__scriptCanvasBrowserErrors=[];
+          window.__scriptCanvasReadyForTest=false;
           addEventListener('error', event=>window.__scriptCanvasBrowserErrors.push(String(event.message||'')));
           addEventListener('unhandledrejection', event=>window.__scriptCanvasBrowserErrors.push(String(event.reason?.stack||event.reason||'')));
+          addEventListener('canvas-ready',()=>{window.__scriptCanvasReadyForTest=true;},{once:true});
         })();"""})
 
     @classmethod
@@ -230,6 +232,49 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
             raise AssertionError(f"浏览器用例脚本异常：{result['exceptionDetails']}")
         return result.get("result", {}).get("value")
 
+    def wait_for_canvas_ready_sync(self, timeout=20, quiet_ms=250):
+        expected_id = json.dumps(CANVAS_ID)
+        return self.evaluate(f"""(async()=>{{
+          const deadline=Date.now()+{int(timeout * 1000)};
+          let previous='',stableSince=0,last=null;
+          while(Date.now()<deadline){{
+            try{{
+              last={{
+                ready:window.__scriptCanvasReadyForTest===true,
+                documentReady:document.readyState==='complete',
+                canvasId:canvas?.id||'',baseId:canvasSyncBase?.id||'',
+                revision:Number(canvas?.revision||0),baseRevision:Number(canvasSyncBase?.revision||0),
+                inFlight:Boolean(canvasSyncInFlight),queued:Boolean(canvasSyncSaveQueued),
+                blocked:Boolean(canvasSyncSaveBlocked),timer:Boolean(saveTimer),
+                dirty:typeof canvasSyncHasLocalChanges==='function'
+                  ? canvasSyncHasLocalChanges(canvas,canvasSyncBase) : true,
+                errors:window.__scriptCanvasBrowserErrors||[]
+              }};
+            }}catch(error){{last={{error:String(error)}};}}
+            const settled=Boolean(last?.ready&&last.documentReady&&last.canvasId==={expected_id}
+              &&last.baseId==={expected_id}&&last.revision===last.baseRevision
+              &&!last.inFlight&&!last.queued&&!last.blocked&&!last.dirty);
+            const signature=settled?JSON.stringify(last):'';
+            if(settled&&signature===previous){{
+              if(Date.now()-stableSince>={int(quiet_ms)})return {{ok:true,state:last}};
+            }}else{{
+              stableSince=settled?Date.now():0;
+              previous=signature;
+            }}
+            await new Promise(resolve=>setTimeout(resolve,25));
+          }}
+          return {{ok:false,state:last}};
+        }})()""")
+
+    def open_workflow_transfer_panel(self):
+        self.evaluate("document.getElementById('smartWorkflowToggle').click(); true")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.evaluate("document.getElementById('smartWorkflowTransferModal')?.classList.contains('open')"):
+                return True
+            time.sleep(0.05)
+        return False
+
     def test_source_reference_survives_canvas_save_reload_and_workflow_export(self):
         url = f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id={CANVAS_ID}"
         self.cdp("Page.navigate", {"url": url})
@@ -244,6 +289,9 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
             time.sleep(0.1)
         else:
             self.fail(f"smart-canvas 未启动：{self.evaluate('JSON.stringify({url:location.href, errors:window.__scriptCanvasBrowserErrors})')}")
+
+        sync = self.wait_for_canvas_ready_sync()
+        self.assertTrue(sync["ok"], f"首次载入未完成 canvas-ready 与保存同步：{sync}")
 
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -301,6 +349,9 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
         else:
             self.fail("重新载入没有恢复来源引用与脚本导入索引")
 
+        sync = self.wait_for_canvas_ready_sync()
+        self.assertTrue(sync["ok"], f"重载后应用启动尚未完成，不能操作工作流面板：{sync}")
+
         workflow = {
             "nodes": [
                 {"id": "incoming-episode", "type": "smart-material", "title": "导入的整集", "x": 0, "y": 0,
@@ -325,11 +376,7 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
         }
         with self.canvas_lock:
             self.state["import_workflow"] = copy.deepcopy(workflow)
-        self.evaluate("document.getElementById('smartWorkflowTransferModal')?.classList.add('open')")
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not self.evaluate("document.getElementById('smartWorkflowTransferModal').classList.contains('open')"):
-            time.sleep(0.05)
-        self.assertTrue(self.evaluate("document.getElementById('smartWorkflowTransferModal').classList.contains('open')"))
+        self.assertTrue(self.open_workflow_transfer_panel(), "通过真实工具栏操作打开工作流面板失败")
         encoded_workflow = json.dumps(json.dumps(workflow, ensure_ascii=False))
         expression = (
             "(()=>{const input=document.getElementById('smartWorkflowImportInput');if(!input)return null;"
@@ -376,8 +423,7 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
         self.assertTrue(transfer_state and transfer_state["episode"], transfer_state)
         self.assertEqual(transfer_state["sourceRef"]["sourceNodeId"], "episode-9")
 
-        self.evaluate("document.getElementById('smartWorkflowTransferModal')?.classList.add('open')")
-        self.assertTrue(self.evaluate("document.getElementById('smartWorkflowTransferModal').classList.contains('open')"))
+        self.assertTrue(self.open_workflow_transfer_panel(), "导入关闭面板后，无法通过真实工具栏重新打开")
         actual_download = self.evaluate(r"""(async()=>{
           window.__scriptWorkflowDownload=null;
           const original=URL.createObjectURL;

@@ -359,10 +359,10 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             cls.debug_port = probe.getsockname()[1]
-        cls.profile = ROOT / "cache" / "studio-tests" / "tmp" / f"hypit-prefetch-{int(time.time())}"
+        cls.profile = ROOT / ".cache" / "validation" / "hypit-settings-prefetch" / f"hypit-prefetch-{int(time.time())}"
         cls.profile.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
-        task_tmp = ROOT / "cache" / "runtime" / "tmp"
+        task_tmp = ROOT / ".cache" / "tmp"
         task_tmp.mkdir(parents=True, exist_ok=True)
         env.update({"TMPDIR": str(task_tmp), "TMP": str(task_tmp), "TEMP": str(task_tmp)})
         cls.chrome = subprocess.Popen(
@@ -438,6 +438,20 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
     def open_page(self, *, hold_capabilities=False, hold_settings=False, fail_first_capabilities=False,
                   fail_first_canvas_bootstrap=False, hold_first_canvas_bootstrap=False,
                   hold_first_canvas_get=False):
+        # 先销毁上个用例的页面/iframe，再 reset server counters。否则旧页面
+        # 尚未卸载时发出的请求可能落进新用例计数，或让后续导航与启动脚本竞态。
+        self.cdp("Page.navigate", {"url": "about:blank"})
+        blank_deadline = time.monotonic() + 5
+        while time.monotonic() < blank_deadline:
+            try:
+                blank = self.evaluate("location.href==='about:blank' && document.readyState==='complete'")
+                if blank:
+                    break
+            except AssertionError:
+                pass
+            time.sleep(0.025)
+        else:
+            self.fail("无法在用例间完成浏览器页面隔离")
         self.state.reset(
             hold_capabilities=hold_capabilities,
             hold_settings=hold_settings,
@@ -450,8 +464,10 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
                 self.state.fail_next_canvas_bootstrap = 1
         self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}/"})
         ready = self.evaluate(f"""(async()=>{{
-          for(let i=0;i<100;i++){{
-            if(location.origin==='http://127.0.0.1:{self.http_port}'){{
+          const deadline=Date.now()+5000;
+          while(Date.now()<deadline){{
+            if(location.origin==='http://127.0.0.1:{self.http_port}'
+              &&location.pathname==='/'&&document.readyState==='complete'){{
               localStorage.clear(); sessionStorage.clear();
               localStorage.setItem('studio_theme','light'); localStorage.setItem('studio_lang','zh');
               return true;
@@ -462,6 +478,18 @@ class HypitSettingsPrefetchBrowserTests(unittest.TestCase):
         }})()""")
         self.assertTrue(ready, "本地隔离测试源站未就绪")
         self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}/static/api-settings.html"})
+        page_ready = self.evaluate(f"""(async()=>{{
+          const deadline=Date.now()+8000;
+          while(Date.now()<deadline){{
+            if(location.origin==='http://127.0.0.1:{self.http_port}'
+              &&location.pathname==='/static/api-settings.html'
+              &&document.readyState==='complete'
+              &&typeof window.openHypitSettings==='function')return true;
+            await new Promise(resolve=>setTimeout(resolve,25));
+          }}
+          return false;
+        }})()""")
+        self.assertTrue(page_ready, "API 设置页导航/脚本初始化未完成")
         self.assertTrue(self.state.wait_for("provider_get_calls", timeout=8), "API 设置页没有读取假平台配置")
 
     def wait_for_canvas(self, timeout=8):
