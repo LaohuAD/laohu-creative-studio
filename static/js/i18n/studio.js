@@ -3,6 +3,8 @@
     window.StudioI18n.register({
         "studio.ready": { zh: "系统就绪", en: "System Ready" },
         "studio.unifiedConsole": { zh: "统一创作控制台", en: "Unified Art Console" },
+        "nav.script": { zh: "剧本创作", en: "Script Writing" },
+        "nav.novel": { zh: "小说创作", en: "Novel Writing" },
         "studio.describeVision": { zh: "描述你想生成的画面...", en: "Describe your vision..." },
         "studio.engineSource": { zh: "引擎来源", en: "Engine Source" },
         "studio.local": { zh: "本地", en: "Local" },

@@ -6,12 +6,12 @@
     if(!page) return;
 
     const params = new URLSearchParams(location.search);
-    const supportedModules = ['canvas','hypit','article','music'];
+    const supportedModules = ['canvas','hypit','article','music','script','novel'];
     const requestedModule = String(params.has('module') ? params.get('module') : (document.body?.dataset?.studioModule || 'canvas')).trim().toLowerCase();
     const moduleIsValid = supportedModules.includes(requestedModule);
     const module = moduleIsValid ? requestedModule : null;
     const focusedProjectId = params.get('id') || '';
-    const state = { projects: [], loading: true, query: '', blockedProject: null, trashCount: 0, loadError: '', templates: [], templatesLoading: true, templatesError: '', selectedTemplateId: '' };
+    const state = { projects: [], loading: true, query: '', blockedProject: null, trashCount: 0, loadError: '', templates: [], templatesLoading: true, templatesError: '', selectedTemplateId: '', dialogReturn: null };
 
     const moduleCopy = {
         canvas: {
@@ -29,6 +29,14 @@
         music: {
             zh: { title:'音乐创作', description:'管理歌曲作品，接入外部 Agent，并查看歌词、乐谱与音频结果。', listTitle:'音乐项目', empty:'还没有音乐项目', emptyHint:'新建并命名音乐项目，再从项目卡片复制接入指令。创作完成后打开项目查看内容与试听。', newName:'新音乐项目', prepared:'准备创作技能', module:'音乐创作' },
             en: { title:'Music Creation', description:'Manage song projects, connect an external Agent, and review lyrics, scores and audio results.', listTitle:'Music projects', empty:'No music projects yet', emptyHint:'Create and name a music project, then copy its Agent instructions. Open the project to review the content and listen to results.', newName:'New music project', prepared:'Prepare creative skills', module:'Music Creation' }
+        },
+        script: {
+            zh: { title:'剧本创作', description:'按集、场和分段管理剧本正文，通过外部 Agent 完成创作。', listTitle:'剧本创作', empty:'还没有剧本项目', emptyHint:'新建项目后，可通过 Agent 接入整理剧本，再按集、场和分段查看正文。', newName:'新剧本项目', prepared:'准备创作技能', module:'剧本创作' },
+            en: { title:'Script Writing', description:'Organise scripts by episode, scene and segment, and create them with an external Agent.', listTitle:'Script Writing', empty:'No script projects yet', emptyHint:'Create a project, connect an Agent to organise the script, then review it by episode, scene and segment.', newName:'New script project', prepared:'Prepare creative skills', module:'Script Writing' }
+        },
+        novel: {
+            zh: { title:'小说创作', description:'按卷、章阅读小说，记录人物与世界设定，通过外部 Agent 接续创作。', listTitle:'小说创作', empty:'还没有小说项目', emptyHint:'新建项目后，可从 Agent 接入读取已有正文、设定与创作记录，再继续作品。', newName:'新小说项目', prepared:'准备创作技能', module:'小说创作' },
+            en: { title:'Novel Writing', description:'Read novels by volume and chapter, keep character and world notes, and continue with an external Agent.', listTitle:'Novel Writing', empty:'No novel projects yet', emptyHint:'Create a project, then connect an Agent to read saved chapters, settings and handoff notes before continuing.', newName:'New novel project', prepared:'Prepare creative skills', module:'Novel Writing' }
         }
     };
 
@@ -154,6 +162,8 @@
         page.querySelectorAll('[data-module-label="hypit"]').forEach(node => { node.textContent = L('Hypit克隆','Hypit Clone'); });
         page.querySelectorAll('[data-module-label="article"]').forEach(node => { node.textContent = L('公众号文章','Articles'); });
         page.querySelectorAll('[data-module-label="music"]').forEach(node => { node.textContent = L('音乐创作','Music Creation'); });
+        page.querySelectorAll('[data-module-label="script"]').forEach(node => { node.textContent = L('剧本创作','Script Writing'); });
+        page.querySelectorAll('[data-module-label="novel"]').forEach(node => { node.textContent = L('小说创作','Novel Writing'); });
         const tabs = page.querySelector('[data-role="module-tabs"]');
         if(tabs) tabs.setAttribute('aria-label', L('创作模块','Creative modules'));
         setText('studioModuleTitle', text.title);
@@ -198,9 +208,11 @@
         const isHypit = project.module === 'hypit';
         const isArticle = module === 'article' || project.module === 'article';
         const isMusic = project.module === 'music';
+        const isScript = project.module === 'script';
+        const isNovel = project.module === 'novel';
         const selected = focusedProjectId && focusedProjectId === project.id ? ' selected' : '';
-        const icon = isHypit ? 'flask-conical' : isArticle ? 'notebook-pen' : isMusic ? 'music-2' : 'layers-3';
-        const utility = isHypit || isArticle || isMusic ? '' : `<div class="studio-card-utilities">
+        const icon = isHypit ? 'flask-conical' : isArticle ? 'notebook-pen' : isMusic ? 'music-2' : isScript ? 'scroll-text' : isNovel ? 'book-open' : 'layers-3';
+        const utility = isHypit || isArticle || isMusic || isScript || isNovel ? '' : `<div class="studio-card-utilities">
                 <button class="studio-card-utility" type="button" data-card-action="export-json" data-project-id="${escapeHtml(project.id)}">${escapeHtml(copy().exportJson)}</button>
                 <button class="studio-card-utility" type="button" data-card-action="export-zip" data-project-id="${escapeHtml(project.id)}">${escapeHtml(copy().exportZip)}</button>
             </div>`;
@@ -370,7 +382,7 @@
     }
 
     function navigatePopup(popup, project){
-        const path = project?.url || (module === 'article' ? `/static/article.html?id=${encodeURIComponent(project?.id || '')}` : module === 'music' ? `/static/music.html?id=${encodeURIComponent(project?.id || '')}` : '');
+        const path = module === 'script' ? `/static/script.html?id=${encodeURIComponent(project?.id || '')}` : module === 'novel' ? `/static/novel.html?id=${encodeURIComponent(project?.id || '')}` : project?.url || (module === 'article' ? `/static/article.html?id=${encodeURIComponent(project?.id || '')}` : module === 'music' ? `/static/music.html?id=${encodeURIComponent(project?.id || '')}` : '');
         if(!path) return;
         const target = new URL(path, location.origin).href;
         if(popup){
@@ -436,7 +448,17 @@
     function renderGuide(){
         let guide = document.getElementById('studioProjectGuide');
         if(!guide){guide=document.createElement('section');guide.id='studioProjectGuide';guide.className='studio-project-guide';document.querySelector('.studio-project-toolbar').after(guide);}
-        const steps = module === 'music' ? [
+        const steps = module === 'script' ? [
+            [L('创建剧本项目','Create a script project'),L('点击“新建项目”并命名；剧本正文会保存在这个项目中。','Choose New project and name it. Script content is saved in this project.')],
+            [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('按需把准备说明交给外部 Agent；检查和更新都由你确认。准备过程不会创作剧本。','Share the preparation guide with an external Agent when needed. You decide whether to update anything; preparation does not write the script.')],
+            [L('接入 Agent','Connect an Agent'),L('从项目卡片复制接入说明。Agent 可按你的要求整理完整剧本、集、场和分段。','Copy the project instructions from its card. The Agent can organise the script, episodes, scenes and segments when you ask.')],
+            [L('阅读剧本','Read the script'),L('打开项目后按目录选择完整剧本、某集、某场或某段；只有明确的场／段可以进入文本编辑。','Open the project and choose the full script, an episode, scene or segment. Only a specific scene or segment can be edited as source text.')]
+        ] : module === 'novel' ? [
+            [L('创建小说项目','Create a novel project'),L('点击“新建项目”并命名；卷章正文、设定和创作记录会归在同一项目。','Choose New project and name it. Chapters, settings and handoff notes stay in one project.')],
+            [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('把准备说明交给外部 Agent，按需检查可用技能；是否更新由你确认。','Share the preparation guide with an external Agent to check available skills. You decide whether to update anything.')],
+            [L('接续已有作品','Continue the saved work'),L('从项目卡片复制 Agent 接入说明。新对话可重读已保存的卷章、设定和创作记录。','Copy the project instructions from its card. A new conversation can reread saved chapters, settings and handoff notes.')],
+            [L('查看设定版本','Review setting versions'),L('故事阶段版本与文字修订分开保存；浏览版本不会自动认定它适用于当前章节。','Story-stage versions and text revisions are separate. Viewing a version does not mark it as applicable to the current chapter.')]
+        ] : module === 'music' ? [
             [L('创建项目','Create a project'),L('点击“新建项目”并命名；项目会保存在音乐项目列表中。','Choose New project and name it. The project stays in the music list.')],
             [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('点击“准备创作技能”，把共享准备说明交给外部 Agent；它会检查官方仓库和入口，发现更新先告知并询问。此操作不会自动开始创作。','Choose Prepare creative skills to share the common preparation guide with your Agent. It checks the official repository and entry, and asks before updating. This does not start creative work.')],
             [L('接入外部 Agent','Connect an external Agent'),L('从项目卡片复制该歌曲的接入说明。Agent 负责创作歌词、歌名、乐谱和风格内容。','Copy the project-specific instructions from its card. Your Agent creates titles, lyrics, style and scores.')],
@@ -466,12 +488,13 @@
             dialog.innerHTML='<h2></h2><p></p><textarea readonly></textarea><div><button data-copy class="studio-primary-button"></button><button data-close class="studio-secondary-button"></button></div>';
             document.body.append(dialog);
             dialog.querySelector('[data-close]').onclick=()=>dialog.close();
+            dialog.addEventListener('close',()=>{const target=state.dialogReturn;state.dialogReturn=null;target?.focus?.();});
         }
         dialog.querySelector('h2').textContent=title;dialog.querySelector('p').textContent=intro;
         dialog.querySelector('textarea').value=value;dialog.querySelector('textarea').setAttribute('aria-label',title);
         const button=dialog.querySelector('[data-copy]');button.textContent=L('复制指令','Copy instructions');
         button.onclick=async()=>{button.textContent=await copyText(value)?L('已复制，请粘贴给 Agent','Copied — paste into your Agent'):L('请选中上方内容复制','Select the text above to copy');};
-        dialog.querySelector('[data-close]').textContent=L('关闭','Close');dialog.showModal();
+        dialog.querySelector('[data-close]').textContent=L('关闭','Close');state.dialogReturn=document.activeElement;dialog.showModal();dialog.querySelector('textarea').focus();dialog.querySelector('textarea').select();
     }
 
     async function connectProject(project){

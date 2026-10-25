@@ -1018,5 +1018,151 @@ class HypitDynamicInputChainTests(unittest.IsolatedAsyncioTestCase):
                                 for item in result_records))
 
 
+class ManuscriptGenerationRunnerIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_script_optimization_uses_real_flow_runner_and_managed_text_collector(self):
+        """真实 runner/ProjectStorage/文本收集器串接，供应商只由假回调替代。"""
+        from studio_manuscript_generation import StudioManuscriptGenerationBridge
+        from studio_manuscripts import ScriptCommand, StudioManuscriptStore
+        from studio_projects import StudioProjectStore
+        from pydantic import TypeAdapter
+
+        class NoCanvasAdapter:
+            def list(self): return []
+            def get(self, _project_id): return None
+            def create(self, _name): raise AssertionError("script fixture cannot create a canvas")
+            def rename(self, *_args, **_kwargs): raise AssertionError("script fixture cannot rename a canvas")
+            def delete(self, *_args, **_kwargs): raise AssertionError("script fixture cannot delete a canvas")
+
+        validation_root = ROOT / ".cache" / "validation" / "manuscript-generation"
+        validation_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="script-flow-", dir=validation_root) as temp_root:
+            projects = StudioProjectStore(temp_root, NoCanvasAdapter())
+            project = projects.create("script", "isolated bridge test")
+            manuscripts = StudioManuscriptStore(temp_root, projects)
+            command_adapter = TypeAdapter(ScriptCommand)
+            episode_receipt = manuscripts.execute(project["id"], "script", command_adapter.validate_python({
+                "request_id": "create-episode", "expected_revision": 1,
+                "action": "create_episode", "args": {"title": "Episode", "client_ref": "episode-ref"},
+            }))
+            episode_id = episode_receipt["created_ids"]["episode-ref"]
+            original_body = "第一段原文\n---\n第二段原文"
+            scene_receipt = manuscripts.execute(project["id"], "script", command_adapter.validate_python({
+                "request_id": "create-scene", "expected_revision": episode_receipt["revision"],
+                "action": "create_scene", "args": {
+                    "episode_id": episode_id, "title": "Scene", "body_markdown": original_body,
+                    "client_ref": "scene-ref",
+                },
+            }))
+            scene_id = scene_receipt["created_ids"]["scene-ref"]
+            source = manuscripts.generation_source(project["id"], "script", "scene", scene_id)
+            self.assertEqual(source["body_markdown"], original_body)
+            self.assertEqual(source["source_revision"], 1)
+            self.assertEqual(source["project_revision"], 3)
+
+            settings_canvas = {
+                "id": "script-settings", "title": "isolated script settings", "kind": "smart",
+                "revision": 7,
+                "nodes": [
+                    {"id": "text-generator", "type": "smart-text-generator", "title": "text source",
+                     "promptDraftText": "", "promptDraftHtml": "",
+                     "runSettings": {"textProvider": "fixture-provider", "textModel": "fixture-model",
+                                     "capabilityParameters": {"fixture-model": {"temperature": 0.2}}}},
+                    {"id": "text-output", "type": "smart-hypit-output", "hypitSlot": "text"},
+                ],
+                "connections": [{"from": "text-generator", "to": "text-output", "kind": "input"}],
+                "settings": {}, "viewport": {"x": 0, "y": 0, "scale": 1}, "logs": [],
+            }
+
+            class SettingsService:
+                def ensure_canvas(self):
+                    return copy.deepcopy(settings_canvas)
+
+            storage = ProjectStorage(temp_root)
+            storage.ensure_layout()
+            observed_provider_requests = []
+
+            async def preflight(_canvas, node, request, _request_id):
+                self.assertEqual(node["type"], "smart-text-generator")
+                self.assertEqual(request["kind"], "text")
+                return {"fixture_preflight": True}
+
+            async def fake_provider(request):
+                observed_provider_requests.append(copy.deepcopy(request))
+                return {"text": "\n优化后的第一段\n---\n优化后的第二段\n"}
+
+            runner = HypitFlowRunner(
+                load_canvas=lambda canvas_id: copy.deepcopy(settings_canvas)
+                    if canvas_id == "script-settings" else None,
+                storage=storage,
+                prepare_node_request=main.studio_hypit_prepare_node_request,
+                preflight_node=preflight,
+                execute_node=main.studio_hypit_execute_node,
+                collect_results=main.studio_hypit_collect_results,
+                notify=lambda *_args: None,
+                lock=threading.RLock(),
+                now_ms=lambda: 1,
+                canvas_id="script-settings",
+                module_id="script",
+            )
+            bridge = StudioManuscriptGenerationBridge(
+                module="script", manuscript_store=manuscripts, runner=runner,
+                storage=storage, settings_service=SettingsService(),
+            )
+            payload = {
+                "scope": "scene", "source_id": scene_id,
+                "expected_source_revision": source["source_revision"],
+                "expected_source_sha256": source["source_sha256"],
+                "output_node_id": "text-output", "client_operation_id": "scene-optimize-operation",
+                "request": {"prompt": "让两段动作更清楚", "parameters": {"temperature": 0.7}},
+                "base_revision": source["project_revision"],
+            }
+            with mock.patch.object(main, "PROJECT_STORAGE", storage), \
+                 mock.patch.object(main, "studio_generate", side_effect=fake_provider):
+                submitted = await bridge.submit(project["id"], payload)
+                run_id = submitted["run_id"]
+                await asyncio.wait_for(runner._active[run_id], timeout=5)
+                preview = await bridge.get(project["id"], run_id)
+
+                self.assertEqual(submitted["settings_revision"], 7)
+                self.assertEqual(submitted["accepted_revision"], 3)
+                self.assertEqual(preview["status"], "succeeded", preview)
+                self.assertEqual(preview["output_kind"], "text")
+                self.assertEqual(len(observed_provider_requests), 1)
+                provider_request = observed_provider_requests[0]
+                self.assertEqual(provider_request["kind"], "text")
+                self.assertIn("让两段动作更清楚", provider_request["prompt"])
+                self.assertIn(original_body, provider_request["prompt"])
+                self.assertEqual(provider_request["parameters"], {"temperature": 0.7})
+                self.assertEqual(manuscripts.generation_source(project["id"], "script", "scene", scene_id)["body_markdown"], original_body,
+                                 "preview must not mutate the saved source")
+                self.assertEqual(len(preview["result_ids"]), 1)
+                result_id = preview["result_ids"][0]
+                managed = storage.get_result(result_id)
+                result_path = storage.result_path(result_id)
+                self.assertEqual(managed["kind"], "text")
+                optimized_body = "\n优化后的第一段\n---\n优化后的第二段\n"
+                self.assertEqual(result_path.read_text(encoding="utf-8"), optimized_body,
+                                 "shared text collection must preserve leading/trailing whitespace")
+                run = storage.list_runs(canvas_id="script-settings")[0]
+                self.assertEqual(run["standard_request"]["base_revision"], 7,
+                                 "runner base_revision must pin settings graph, not project revision 3")
+
+                applied = bridge.apply(project["id"], run_id, {"result_id": result_id, "request_id": "apply-scene-result"})
+                self.assertEqual(applied["status"], "succeeded")
+                current = manuscripts.generation_source(project["id"], "script", "scene", scene_id)
+                self.assertEqual(current["body_markdown"], optimized_body)
+                self.assertEqual(current["source_revision"], 2)
+
+                late_edit = "后续编辑第一段\n---\n后续编辑第二段"
+                manuscripts.execute(project["id"], "script", command_adapter.validate_python({
+                    "request_id": "later-scene-edit", "expected_revision": applied["revision"],
+                    "action": "update_scene", "args": {"scene_id": scene_id, "body_markdown": late_edit},
+                }))
+                replay = bridge.apply(project["id"], run_id, {"result_id": result_id, "request_id": "apply-scene-result"})
+                self.assertEqual(replay, applied)
+                self.assertEqual(manuscripts.generation_source(project["id"], "script", "scene", scene_id)["body_markdown"], late_edit,
+                                 "idempotent apply replay must not overwrite a later edit")
+
+
 if __name__ == "__main__":
     unittest.main()

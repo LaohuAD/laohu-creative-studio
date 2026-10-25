@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
     <link rel="icon" href="/static/images/logo.png" type="image/png">
-    <title>文章</title>
+    <title>公众号文章</title>
     <script>
         (function(){try{
             var key='studio_theme_preference_v1', ids=['studio-violet','sunlit','vermilion','forest','classic'];
@@ -32,7 +32,7 @@
 <body>
     <div class="article-app">
         <header class="article-toolbar">
-            <div class="article-title-block"><span class="article-kicker">公众号文章</span><h1 id="articleTitle">正在读取文章…</h1></div>
+            <div class="article-title-block"><h1 id="articleTitle">公众号文章</h1></div>
             <div class="article-toolbar-actions">
                 <button id="articleRefreshButton" class="article-icon-button" type="button" title="重新读取文章" aria-label="重新读取文章"><i data-lucide="refresh-cw" aria-hidden="true"></i></button>
                 <button id="articleLanguageButton" class="article-icon-button" type="button" title="切换语言" aria-label="切换语言">中</button>
@@ -41,38 +41,130 @@
         </header>
 
         <main class="article-main">
-            <section class="article-status" data-article-status role="status" aria-live="polite">正在读取文章…</section>
-            <section class="article-content-block article-title-section" aria-labelledby="articleTitleSectionHeading">
-                <div class="article-block-heading"><div><span>01 · TITLE</span><h2 id="articleTitleSectionHeading">标题</h2></div><div class="article-title-actions"><button id="articleCopyTitleButton" class="article-secondary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制标题</span></button><span id="articleTitleFeedback" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span></div></div>
-                <h3 id="articleSelectedTitle" class="article-selected-title">—</h3>
-                <div id="articleTitleChoices" class="article-title-choices" aria-label="标题版本"></div>
-            </section>
+            <section class="article-status" data-article-status role="status" aria-live="polite" hidden></section>
+            <div class="article-workspace">
+                <details id="articleManagementDrawer" class="article-management-drawer" open>
+                    <summary id="articleManagementSummary" class="article-management-summary">文章管理与历史</summary>
+                    <aside class="article-layout-rail" aria-label="文章管理与排版">
+                        <section class="article-management-section article-version-group" aria-labelledby="articleTitleVersionsHeading">
+                            <div class="article-section-heading"><h2 id="articleTitleVersionsHeading">标题</h2></div>
+                            <div class="article-version-current"><strong id="articleTitleVersionCurrent">—</strong><small id="articleTitleVersionCurrentMeta"></small></div>
+                            <details id="articleTitleHistoryDetails" class="article-version-history-details">
+                                <summary class="article-version-history-summary"><span id="articleTitleHistoryHeading">标题历史</span><span id="articleTitleHistoryCount" class="article-history-count"></span></summary>
+                                <div id="articleTitleHistory" class="article-version-history" aria-label="标题历史"></div>
+                            </details>
+                        </section>
 
-            <section class="article-content-block article-cover-section" aria-labelledby="articleCoverSectionHeading">
-                <div class="article-block-heading"><div><span>02 · COVER</span><h2 id="articleCoverSectionHeading">封面</h2></div><div class="article-cover-actions"><button id="articleCopyCoverButton" class="article-secondary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制图片</span></button><button id="articleDownloadCoverButton" class="article-secondary-button" type="button" disabled><i data-lucide="download" aria-hidden="true"></i><span>下载图片</span></button><span id="articleCoverStatus" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span></div></div>
-                <p id="articleCoverHint" class="article-block-hint">选择本次要采用的封面，可复制或下载原图。</p>
-                <div id="articleCoverHistory" class="article-cover-history"></div>
-            </section>
+                        <section class="article-management-section article-version-group article-current-cover-section" aria-labelledby="articleCoverCurrentHeading">
+                            <div class="article-section-heading"><h2 id="articleCoverCurrentHeading">封面</h2></div>
+                            <button id="articleCurrentCoverPreview" class="article-current-cover-preview" type="button" data-cover-preview-id="" aria-label="放大预览当前封面" hidden>
+                                <img id="articleCoverSummaryImage" alt="" hidden>
+                            </button>
+                            <span id="articleCoverSummaryEmpty" class="article-current-cover-empty">暂未选择封面</span>
+                            <small id="articleCoverVersionCurrentMeta" class="article-version-current-meta"></small>
+                            <p id="articleCoverHint" class="article-block-hint article-visually-hidden">点击图片可放大预览；当前选择的封面可复制或下载。</p>
+                            <div class="article-cover-actions">
+                                <button id="articleCopyCoverButton" class="article-secondary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制图片</span></button>
+                                <button id="articleDownloadCoverButton" class="article-secondary-button" type="button" disabled><i data-lucide="download" aria-hidden="true"></i><span>下载图片</span></button>
+                                <span id="articleCoverStatus" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span>
+                            </div>
+                        </section>
 
-            <section class="article-content-block article-body-section" aria-labelledby="articleBodySectionHeading">
-                <div class="article-block-heading"><div><span>03 · BODY</span><h2 id="articleBodySectionHeading">正文</h2></div><div class="article-body-actions"><button id="articleCopyButton" class="article-primary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制正文</span></button><button id="articleFullPreviewButton" class="article-secondary-button" type="button" aria-pressed="false"><i data-lucide="maximize-2" aria-hidden="true"></i><span>完整预览</span></button><button id="articleExportButton" class="article-secondary-button" type="button" disabled><i data-lucide="download" aria-hidden="true"></i><span>导出 HTML</span></button><span id="articleCopyFeedback" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span></div></div>
-                <div class="article-workspace">
-                <aside class="article-layout-rail" aria-labelledby="articleLayoutsTitle">
-                    <div class="article-section-heading"><span>LAYOUTS</span><h2 id="articleLayoutsTitle">已有排版</h2></div>
-                    <p id="articleLayoutHint" class="article-layout-hint">选择已保存的排版。历史版本可预览；只有与当前原文匹配的排版可以复制或导出。</p>
-                    <div id="articleThemeChoices" class="article-theme-choices"></div>
-                </aside>
+                        <details id="articleCoverDetails" class="article-management-section article-meta-details article-cover-history-details">
+                            <summary class="article-meta-summary">
+                                <span class="article-meta-summary-label" id="articleCoverSectionHeading">封面历史</span><span id="articleCoverHistoryCount" class="article-history-count"></span>
+                            </summary>
+                            <div class="article-meta-content">
+                                <div id="articleCoverHistory" class="article-cover-history"></div>
+                            </div>
+                        </details>
 
-                <section class="article-preview-region" aria-label="文章预览">
-                    <div class="article-preview-toolbar"><div><span id="articlePreviewThemeName">—</span><small id="articlePreviewMeta"></small></div><span id="articlePreviewBadge" class="article-preview-badge">正在读取</span><button id="articleFullPreviewClose" class="article-icon-button" type="button" hidden aria-label="关闭完整预览"><i data-lucide="x" aria-hidden="true"></i></button></div>
-                    <p id="articlePreviewHistoryNote" class="article-preview-history-note" hidden>当前显示的是基于旧原文保存的历史排版；可查看，但不能复制或导出为当前版本。</p>
-                    <div id="articlePreviewEmpty" class="article-preview-empty" hidden></div>
-                    <iframe id="articlePreviewFrame" title="文章正文预览" sandbox="allow-same-origin" hidden></iframe>
-                    <details class="article-source-details" id="articleSourceDetails"><summary>查看 Agent 提供的 Markdown 原文</summary><pre id="articleSourceMarkdown"></pre></details>
-                    <div class="article-image-note" id="articleImageNote">复制后请在公众号编辑器中检查图片显示与样式。</div>
+                        <section class="article-management-section article-version-group" aria-labelledby="articleBodyVersionsHeading">
+                            <div class="article-section-heading"><h2 id="articleBodyVersionsHeading">正文</h2></div>
+                            <div class="article-version-current article-body-current-summary">
+                                <strong id="articleBodyVersionCurrent">—</strong>
+                            </div>
+                            <details id="articleBodyHistoryDetails" class="article-version-history-details">
+                                <summary class="article-version-history-summary"><span id="articleBodyHistoryHeading">正文历史</span><span id="articleBodyHistoryCount" class="article-history-count"></span></summary>
+                                <div id="articleBodyHistory" class="article-version-history" aria-label="正文历史"></div>
+                            </details>
+                        </section>
+
+                        <section class="article-management-section article-layout-section" aria-labelledby="articleLayoutsTitle">
+                            <div class="article-section-heading"><h2 id="articleLayoutsTitle">主题</h2></div>
+                            <p id="articleLayoutHint" class="article-layout-hint">已保存的排版主题。</p>
+                            <div id="articleThemeChoices" class="article-theme-choices"></div>
+                        </section>
+                    </aside>
+                </details>
+
+                <section class="article-body-section" aria-labelledby="articleSelectedTitle">
+                    <div class="article-title-toolbar">
+                        <details id="articleTitleDetails" class="article-current-title-picker">
+                            <summary class="article-current-title-summary" aria-label="选择标题版本">
+                                <span id="articleSelectedTitle" class="article-selected-title" role="heading" aria-level="2">—</span>
+                                <i data-lucide="chevron-down" aria-hidden="true"></i>
+                            </summary>
+                            <div class="article-title-choice-panel">
+                                <span class="article-visually-hidden" id="articleTitleSectionHeading">标题版本</span>
+                                <span id="articleTitleSummaryValue" class="article-visually-hidden" aria-hidden="true">—</span>
+                                <div id="articleTitleChoices" class="article-title-choices" aria-label="标题版本"></div>
+                            </div>
+                        </details>
+                        <div class="article-body-actions">
+                            <button id="articleCopyTitleButton" class="article-secondary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制标题</span></button><span id="articleTitleFeedback" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span>
+                            <button id="articleCopyButton" class="article-primary-button" type="button" disabled><i data-lucide="copy" aria-hidden="true"></i><span>复制正文</span></button>
+                            <button id="articleFullPreviewButton" class="article-secondary-button" type="button" aria-pressed="false"><i data-lucide="maximize-2" aria-hidden="true"></i><span>完整预览</span></button>
+                            <button id="articleExportButton" class="article-secondary-button" type="button" disabled><i data-lucide="download" aria-hidden="true"></i><span>导出</span></button>
+                            <span id="articleCopyFeedback" class="article-action-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></span>
+                            <p id="articleCompareActionHint" class="article-visually-hidden">对比只读；切回单篇排版预览后可复制或导出正文。</p>
+                        </div>
+                    </div>
+                    <div class="article-body-subtoolbar">
+                        <h2 id="articleBodySectionHeading">正文</h2>
+                        <div id="articleBodyViewTabs" class="article-body-view-tabs" role="tablist" aria-label="正文视图">
+                            <button id="articlePreviewTab" class="article-view-tab" type="button" role="tab" aria-selected="true" aria-controls="articlePreviewPanel">排版预览</button>
+                            <button id="articleCompareTab" class="article-view-tab" type="button" role="tab" aria-selected="false" aria-controls="articleComparePanel">正文对比</button>
+                        </div>
+                    </div>
+
+                    <div class="article-preview-region" aria-label="文章预览">
+                        <section id="articlePreviewPanel" class="article-body-view" role="tabpanel" aria-labelledby="articlePreviewTab">
+                            <div class="article-preview-toolbar"><div><span id="articlePreviewThemeName">—</span><details class="article-revision-details"><summary id="articleRevisionSummary">详情</summary><small id="articlePreviewMeta"></small></details></div><span id="articlePreviewBadge" class="article-preview-badge">正在读取</span><button id="articleFullPreviewClose" class="article-icon-button" type="button" hidden aria-label="关闭完整预览"><i data-lucide="x" aria-hidden="true"></i></button></div>
+                            <p id="articlePreviewHistoryNote" class="article-preview-history-note" hidden>当前显示的是历史版本；可以查看，但不能复制或导出为当前版本。</p>
+                            <div id="articlePreviewEmpty" class="article-preview-empty" hidden></div>
+                            <iframe id="articlePreviewFrame" title="文章正文预览" sandbox="allow-same-origin" hidden></iframe>
+                            <div class="article-image-note" id="articleImageNote">复制后请在公众号编辑器中检查图片显示与样式。</div>
+                        </section>
+                        <section id="articleComparePanel" class="article-compare-panel" role="tabpanel" aria-labelledby="articleCompareTab" aria-describedby="articleCompareActionHint" hidden>
+                            <div class="article-compare-scroll">
+                                <div class="article-compare-grid">
+                                    <section class="article-compare-lane is-target" data-compare-lane="left" aria-label="左栏正文对比">
+                                        <button class="article-compare-lane-heading" type="button" data-compare-select="left" aria-pressed="true">
+                                            <span data-compare-side-label>左栏</span><strong data-compare-version-label>当前排版</strong>
+                                        </button>
+                                        <div class="article-compare-lane-content" data-compare-content="left">
+                                            <div class="article-compare-empty" data-compare-empty="left" hidden>当前没有可读取的正文排版。</div>
+                                            <iframe id="articleCompareLeftFrame" title="左栏正文对比预览" sandbox="allow-same-origin" hidden></iframe>
+                                            <p class="article-compare-lane-status" data-compare-status="left" role="status" aria-live="polite" hidden></p>
+                                        </div>
+                                    </section>
+                                    <section class="article-compare-lane" data-compare-lane="right" aria-label="右栏正文对比">
+                                        <button class="article-compare-lane-heading" type="button" data-compare-select="right" aria-pressed="false">
+                                            <span data-compare-side-label>右栏</span><strong data-compare-version-label>选择一个历史正文</strong>
+                                        </button>
+                                        <div class="article-compare-lane-content" data-compare-content="right">
+                                            <div class="article-compare-empty" data-compare-empty="right">先选择右栏，再点击左侧正文历史。</div>
+                                            <iframe id="articleCompareRightFrame" title="右栏正文对比预览" sandbox="allow-same-origin" hidden></iframe>
+                                            <p class="article-compare-lane-status" data-compare-status="right" role="status" aria-live="polite" hidden></p>
+                                        </div>
+                                    </section>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
                 </section>
-                </div>
-            </section>
+            </div>
         </main>
     </div>
     <dialog id="articleCoverLightbox" class="article-cover-lightbox" aria-labelledby="articleCoverLightboxTitle">

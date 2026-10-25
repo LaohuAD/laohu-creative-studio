@@ -365,6 +365,15 @@ class StudioArticleGenerationTests(unittest.TestCase):
                 self.assertEqual(cover["mime"], "image/png")
                 self.assertEqual(latest["article"]["selected_cover_variant_id"], cover["id"])
                 self.assertEqual(execute_calls, [("article-image", "生成一张测试封面")])
+                version_history = client.get(f"{article_path}/versions")
+                self.assertEqual(version_history.status_code, 200, version_history.text)
+                cover_versions = next(
+                    stream["versions"] for stream in version_history.json()["streams"]
+                    if stream["kind"] == "cover"
+                )
+                self.assertEqual(len(cover_versions), 1)
+                self.assertEqual(cover_versions[0]["origin"], "generation")
+                self.assertTrue(cover_versions[0]["active"])
 
                 wrong_article = client.get(
                     f"/api/studio/articles/{other_project['id']}/generations/{run_id}"

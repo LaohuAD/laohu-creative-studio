@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
-from studio_modules import studio_module_label
+from studio_modules import studio_module_identity, studio_module_label
 
 try:  # FastAPI 在运行环境里一定存在；缺失时本模块仍可用于纯逻辑测试
     from fastapi import Request
@@ -126,6 +126,31 @@ def music_slot_descriptors() -> List[Dict[str, Any]]:
             "runtime_parameter_overrides": "schema_allowlist",
         })
     return descriptors
+
+
+def manuscript_slot_descriptors(module_id: str) -> List[Dict[str, Any]]:
+    """剧本和小说的模块图仅声明共享文本生成槽位。"""
+    identity = studio_module_identity(module_id)
+    if not identity or identity.settings_canvas_kind != "module-generation":
+        return []
+    return [
+        {
+            "id": slot,
+            "module_id": module_id,
+            "selection_policy": "fixed",
+            "node_type": "text_generation",
+            "capability_name": "text-generation",
+            "label": {"zh": "文本", "en": "Text"},
+            "expected_output": dict(_OUTPUT_MEDIA["text_generation"]),
+            # 候选仍来自共享启用清单和文本节点契约；不复制模块专属模型表。
+            "allowed_operations": [],
+            "required_input_scenarios": list(_SLOT_SCENARIOS["text"]),
+            "supported_input_roles": list(_SLOT_INPUT_ROLES["text"]),
+            "runtime_model_override": "allow",
+            "runtime_parameter_overrides": "schema_allowlist",
+        }
+        for slot in identity.settings_canvas_slots if slot == "text"
+    ]
 
 
 def article_slot_descriptors() -> List[Dict[str, Any]]:
@@ -252,6 +277,22 @@ def module_descriptors() -> Dict[str, Dict[str, Any]]:
             "selection_policy": "fixed",
             "executor_id": "music-settings-canvas-execution",
             "slots": music_slot_descriptors(),
+        },
+        "script": {
+            "schema_version": MODULE_SCHEMA_VERSION,
+            "module_id": "script",
+            "label": studio_module_label("script"),
+            "selection_policy": "fixed",
+            "executor_id": "script-settings-canvas-execution",
+            "slots": manuscript_slot_descriptors("script"),
+        },
+        "novel": {
+            "schema_version": MODULE_SCHEMA_VERSION,
+            "module_id": "novel",
+            "label": studio_module_label("novel"),
+            "selection_policy": "fixed",
+            "executor_id": "novel-settings-canvas-execution",
+            "slots": manuscript_slot_descriptors("novel"),
         },
     }
 

@@ -246,6 +246,70 @@ python canvas_cli.py status CANVAS_ID COMMAND_ID
 
 服务端生成任务：`GET /api/studio/tasks/{id}` 或节点 `creationTasks` 中读取真实状态。遇到 `recoverable` 先查原平台任务，不能把它当成未提交自动重试。
 
+## 公众号文章历史版本 API
+
+文章 ID 使用项目 ID。`GET /api/studio/articles/{project_id}/versions` 读取版本清单，返回 `streams` 三类：`title`、`cover`、`body`；GET 只读元数据，不创建新版本。用 `GET /api/studio/articles/{project_id}/versions/{kind}/{version_id}` 读取某个历史快照。响应 `snapshot` 中，标题包含 `title`，封面包含共享素材/结果 ID，正文的正式版本包含对应 HTML 的主题 `layouts`；内部兼容快照不作为用户源稿历史。布局 HTML 通过 `layouts[].body_html` 返回；只有 `available:true` 且哈希校验成功时才会提供 HTML。响应不会返回文件路径。
+
+当前文章 `variants[theme_id].valid` / `available` 表示该已保存 HTML 的共享文件存在、内容哈希匹配、通过 HTML 安全校验且主题 ID 仍有效。`source_matches` 与 `catalog_matches` 单独说明它保存时的完整文章来源指纹和主题目录指纹是否仍匹配当前状态；它们是来源信息，不会因标题或 Markdown 改动而使一份仍被选中的、安全可读的已保存 HTML 失效。历史布局的 `valid_for_current` 仍是完整来源与目录指纹匹配标记；历史预览是否可读看 `available`。不得据此重写 HTML、更新其来源指纹，或把历史 HTML 伪装成当前 Markdown 的新排版。
+
+版本清单还提供轻量预览字段，不需要为了画版本列表逐项读取完整快照：封面版本的 `public_media` 是 `{url,name,mime,available}`，`url` 使用共享素材/结果稳定 API 地址；正文版本使用 `layout_excerpt` 和 `preview_theme_id`。摘要最多 180 个字符，布局摘要只从路径与内容哈希验证通过且符合文章 HTML guard 的排版中提取纯文本；若没有可读布局，`preview_theme_id` 为 `null` 且 `layout_excerpt` 为空。标题清单按去除首尾空白后的标题去重，保留所选的活动版本 ID；兼容性历史记录仍由服务端原样保留，GET 不改写原记录或稳定 ID；正文显示编号按去重后的 HTML 顺序给出。
+
+用户页面只展示正式 HTML 正文版本，提供“排版预览／正文对比”。Markdown 仍作为内部创作源稿和兼容快照保留，不展示原文标签或源稿版本管理。源稿单独保存、标题和封面更新、主题选择不新建正式正文版本；清单过滤无 HTML 的源稿记录，按实际 HTML 排版内容去重，忽略来源指纹、时间或内部 ID 的差异。原始历史和稳定 ID 不删除，不从显示的 V1/V2 编号猜测 API ID。
+
+正式 HTML 的生产流程：先读文章、当前 revision 和主题目录，在用户明确要求的创作/排版任务中完成内部源稿、优化、最终 HTML 与自查；然后通过一次 revision 保护的文章 PUT 提交最终 `variants`。草稿、半成品、占位和过程文件不提交到 `variants`。完整创作可同次提交标题、内部 Markdown、封面共享引用与主题；仅排版则保留其他独立字段。服务端验证 HTML、登记共享结果并保存引用，读取文章不会自动生成或重新渲染 HTML。相同 HTML 排版内容复用已有版本，不能换时间或 ID 伪造 V2。源稿后续改变不代表已保存 HTML 自动变化。
+
+采用历史版本使用 `POST /api/studio/articles/{project_id}/versions/{kind}/{version_id}/restore`，JSON 必须有当前 `expected_revision`；标题和封面不传 `body_view`。正文新调用明确传 `body_view:"preview"`，只恢复快照主题排版并按主题合并，不恢复内部 Markdown、标题或封面，不重绑 HTML 来源/主题目录指纹。无法读取或哈希/安全校验失败时返回 409 并保留当前文章。兼容字段 `source_active`、`source_available` 及旧 `source`/省略视图恢复契约只供旧调用，不作为新 UI 或 Agent 的正文历史操作。
+
+正文对比只 GET 历史详情，将其中安全可用的 `layouts[].body_html` 载入用户指定的左/右栏；不调用恢复、PUT 或生成，不改变当前文章和 revision。历史采用回执包含 `article`、`restored` 与 `revision`。重复采用当前版本不产生新内容版本；过期 `expected_revision` 返回 409，重读后合并，不能覆盖新修改。PUT 回执不确定时先重读文章和版本清单确认已保存结果，不换 ID 或提交过程稿重试。
+
+## 剧本与小说项目
+
+剧本和小说是独立的正文管理项目。连接、读取、输入和自动保存不会创建生成任务；工作页另提供显式“文本优化”，只有用户填写要求并提交后才运行一次优化任务，结果先预览，不会自动覆盖作品。剧本页保存剧本正文和集、场、分段；小说页保存卷章正文、设定库和用户明确记录的接续。视频提示词、资产与制作节点留在普通画布。
+
+### 剧本与小说文本优化
+
+API 设置中的剧本和小说分别使用共享画布固定配置图 `script-settings`、`novel-settings`，配置图只提供 `text` 输出，并通过 `GET /api/studio/model-options?module_id=script|novel&slot_id=text` 读取对应文本候选。配置图命令仍使用 `/api/agent/canvases/{canvas_id}/commands`。这些路径和字段以运行服务 `/openapi.json` 为准。
+
+默认沿用文本节点保存并启用的系统提示词，用户本次要求放入 `request.prompt`。不要例行发送通用 `request.system_prompt` 覆盖模块预设；只有用户明确要求临时替换系统提示词时才提供该字段。公众号文章、剧本、小说的预设可阅读副本见项目 `docs/文本优化系统提示词.md`；应用实际使用的是节点已保存的内容。
+
+优化按一个正文对象提交：剧本 `scope` 为 `scene`、`segment` 或 `episode_outline`；小说为 `chapter` 或 `chapter_outline`。对应对象 ID 必须稳定，正文由服务端读取。提交到 `POST /api/studio/scripts/{project_id}/generations` 或小说同形路由时，携带 `scope`、`source_id`、界面已读的 `expected_source_revision` 和 `expected_source_sha256`、`output_node_id`、`client_operation_id`、`request.prompt`（用户的优化要求）以及可选作品 `base_revision`。不要在请求中附带正文或章纲副本。剧本场正文使用服务端派生的 `editable_markdown`；分段来源修订与摘要绑定其所属场。章纲使用独立修订与摘要；空章纲为修订 `0`、摘要空，必须先写入非空章纲才能优化。
+
+用 `GET .../generations/{run_id}` 恢复同一任务，预览受管文本结果；采用时明确调用 `POST .../generations/{run_id}/apply` 并传 `{result_id,request_id}`。服务端会再次核对来源；来源冲突时保留作品正文和优化结果，不覆盖。提交结果未知时查询已知 `run_id`；若尚未取得 ID，只能用相同 `client_operation_id` 和完全相同请求恢复，不能换 ID 重复提交可能收费的任务。正文导出、章纲和画布导入仍只读取原作品内容，不包含优化预览。
+
+### 标准 Markdown 交换格式
+
+剧本与小说的目录仍以各自 Store 中的项目树、正文 blob 和 revision 为真源；Markdown 是显式导入/导出的交换格式，不另存一份平行全书正文，也不把标题当 ID。统一格式版本为 `laohu-manuscript-v1`。导出按当前已保存目录和正文合成，任何目录标题/正文改动都直接反映在下一次导出。
+
+- 完整剧本使用标准 ATX 标题：`# {集标题}`、`## {场标题}`。标题是用户目录原名，不要求含“集”或“场”。解析只把围栏代码之外的 H1/H2 识别为目录；围栏内的 `#` / `##` 文本保留在正文。标题末尾若有空格或制表符后接闭合井号串，导入时从目录名中去掉，导出时使用不带闭合井号的规范标题；井号紧贴标题文字时仍属于名称。`###` 及更深标题属于正文；未带空格的 `#标题` 不属于结构标题，可作为正文。结构标题前不能有未归属正文，集标题后到第一场前也不能有未归属正文。若已保存场次正文含会被解释为目录的一级/二级标题，Markdown 导出返回 409 `MARKDOWN_FORMAT_CONFLICT`，要求先整理为三级及更深正文标题；不会静默丢掉或重复正文。
+- 小说使用 `# {卷标题}`、`## {章标题}`。不自动创建无卷章节；非空导入必须明确给出卷、章层级。目录标题允许重复，导入时始终按出现顺序创建新 ID，不按标题匹配既有对象。空卷和空章可表达。
+- 仅剧本把单独一整行 `---` 当作相邻分段的唯一边界，包括它出现在围栏代码内时；围栏只决定标题扫描，不改变分段规则。它自身不属于任何分段；为了让它独占一行，紧邻分隔线之前的一个 LF 和该分隔线后的 LF 属结构语法，额外空行仍属于原段正文。由此正文为 `A`、`B` 的两段必须写成 `A\n---\nB`，不能写成 `A---\nB`。行首、连续与行尾分隔线都可产生空分段；无分隔线的场次就是一个分段，空场次也是一个空分段。不要在单段编辑框中写入独立 `---`，请在场次 Markdown 正文中编辑边界。
+- 导入接受 LF 或 CRLF，服务端把换行规范为 LF；正文字符和空白除分隔线语法外保留。`GET /api/studio/scripts/{project_id}/markdown` 与小说对应路由返回 `{project_id,revision,format_version,source_sha256,body_markdown}`。导入使用 `POST /api/studio/scripts/{project_id}/commands` 或 novels 对应 commands，载荷为 `{request_id,expected_revision,action:"import_markdown",args:{body_markdown,replace}}`；`replace` 必须是 JSON 布尔值。空项目传 `replace:false`；已有正文或目录必须明确传 `replace:true`。相同 request_id 只可原样重试；过期 revision 返回 409。替换会归档旧目录/正文引用并保存原始规范化导入全文的历史 blob，然后以新 ID 创建新树，不会按标题猜测身份。
+- 完整导入原文可用导入命令回执中的 `source_sha256` 调用 `/api/studio/scripts/{project_id}/markdown/history/{source_sha256}` 或小说同一路由读回。历史路由仅返回本项目登记过的 Markdown 导入，不是任意内容哈希读取。
+- 剧本人工添加场次：`create_scene` 自动建立一个覆盖场次正文的分段，空正文也会建立范围为 `0..0` 的空分段。summary 的场次 `segments` 包含实际分段 ID。`create_segment` 接受 `{scene_id,body_markdown,after_segment_id?,title?,client_ref?}`，空正文合法；回执的 `created_ids[client_ref]` 是新分段 ID。修改整场使用 `update_scene` 的 `{scene_id,body_markdown}`，服务端按独立 `---` 重建范围；仅同一位置且正文完全相同的分段保留 ID，其余取得新 ID。不要靠标题或重复文本推断身份。
+- 集纲独立保存于集对象。读当前章纲使用 `GET /api/studio/scripts/{project_id}/episodes/{episode_id}/outline`；读取历史时显式传 `?outline_revision=N`。响应含项目 `revision`、集 ID、`outline_revision`、`current_outline_revision`、`outline_sha256`、`outline_markdown` 和 `selected_revision`。新集没有章纲时修订号为 `0`、正文和摘要为空。写入使用同一项目 commands：`action:"set_episode_outline"`、`args:{episode_id,body_markdown}`，并携带当前 `expected_revision` 与稳定 `request_id`；超时原样恢复同一请求，409 后重读并合并。章纲不是剧本正文：不得把它加入 `/markdown` 导出、正文 `view` 或画布导入快照；场次和分段没有章纲字段。
+
+先使用 `GET /api/studio/projects?module=script` 或 `?module=novel` 找到用户选择的真实项目，再读取 `GET /api/studio/projects/{project_id}/connection?module=script|novel&lang=zh|en`。准备说明 `GET /api/studio/modules/{module}/preparation` 与项目接入分开。Agent 接入文档返回运行实例的真实 Origin 与项目 ID；不得猜测当前标签或按项目标题搜索另一份作品。`/openapi.json` 是运行服务的 action 参数和响应契约真源。
+
+### 剧本正文与导入画布
+
+- 项目目录：`GET /api/studio/scripts/{project_id}`。按范围读取 `GET /api/studio/scripts/{project_id}/view?scope=root|episode|scene|segment&node_id=...`；根范围无需 `node_id`。读取某场正文、哈希和分段：`GET /api/studio/scripts/{project_id}/scenes/{scene_id}`。历史列表支持 `GET /api/studio/scripts/{project_id}/history?cursor=&limit=`；用列表里的 `content_sha256` 调用 `GET /api/studio/scripts/{project_id}/history/{content_sha256}` 可读取本项目历史中的完整草稿。该路由只读取此项目登记过的草稿哈希，不是任意 Blob 查询。正文按不可变内容哈希保存；缺失或校验失败要报告，不能当作空文本。
+- 命令：`POST /api/studio/scripts/{project_id}/commands`，JSON `{request_id,expected_revision,action,args}`；用 `GET /api/studio/scripts/{project_id}/commands/{request_id}` 恢复回执。OpenAPI 对各 action 和 batch 子操作给出准确的 discriminated union；未知字段拒绝。`restore_draft` 的 args 必须是 `{source_sha256,replace_structured:true}`，哈希须来自本项目历史列表。它将指定的历史草稿恢复为当前草稿，同时把当前结构化的集、场、分段及正文引用归档保留，不修改或删除画布节点。相同 `request_id` 只可重试相同载荷；内容变化、过期 revision、分段来源指纹失效时先重读并合并，服务端以 409 阻止覆盖。
+- `start` / `end` 是 Unicode 码点的左闭右开范围，按 Python 字符切片计数。替换分段会一次性更新场次完整正文、后续段偏移与来源指纹；结构化完整草稿必须保留未分段正文。只有已保存且每段文本与场次范围严格匹配的内容可导入。
+- 用户明确要求后才导入：`POST /api/agent/canvases/{canvas_id}/commands`，JSON `{request_id,action:"import_script_segments",args:{script_project_id,source_revision,expected_canvas_revision,scope,mode}}`。`scope` 为 `{"type":"project"}`、`{"type":"episode","ids":[...]}`、`{"type":"scene","ids":[...]}` 或 `{"type":"segments","ids":[...]}`；`mode` 为 `append` 或 `new_snapshot`。只允许普通画布，拒绝 Hypit/Article/Music 等模块配置图。剧本里空分段可保存在正文项目，但当前画布快照导入要求所选每段正文非空；遇到空段服务端返回 409 `EMPTY_SCRIPT_SEGMENT`，应先回到剧本补充正文，不创建伪造的制作进度节点。
+- 一次成功导入是一个画布 revision：写入完整剧本/分段文本素材节点、段与完整剧本的 story 连线、带项目/正文指纹的 `sourceRef`，并将分段以 `production.role="segment"` 登记到创作进度。它是可追溯的单向快照，不双向同步，不运行模型。相同请求可恢复持久回执；相同来源重复 append 去重。已导入源发生变化时 append 返回 409，用户明确选择 `new_snapshot` 才保留旧节点并追加新快照。超时先原样重试相同 `request_id` 和请求，不换 ID 重复导入。
+- 工作流复制/ZIP 导出会带上已选节点对应的来源快照投影。导入时节点 ID 与快照引用一起重映射；源项目的命令回执不转移。复制后来源仍可追溯，但新副本不自动伪装成原导入节点或新增创作进度登记。
+
+### 小说正文、设定和跨对话接续
+
+- 目录和正文：`GET /api/studio/novels/{project_id}`、`GET /api/studio/novels/{project_id}/view?scope=root|volume|chapter&node_id=...`、`GET /api/studio/novels/{project_id}/chapters/{chapter_id}?edit_revision=...`。
+- 设定索引：`GET /api/studio/novels/{project_id}/settings?category_id=&cursor=&limit=`；单项版本：`GET /api/studio/novels/{project_id}/settings/{entry_id}?version_id=&edit_revision=`；编辑历史分页：`GET /api/studio/novels/{project_id}/settings/{entry_id}/revisions?version_id=...&cursor=&limit=`。游标绑定项目 revision，任何写入后应从第一页重新读取。
+- 七个预置分类是人物、关系与势力、场景与地点、道具与资源、能力与规则、世界设定、事件与时间线；分类只是目录。每项是一份自由 Markdown 文档，不能要求名称、性格、能力等属性表单，也不应为了填满分类而自动补造设定。
+- `story_version` / `story_anchor` 表示故事中设定发生的阶段；`edit_revision` 只记录同一阶段文本的修订。确认状态不要求编造时点，可使用 baseline 或 unspecified；事件锚点必须指向本项目真实时间线条目及版本。`basis_refs` 是带 kind 的 union，可引用真实章节指纹或设定版本指纹。新增人物阶段版本要给出真实 based-on 版本和 `expected_sources` 基线指纹。基线失配返回 409。章节依赖指纹变化时 `needs_review=true`，正文及阶段不被自动改写。
+- 新聊天先读 `GET /api/studio/novels/{project_id}/manifest`，再按需读 `GET /api/studio/novels/{project_id}/context?chapter_id=...`。manifest 是紧凑目录，不包含全部历史或正文 blob。context 只展开用户明确置顶及接续文档，其余只是未排序的候选目录；最新版本、版本号和章节顺序都不能代替 Agent 对当前场景的判断。
+- 接续文档：`GET /api/studio/novels/{project_id}/handoff?record_id=&edit_revision=`。没有已保存的接续文档是正常的 `{exists:false,record:null}`，不是读取错误，也不能从旧聊天臆造记录。明确要求后，用 `update_handoff_record` 写入 Markdown；其来源引用与正文修订分别保留历史。全文搜索：`GET /api/studio/novels/{project_id}/search?q=...&scope=all|chapters|settings|handoff&cursor=&limit=&include_drafts=false`。默认排除 draft 设定版本；只有明确传 `include_drafts=true` 才会纳入草稿。
+- 小说命令：`POST /api/studio/novels/{project_id}/commands`，JSON `{request_id,expected_revision,action,args,expected_sources?}`；恢复回执使用 `GET /api/studio/novels/{project_id}/commands/{request_id}`。动作、参数和 batch 子操作按运行服务 OpenAPI 的 discriminated union；未知字段拒绝。相同 request ID+相同载荷幂等，旧 project revision 或失效 expected_sources 返回 409。归档设定可恢复，恢复旧编辑修订会建立新的 edit_revision，不删除现有历史。
+- 章纲独立保存于章节对象。读当前章纲使用 `GET /api/studio/novels/{project_id}/chapters/{chapter_id}/outline`；读取历史时显式传 `?outline_revision=N`。响应含项目 `revision`、章节 ID、`outline_revision`、`current_outline_revision`、`outline_sha256`、`outline_markdown` 和 `selected_revision`。新章没有章纲时修订号为 `0`、正文和摘要为空。写入使用 `action:"set_chapter_outline"`、`args:{chapter_id,body_markdown}`，并携带当前 `expected_revision` 与稳定 `request_id`；超时原样恢复同一请求，409 后重读并合并。章纲不是小说正文：不得把它加入 `/markdown` 导出、正文 `view`、整书/卷章聚合或其他章节，也不进入画布快照；卷和整书没有章纲字段。
+
 ## Hypit 模块
 
 Hypit 使用自己的原生工程、Run、Studio 与评论，不转换成画布节点。`GET /api/studio/projects/{id}/connection?module=hypit` 返回本项目的具体文件与执行入口。官方 Skill 只提供创作方法；工程、程序、模型、结果位置按工作台提供的配置，不能因 PATH 没有全局 `hypit` 就安装另一套程序或打开独立 Studio。

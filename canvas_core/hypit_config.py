@@ -8,15 +8,22 @@ import time
 from collections import defaultdict
 from typing import Any, Mapping
 
-from studio_modules import MODULE_SETTINGS_CANVAS_MODULES, studio_module_identity
+from studio_modules import MODULE_SETTINGS_CANVAS_MODULES, STUDIO_MODULES, studio_module_identity
 
 
 HYPIT_SETTINGS_CANVAS_ID = studio_module_identity("hypit").settings_canvas_id
 ARTICLE_SETTINGS_CANVAS_ID = studio_module_identity("article").settings_canvas_id
 MUSIC_SETTINGS_CANVAS_ID = studio_module_identity("music").settings_canvas_id
+SCRIPT_SETTINGS_CANVAS_ID = studio_module_identity("script").settings_canvas_id
+NOVEL_SETTINGS_CANVAS_ID = studio_module_identity("novel").settings_canvas_id
 SETTINGS_CANVAS_MODULES = dict(MODULE_SETTINGS_CANVAS_MODULES)
 HYPIT_FLOW_SCHEMA_VERSION = 1
 HYPIT_OUTPUT_SLOTS = ("text", "image", "video", "audio", "music", "voice")
+MODULE_SETTINGS_CANVAS_OUTPUT_SLOTS = {
+    module_id: tuple(identity.settings_canvas_slots)
+    for module_id, identity in STUDIO_MODULES.items()
+    if identity.settings_canvas_kind == "module-generation" and identity.settings_canvas_slots
+}
 HYPIT_OUTPUT_KINDS = {
     "text": "text",
     "image": "image",
@@ -115,7 +122,7 @@ def validate_hypit_settings_canvas(
     canvas_id: str = HYPIT_SETTINGS_CANVAS_ID,
     module_id: str = "hypit",
 ) -> bool:
-    """检查 Hypit/文章专用图的身份、输出槽、连线和静态媒体类型。"""
+    """检查模块设置图的身份、允许的输出槽、连线和静态媒体类型。"""
     actual_id = _validate_settings_canvas_identity(canvas, canvas_id=canvas_id, module_id=module_id)
     nodes = canvas.get("nodes")
     edges = canvas.get("connections")
@@ -141,10 +148,11 @@ def validate_hypit_settings_canvas(
             raise ValueError("素材输入的 hypitInputLocked 必须是布尔值")
         if node.get("type") == "smart-hypit-output":
             slot = str(node.get("hypitSlot") or "").strip().lower()
-            if slot not in HYPIT_OUTPUT_SLOTS:
-                raise ValueError("Hypit 输出节点用途不受支持")
+            allowed_slots = MODULE_SETTINGS_CANVAS_OUTPUT_SLOTS.get(module_id, HYPIT_OUTPUT_SLOTS)
+            if slot not in allowed_slots:
+                raise ValueError(f"{module_id} 设置图不支持 {slot or '未知'} 输出用途")
             if slot in outputs:
-                raise ValueError(f"Hypit {slot} 用途只能有一个输出节点")
+                raise ValueError(f"{module_id} {slot} 用途只能有一个输出节点")
             outputs[slot] = node
 
     incoming: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
@@ -227,8 +235,9 @@ def plan_hypit_slot(
     """解析输出上游与分组成员闭包，生成不含布局信息的配方指纹。"""
     validate_hypit_settings_canvas(canvas, canvas_id=canvas_id, module_id=module_id)
     slot = str(slot or "").strip().lower()
-    if slot not in HYPIT_OUTPUT_SLOTS:
-        raise ValueError("Hypit 输出用途不受支持")
+    allowed_slots = MODULE_SETTINGS_CANVAS_OUTPUT_SLOTS.get(module_id, HYPIT_OUTPUT_SLOTS)
+    if slot not in allowed_slots:
+        raise ValueError(f"{module_id} 设置图不支持 {slot or '未知'} 输出用途")
     nodes = canvas["nodes"]
     by_id = {str(node["id"]): node for node in nodes}
     matches = [node for node in nodes if node.get("type") == "smart-hypit-output"

@@ -1940,10 +1940,12 @@ def public_model_catalog(providers=None):
 def build_model_capability_catalog(providers=None):
     active_providers = providers if providers is not None else load_api_providers()
     catalog = MODEL_CAPABILITY_REGISTRY.build_catalog(active_providers)
-    _filter_disabled_model_options(catalog, active_providers)
+    # 同一次目录构建共用身份快照；下一次请求重新读取，不缓存用户配置或旧候选。
+    identity_document = studio_model_selection.load_identity_document(Path(studio_model_selection.__file__).resolve().parent)
+    _filter_disabled_model_options(catalog, active_providers, identity_document=identity_document)
     # 统一可执行选项投影：前端不再自行计算稳定标识，避免前后端各算一套（§13.5、§11.2）。
     try:
-        options = studio_model_selection.compile_catalog_options(catalog)
+        options = studio_model_selection.compile_catalog_options(catalog, identity_document=identity_document)
     except Exception:  # pragma: no cover - 投影失败不得让目录接口整体不可用
         options = []
     options = _filter_compiled_disabled_options(options, active_providers)
@@ -1964,10 +1966,12 @@ def _disabled_option_ids_for_provider(provider, region=""):
     return set(normalize_model_option_ids(provider.get("disabled_model_options")))
 
 
-def _filter_disabled_model_options(catalog, providers):
+def _filter_disabled_model_options(catalog, providers, *, identity_document=None):
     """从正式候选投影中移除精确停用项，不改变用户启用的模型 ID 列表。"""
     if not isinstance(catalog, dict):
         return catalog
+    if identity_document is None:
+        identity_document = studio_model_selection.load_identity_document(Path(studio_model_selection.__file__).resolve().parent)
     configured_by_id = {
         str(item.get("id") or "").strip().lower(): item
         for item in (providers or []) if isinstance(item, dict)
@@ -1982,6 +1986,12 @@ def _filter_disabled_model_options(catalog, providers):
             if provider.get("models"):
                 filtered_providers.append(provider)
             continue
+        scopes = [configured, *(configured.get("rh_regions") or {}).values()]
+        if not any(isinstance(scope, dict) and normalize_model_option_ids(scope.get("disabled_model_options")) for scope in scopes):
+            # 没有精确停用项时无需逐模型重新编译；最终目录仍统一编译和校验。
+            if provider.get("models"):
+                filtered_providers.append(provider)
+            continue
         kept_models = []
         for model in provider.get("models") or []:
             if not isinstance(model, dict):
@@ -1989,7 +1999,7 @@ def _filter_disabled_model_options(catalog, providers):
             try:
                 model_options = studio_model_selection.compile_catalog_options({
                     "providers": [{**provider, "models": [model]}],
-                })
+                }, identity_document=identity_document)
             except Exception:
                 model_options = []
             if not model_options:
@@ -4225,10 +4235,95 @@ class CanvasSaveRequest(BaseModel):
     viewport: Dict[str, Any] = {}
     logs: List[Dict[str, Any]] = []
     settings: Dict[str, Any] = {}
+    # Optional for older clients: omit to preserve stored import provenance.
+    script_imports: Optional[Dict[str, Any]] = None
     client_id: str = ""
     base_updated_at: int = 0
     base_revision: int = 0
     migration_version: int = 0
+
+
+def canvas_script_imports_for_user_save(existing: Any, submitted: Any) -> dict[str, Any]:
+    """Keep import receipts server-owned; retain transferred provenance as advisory only.
+
+    Canvas workflow files can carry source maps and node references, but they
+    cannot assert that the destination canvas actually completed an import.
+    Only HeadlessCanvas.import_script_snapshot writes trusted receipts.
+    """
+    if existing is not None and not isinstance(existing, dict):
+        raise HTTPException(status_code=500, detail="已保存的画布剧本导入索引格式损坏")
+    stored = existing if isinstance(existing, dict) else {}
+    if submitted is not None and not isinstance(submitted, dict):
+        raise HTTPException(status_code=422, detail="script_imports 必须是对象")
+    incoming = submitted if isinstance(submitted, dict) else {}
+    trusted_requests = {}
+    trusted_snapshots = {}
+    advisory = {}
+
+    def snapshot_map(container: dict[str, Any], key: str, *, persisted: bool) -> dict[str, Any]:
+        value = container.get(key, {})
+        if not isinstance(value, dict):
+            status = 500 if persisted else 422
+            raise HTTPException(status_code=status,
+                detail=f"画布剧本导入索引 {key} 必须是对象" if persisted else f"script_imports.{key} 必须是对象")
+        if any(not isinstance(name, str) or not isinstance(item, dict) for name, item in value.items()):
+            status = 500 if persisted else 422
+            raise HTTPException(status_code=status,
+                detail=f"画布剧本导入索引 {key} 格式损坏" if persisted else f"script_imports.{key} 项目格式无效")
+        return value
+
+    def digest_key(value: Any) -> tuple[str, dict[str, Any]] | None:
+        if not isinstance(value, dict):
+            return None
+        safe = PROJECT_STORAGE._sanitize_snapshot(value)
+        if not isinstance(safe, dict):
+            return None
+        # A workflow's provenance is data for later reading, never authority.
+        safe.pop("server_trusted", None)
+        encoded = json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return "advisory_" + hashlib.sha256(encoded).hexdigest(), safe
+
+    if stored:
+        if stored.get("schema_version") not in {None, 1}:
+            raise HTTPException(status_code=500, detail="已保存的画布剧本导入索引版本损坏")
+        stored_requests = snapshot_map(stored, "requests", persisted=True)
+        stored_snapshots = snapshot_map(stored, "snapshots", persisted=True)
+        stored_advisory = snapshot_map(stored, "advisorySnapshots", persisted=True)
+        for key, value in stored_requests.items():
+            if isinstance(key, str) and isinstance(value, dict) and value.get("server_trusted") is True:
+                trusted_requests[key] = PROJECT_STORAGE._sanitize_snapshot(value)
+        for key, value in stored_snapshots.items():
+            if isinstance(key, str) and isinstance(value, dict) and value.get("server_trusted") is True:
+                trusted_snapshots[key] = PROJECT_STORAGE._sanitize_snapshot(value)
+            else:
+                keyed = digest_key(value)
+                if keyed:
+                    advisory[keyed[0]] = keyed[1]
+        for value in stored_advisory.values():
+            keyed = digest_key(value)
+            if keyed:
+                advisory[keyed[0]] = keyed[1]
+
+    if incoming.get("schema_version") in {None, 1}:
+        # Preserve source snapshots from a portable workflow package, but
+        # never permit it to forge or modify the server's receipt tables.
+        incoming_snapshots = snapshot_map(incoming, "snapshots", persisted=False)
+        incoming_advisory = snapshot_map(incoming, "advisorySnapshots", persisted=False)
+        existing_advisory_digests = {keyed[0] for value in trusted_snapshots.values()
+                                     if (keyed := digest_key(value)) is not None}
+        for value in incoming_snapshots.values():
+            keyed = digest_key(value)
+            if keyed and keyed[0] not in existing_advisory_digests:
+                advisory.setdefault(keyed[0], keyed[1])
+        for value in incoming_advisory.values():
+            keyed = digest_key(value)
+            if keyed:
+                advisory.setdefault(keyed[0], keyed[1])
+    else:
+        raise HTTPException(status_code=422, detail="script_imports.schema_version 必须是 1")
+
+    return {"schema_version": 1, "requests": trusted_requests,
+            "snapshots": trusted_snapshots, "advisorySnapshots": advisory}
 
 class CanvasAssetCheckRequest(BaseModel):
     urls: List[str] = []
@@ -4244,6 +4339,7 @@ class CanvasWorkflowExportRequest(BaseModel):
     filename: str = "canvas-workflow.zip"
     include_resources: bool = True
     settings: Dict[str, Any] = {}
+    script_imports: Dict[str, Any] = {}
     library_id: str = ""
     category_id: str = ""
     name: str = ""
@@ -4389,6 +4485,13 @@ class AssetLibraryRenameRequest(BaseModel):
     name: str = ""
     library_id: str = ""
 
+class AssetLibraryReorderRequest(BaseModel):
+    collection: str = ""
+    ids: List[str] = []
+    expected_updated_at: int = 0
+    library_id: str = ""
+    category_type: str = ""
+
 class AssetLibraryBatchDeleteRequest(BaseModel):
     ids: List[str] = []
     library_id: str = ""
@@ -4427,6 +4530,12 @@ class PromptLibraryBatchDeleteRequest(BaseModel):
 
 class PromptLibraryCategoryRequest(BaseModel):
     name: str = "新分组"
+    library_id: str = ""
+
+class PromptLibraryReorderRequest(BaseModel):
+    collection: str = ""
+    ids: List[str] = []
+    expected_updated_at: int = 0
     library_id: str = ""
 
 PROMPT_UNCATEGORIZED_CATEGORY_ID = "uncategorized"
@@ -9690,8 +9799,8 @@ async def list_generation_results(kind: str = "all", prune_missing: bool = True)
 
 @app.post("/api/canvas-text-results")
 async def create_canvas_text_result(payload: CanvasTextResultRequest):
-    text = str(payload.text or "").strip()
-    if not text:
+    text = str(payload.text or "")
+    if not text.strip():
         raise HTTPException(status_code=400, detail="文本结果不能为空")
     name = sanitize_export_filename(payload.name or "文本结果.md", "文本结果.md")
     if Path(name).suffix.lower() not in {".md", ".txt"}:
@@ -9900,27 +10009,15 @@ async def get_generation_result(result_id: str):
 
 
 def studio_article_media_references(reference_kind: str, reference_ids) -> dict[str, list[dict[str, Any]]]:
-    """只检查文章显式保存的共享媒体 ID，不从正文 HTML/URL 推测引用。"""
+    """检查活动文章、可恢复归档及不可变历史中的共享媒体 ID。"""
     key = "asset_id" if reference_kind == "asset" else "result_id" if reference_kind == "result" else ""
     if not key:
         raise ValueError("文章媒体引用类型必须是 asset 或 result")
     target_ids = {str(item or "").strip() for item in (reference_ids or []) if str(item or "").strip()}
     if not target_ids:
         return {}
-    projects = STUDIO_PROJECTS.list(module="article")
     references: dict[str, dict[tuple[str, str], dict[str, Any]]] = {item_id: {} for item_id in target_ids}
-    for project in projects:
-        project_id = str(project.get("id") or "").strip()
-        if not project_id:
-            continue
-        try:
-            article = STUDIO_ARTICLES.get(project_id)
-        except HTTPException as exc:
-            if exc.status_code == 404:
-                continue
-            raise
-        title = str(article.get("title") or project.get("name") or "未命名文章")
-
+    def collect_article(project_id: str, title: str, article: Dict[str, Any]) -> None:
         def record(items, location):
             for index, item in enumerate(items if isinstance(items, list) else []):
                 if not isinstance(item, dict):
@@ -9954,6 +10051,75 @@ def studio_article_media_references(reference_kind: str, reference_ids) -> dict[
                         "locations": [],
                     })
                     entry["locations"].append(f"variants.{theme_id}")
+        version_history = article.get("version_history")
+        streams = version_history.get("streams") if isinstance(version_history, dict) else None
+        if isinstance(streams, dict):
+            if reference_kind == "asset":
+                for index, version in enumerate(streams.get("cover", []) if isinstance(streams.get("cover"), list) else []):
+                    snapshot = version.get("snapshot") if isinstance(version, dict) else None
+                    if isinstance(snapshot, dict):
+                        record([snapshot], f"version_history.cover[{index}]")
+            if reference_kind == "result":
+                for index, version in enumerate(streams.get("cover", []) if isinstance(streams.get("cover"), list) else []):
+                    snapshot = version.get("snapshot") if isinstance(version, dict) else None
+                    if isinstance(snapshot, dict):
+                        record([snapshot], f"version_history.cover[{index}]")
+                for version_index, version in enumerate(streams.get("body", []) if isinstance(streams.get("body"), list) else []):
+                    snapshot = version.get("snapshot") if isinstance(version, dict) else None
+                    layouts = snapshot.get("layouts") if isinstance(snapshot, dict) else None
+                    for layout_index, layout in enumerate(layouts if isinstance(layouts, list) else []):
+                        if isinstance(layout, dict):
+                            record([layout], f"version_history.body[{version_index}].layouts[{layout_index}]")
+                            # Embedded image IDs are explicitly captured with the
+                            # immutable layout snapshot, even if a legacy record
+                            # omitted the corresponding current media_refs item.
+                            for embedded_index, embedded_id in enumerate(
+                                layout.get("embedded_media_ids", []) if isinstance(layout.get("embedded_media_ids"), list) else []
+                            ):
+                                record([{key: embedded_id}],
+                                       f"version_history.body[{version_index}].layouts[{layout_index}].embedded_media_ids[{embedded_index}]")
+
+    for project in STUDIO_PROJECTS.list(module="article"):
+        project_id = str(project.get("id") or "").strip()
+        if not project_id:
+            continue
+        try:
+            article = STUDIO_ARTICLES.get(project_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+        # Public article views intentionally omit internal history snapshots.
+        # Deletion guards must inspect the server-owned record so an older HTML
+        # result remains protected after the same theme is regenerated.
+        read_article_record = getattr(STUDIO_PROJECTS, "read_article_record", None)
+        if callable(read_article_record):
+            raw_record = read_article_record(project_id)
+            raw_article = raw_record.get("article") if isinstance(raw_record, dict) else None
+            if isinstance(raw_article, dict):
+                article = {**article, **raw_article}
+        collect_article(
+            project_id,
+            str(article.get("title") or project.get("name") or "未命名文章"),
+            article,
+        )
+
+    # Deleting an article archives it for later restoration. Those references
+    # remain live because restore must make every saved version readable again.
+    read_recoverable_articles = getattr(STUDIO_PROJECTS, "list_recoverable_article_records", None)
+    if callable(read_recoverable_articles):
+        for raw_record in read_recoverable_articles():
+            if not isinstance(raw_record, dict):
+                continue
+            project_id = str(raw_record.get("id") or "").strip()
+            article = raw_record.get("article")
+            if not project_id or not isinstance(article, dict):
+                continue
+            collect_article(
+                project_id,
+                str(article.get("title") or raw_record.get("name") or "未命名文章"),
+                article,
+            )
     return {
         item_id: list(by_article.values())
         for item_id, by_article in references.items()
@@ -10659,11 +10825,33 @@ def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str =
         "created_at": now_ms(),
     }
 
+def _next_json_store_revision(path, current_revision=0):
+    previous = 0
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        previous = int(raw.get("updated_at") or 0) if isinstance(raw, dict) else 0
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return max(now_ms(), int(current_revision or 0) + 1, previous + 1)
+
+
+def _reorder_preserving_fixed(items, requested_ids, id_getter, eligible, label):
+    """Reorder only eligible sibling entries; fixed/system entries retain their exact slots."""
+    requested = [str(item or "") for item in (requested_ids or [])]
+    current = [str(id_getter(item) or "") for item in items if eligible(item)]
+    if len(current) != len(set(current)) or len(requested) != len(set(requested)) or set(requested) != set(current):
+        raise HTTPException(status_code=409, detail=f"{label}目录已变化，请刷新后重试")
+    by_id = {str(id_getter(item) or ""): item for item in items if eligible(item)}
+    next_items = iter(by_id[item_id] for item_id in requested)
+    return [next(next_items) if eligible(item) else item for item in items]
+
+
 def save_asset_library(lib):
     lib = normalize_asset_library(lib)
     sort_asset_library_items(lib)
-    lib["updated_at"] = now_ms()
     os.makedirs(DATA_DIR, exist_ok=True)
+    lib["updated_at"] = _next_json_store_revision(ASSET_LIBRARY_PATH, lib.get("updated_at"))
     with open(ASSET_LIBRARY_PATH, "w", encoding="utf-8") as f:
         json.dump(lib, f, ensure_ascii=False, indent=2)
     if GLOBAL_LOOP:
@@ -11043,8 +11231,8 @@ def load_prompt_libraries():
 
 def save_prompt_libraries(data):
     data = normalize_prompt_libraries(data)
-    data["updated_at"] = now_ms()
     os.makedirs(DATA_DIR, exist_ok=True)
+    data["updated_at"] = _next_json_store_revision(PROMPT_LIBRARY_PATH, data.get("updated_at"))
     with open(PROMPT_LIBRARY_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return data
@@ -15573,6 +15761,7 @@ def temporary_material_tree_and_items():
                 parent["children"].append(node)
             parent = folders[current]
         parent["items"].append(item)
+
     def count(node):
         total = len(node["items"])
         for child in node["children"]:
@@ -18845,8 +19034,12 @@ async def get_canvas_comfy_task(task_id: str):
 @app.post("/api/canvas-tasks/{task_id}/cancel")
 async def cancel_canvas_task(task_id: str):
     task_id = str(task_id or "").strip()
+    stored = PROJECT_STORAGE.get_canvas_task(task_id)
+    if stored and stored.get("kind") in {"script_settings_flow", "novel_settings_flow"}:
+        runner = SCRIPT_FLOW_RUNNER if stored.get("kind") == "script_settings_flow" else NOVEL_FLOW_RUNNER
+        result = await runner.cancel(task_id)
+        return {"task_id": task_id, "status": result["status"], "cancelled": result["cancelled"]}
     if task_id.startswith('studio_'):
-        stored = PROJECT_STORAGE.get_canvas_task(task_id)
         if not stored:
             raise HTTPException(404, '创作任务不存在')
         canvas = load_canvas(stored['canvas_id'])
@@ -20631,11 +20824,14 @@ async def canvas_llm(payload: CanvasLLMRequest):
 
 from canvas_agent import create_agent_router
 from studio_projects import StudioProjectStore, create_studio_projects_router
+from studio_manuscripts import StudioManuscriptStore, create_studio_manuscripts_router
+from studio_script_import import StudioScriptImport
 from studio_connection import create_connection_router
 from studio_articles import StudioArticleStore, create_studio_articles_router
 from studio_article_generation import StudioArticleGenerationBridge
 from studio_music import StudioMusicStore
 from studio_music_generation import StudioMusicGenerationBridge
+from studio_manuscript_generation import StudioManuscriptGenerationBridge, create_studio_manuscript_generation_router
 from studio_hypit import create_hypit_router
 from hypit_runtime import HypitRuntime
 from studio_execution import StudioExecution, input_media as studio_input_media, project_workflow_fields as studio_project_workflow_fields, recipe as studio_node_recipe, request_for as studio_request_for, stable as studio_stable
@@ -20646,6 +20842,7 @@ from canvas_core.hypit_config import (
     HYPIT_OUTPUT_KINDS,
     HYPIT_OUTPUT_SLOTS,
     HYPIT_SETTINGS_CANVAS_ID,
+    MODULE_SETTINGS_CANVAS_OUTPUT_SLOTS,
     SETTINGS_CANVAS_MODULES,
     hypit_execution_recipe_fingerprint,
     legacy_hypit_defaults_to_canvas,
@@ -20701,6 +20898,7 @@ def studio_canvas_delete(canvas_id, expected_revision=None):
 STUDIO_CANVAS_ADAPTER = {'list': list_canvases, 'get': load_canvas, 'create': new_canvas,
                          'rename': studio_canvas_rename, 'delete': studio_canvas_delete}
 STUDIO_PROJECTS = StudioProjectStore(BASE_DIR, STUDIO_CANVAS_ADAPTER)
+STUDIO_MANUSCRIPTS = StudioManuscriptStore(BASE_DIR, STUDIO_PROJECTS)
 HYPIT_RUNTIME = HypitRuntime(BASE_DIR)
 
 
@@ -20926,25 +21124,58 @@ def studio_music_supported_output_slots(node, request):
     return [slot for slot in supported if slot in {"music", "image"}]
 
 
+SCRIPT_SETTINGS_CANVAS_ID = next(
+    canvas_id for canvas_id, module_id in SETTINGS_CANVAS_MODULES.items() if module_id == "script"
+)
+NOVEL_SETTINGS_CANVAS_ID = next(
+    canvas_id for canvas_id, module_id in SETTINGS_CANVAS_MODULES.items() if module_id == "novel"
+)
+
+
+def studio_manuscript_supported_output_slots(node, request):
+    """剧本/小说设置图复用共享模型候选契约，但只允许文本输出。"""
+    return [slot for slot in studio_article_supported_output_slots(node, request) if slot == "text"]
+
+
+def studio_settings_canvas_supported_output_slots(module_id, node, request):
+    registered_slots = MODULE_SETTINGS_CANVAS_OUTPUT_SLOTS.get(str(module_id or ""), ())
+    if not registered_slots:
+        return []
+    if module_id == "hypit":
+        candidates = studio_hypit_supported_output_slots(node, request)
+    elif module_id == "article":
+        candidates = studio_article_supported_output_slots(node, request)
+    elif module_id == "music":
+        candidates = studio_music_supported_output_slots(node, request)
+    elif module_id in {"script", "novel"}:
+        candidates = studio_manuscript_supported_output_slots(node, request)
+    else:
+        return []
+    # 模块的稳定 identity 是可用用途的单一注册点；模型/节点契约只负责
+    # 从这些用途中筛选当前来源真正支持的输出。
+    return [slot for slot in candidates if slot in registered_slots]
+
+
 def studio_hypit_task_metadata(canvas, node, request):
     """把模块配置图运行的配方指纹和槽位契约写入服务端任务记录。"""
     canvas_id = str(canvas.get("id") or "")
-    if canvas_id not in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID, MUSIC_SETTINGS_CANVAS_ID}:
+    if canvas_id not in SETTINGS_CANVAS_MODULES:
         return {}
     module_id = SETTINGS_CANVAS_MODULES[canvas_id]
-    supported_slots = (
-        studio_hypit_supported_output_slots(node, request) if module_id == "hypit" else
-        studio_article_supported_output_slots(node, request) if module_id == "article" else
-        studio_music_supported_output_slots(node, request)
-    )
+    supported_slots = studio_settings_canvas_supported_output_slots(module_id, node, request)
     if not supported_slots:
         if module_id == "hypit":
             rejection = studio_hypit_profile_rejection(node, request)
             if rejection:
                 raise HTTPException(status_code=400, detail=rejection)
-        module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}[module_id]
+        module_name = {
+            "hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图",
+            "script": "剧本设置图", "novel": "小说设置图",
+        }[module_id]
         raise HTTPException(status_code=400, detail=f"当前生成节点不符合 {module_name} 输出契约，请检查模型设置")
     return {
+        "module_id": module_id,
+        "settings_canvas_id": canvas_id,
         "hypit_source_node_id": str(node.get("id") or ""),
         "hypit_source_recipe_fingerprint": hypit_execution_recipe_fingerprint(
             canvas, str(node.get("id") or ""), canvas_id=canvas_id, module_id=module_id,
@@ -20955,15 +21186,14 @@ def studio_hypit_task_metadata(canvas, node, request):
 
 async def studio_preflight(canvas, node, request, request_id, *, record_run=True):
     settings_canvas_id = str(canvas.get("id") or "")
-    if settings_canvas_id in {HYPIT_SETTINGS_CANVAS_ID, ARTICLE_SETTINGS_CANVAS_ID, MUSIC_SETTINGS_CANVAS_ID}:
+    if settings_canvas_id in SETTINGS_CANVAS_MODULES:
         module_id = SETTINGS_CANVAS_MODULES[settings_canvas_id]
-        supported_slots = (
-            studio_hypit_supported_output_slots(node, request) if module_id == "hypit" else
-            studio_article_supported_output_slots(node, request) if module_id == "article" else
-            studio_music_supported_output_slots(node, request)
-        )
+        supported_slots = studio_settings_canvas_supported_output_slots(module_id, node, request)
         if not supported_slots:
-            module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}[module_id]
+            module_name = {
+                "hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图",
+                "script": "剧本设置图", "novel": "小说设置图",
+            }[module_id]
             raise HTTPException(status_code=400, detail=f"当前生成节点不符合 {module_name} 输出契约，请检查模型设置")
         by_id = {str(item.get("id") or ""): item for item in canvas.get("nodes", []) if isinstance(item, dict)}
         connected_slots = [
@@ -20975,7 +21205,10 @@ async def studio_preflight(canvas, node, request, request_id, *, record_run=True
         ]
         unsupported = [slot for slot in connected_slots if slot not in supported_slots]
         if unsupported:
-            module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}[module_id]
+            module_name = {
+                "hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图",
+                "script": "剧本设置图", "novel": "小说设置图",
+            }[module_id]
             raise HTTPException(status_code=400, detail=f"当前模型不适用于 {module_name} {unsupported[0]} 输出用途")
     preflight_payload = CanvasPreflightRequest(
         canvas_id=canvas['id'] if record_run else '',
@@ -21557,6 +21790,14 @@ def _project_music_test_statuses(canvas_id, canvas):
     return studio_hypit_test_statuses(canvas_id, canvas, module_id="music")
 
 
+def _project_script_test_statuses(canvas_id, canvas):
+    return studio_hypit_test_statuses(canvas_id, canvas, module_id="script")
+
+
+def _project_novel_test_statuses(canvas_id, canvas):
+    return studio_hypit_test_statuses(canvas_id, canvas, module_id="novel")
+
+
 HYPIT_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
     load_canvas=load_canvas,
     save_canvas=save_canvas,
@@ -21606,6 +21847,38 @@ MUSIC_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
     title="音乐生成配置",
     migrate_legacy=False,
 )
+SCRIPT_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
+    load_canvas=load_canvas,
+    save_canvas=save_canvas,
+    lock=CANVAS_LOCK,
+    load_legacy_settings=lambda: None,
+    backup_legacy_settings=lambda _record: None,
+    migrate_legacy_settings=lambda _defaults, canvas_id: {"id": canvas_id},
+    validate_canvas=validate_hypit_settings_canvas,
+    test_statuses=_project_script_test_statuses,
+    backup_scaffold=None,
+    broadcast_canvas_updated=manager.broadcast_canvas_updated,
+    now_ms=now_ms,
+    canvas_id=SCRIPT_SETTINGS_CANVAS_ID,
+    module_id="script",
+    migrate_legacy=False,
+)
+NOVEL_SETTINGS_CANVAS_SERVICE = HypitSettingsCanvasService(
+    load_canvas=load_canvas,
+    save_canvas=save_canvas,
+    lock=CANVAS_LOCK,
+    load_legacy_settings=lambda: None,
+    backup_legacy_settings=lambda _record: None,
+    migrate_legacy_settings=lambda _defaults, canvas_id: {"id": canvas_id},
+    validate_canvas=validate_hypit_settings_canvas,
+    test_statuses=_project_novel_test_statuses,
+    backup_scaffold=None,
+    broadcast_canvas_updated=manager.broadcast_canvas_updated,
+    now_ms=now_ms,
+    canvas_id=NOVEL_SETTINGS_CANVAS_ID,
+    module_id="novel",
+    migrate_legacy=False,
+)
 
 
 def validate_canvas_settings_canvas(canvas):
@@ -21632,6 +21905,8 @@ SETTINGS_CANVAS_SERVICES = {
     HYPIT_SETTINGS_CANVAS_ID: HYPIT_SETTINGS_CANVAS_SERVICE,
     ARTICLE_SETTINGS_CANVAS_ID: ARTICLE_SETTINGS_CANVAS_SERVICE,
     MUSIC_SETTINGS_CANVAS_ID: MUSIC_SETTINGS_CANVAS_SERVICE,
+    SCRIPT_SETTINGS_CANVAS_ID: SCRIPT_SETTINGS_CANVAS_SERVICE,
+    NOVEL_SETTINGS_CANVAS_ID: NOVEL_SETTINGS_CANVAS_SERVICE,
     CANVAS_SETTINGS_CANVAS_ID: CANVAS_SETTINGS_SERVICE,
 }
 
@@ -21671,6 +21946,20 @@ app.include_router(create_hypit_settings_canvas_router(
     base_path="/api/studio/music/settings-canvas",
     include_test_routes=False,
 ))
+app.include_router(create_hypit_settings_canvas_router(
+    service=SCRIPT_SETTINGS_CANVAS_SERVICE,
+    base_path="/api/studio/scripts/settings-canvas",
+    include_test_routes=False,
+))
+app.include_router(create_hypit_settings_canvas_router(
+    service=NOVEL_SETTINGS_CANVAS_SERVICE,
+    base_path="/api/studio/novels/settings-canvas",
+    include_test_routes=False,
+))
+# Register fixed settings-canvas paths before the manuscript `{project_id}` routes.
+# Otherwise `settings-canvas` is treated as a manuscript project ID and the GET
+# fails with “项目不存在” before FastAPI can reach the static settings handler.
+app.include_router(create_studio_manuscripts_router(STUDIO_MANUSCRIPTS))
 app.include_router(create_canvas_settings_router(
     CANVAS_SETTINGS_SERVICE,
     get_catalog=build_model_management_catalog,
@@ -22053,17 +22342,16 @@ async def studio_hypit_preflight_node(canvas, node, request, request_id):
     if target_slot:
         canvas_id = str(canvas.get("id") or "")
         module_id = SETTINGS_CANVAS_MODULES.get(canvas_id, "")
-        supported_slots = (
-            studio_hypit_supported_output_slots(node, request) if module_id == "hypit" else
-            studio_article_supported_output_slots(node, request) if module_id == "article" else
-            studio_music_supported_output_slots(node, request) if module_id == "music" else []
-        )
+        supported_slots = studio_settings_canvas_supported_output_slots(module_id, node, request)
         if module_id == "hypit":
             rejection = studio_hypit_profile_rejection(node, request, target_slot)
             if rejection:
                 raise HTTPException(status_code=400, detail=rejection)
         if target_slot not in supported_slots:
-            module_name = {"hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图"}.get(module_id, "设置图")
+            module_name = {
+                "hypit": "Hypit", "article": "文章配置图", "music": "音乐配置图",
+                "script": "剧本设置图", "novel": "小说设置图",
+            }.get(module_id, "设置图")
             raise HTTPException(status_code=400, detail=f"当前模型不适用于 {module_name} {target_slot} 输出用途")
     return resolved
 
@@ -22652,6 +22940,50 @@ MUSIC_GENERATION_BRIDGE = StudioMusicGenerationBridge(
 MUSIC_FLOW_RUNNER.publish_node_result = MUSIC_GENERATION_BRIDGE.publish_node_result
 
 
+SCRIPT_FLOW_RUNNER = HypitFlowRunner(
+    load_canvas=lambda canvas_id: SCRIPT_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+        if canvas_id == SCRIPT_SETTINGS_CANVAS_ID else load_canvas(canvas_id),
+    storage=PROJECT_STORAGE,
+    prepare_node_request=studio_hypit_prepare_node_request,
+    preflight_node=studio_hypit_preflight_node,
+    execute_node=studio_hypit_execute_node,
+    collect_results=studio_hypit_collect_results,
+    notify=lambda canvas_id, run_id, status: manager.broadcast_canvas_updated(
+        canvas_id, int(now_ms()), max(1, int(studio_load_canvas(canvas_id).get("revision") or 1)), ""),
+    lock=CANVAS_LOCK,
+    now_ms=now_ms,
+    publish_node_result=studio_hypit_publish_node_result,
+    canvas_id=SCRIPT_SETTINGS_CANVAS_ID,
+    module_id="script",
+)
+
+NOVEL_FLOW_RUNNER = HypitFlowRunner(
+    load_canvas=lambda canvas_id: NOVEL_SETTINGS_CANVAS_SERVICE.ensure_canvas()
+        if canvas_id == NOVEL_SETTINGS_CANVAS_ID else load_canvas(canvas_id),
+    storage=PROJECT_STORAGE,
+    prepare_node_request=studio_hypit_prepare_node_request,
+    preflight_node=studio_hypit_preflight_node,
+    execute_node=studio_hypit_execute_node,
+    collect_results=studio_hypit_collect_results,
+    notify=lambda canvas_id, run_id, status: manager.broadcast_canvas_updated(
+        canvas_id, int(now_ms()), max(1, int(studio_load_canvas(canvas_id).get("revision") or 1)), ""),
+    lock=CANVAS_LOCK,
+    now_ms=now_ms,
+    publish_node_result=studio_hypit_publish_node_result,
+    canvas_id=NOVEL_SETTINGS_CANVAS_ID,
+    module_id="novel",
+)
+
+SCRIPT_GENERATION_BRIDGE = StudioManuscriptGenerationBridge(
+    module="script", manuscript_store=STUDIO_MANUSCRIPTS, runner=SCRIPT_FLOW_RUNNER,
+    storage=PROJECT_STORAGE, settings_service=SCRIPT_SETTINGS_CANVAS_SERVICE,
+)
+NOVEL_GENERATION_BRIDGE = StudioManuscriptGenerationBridge(
+    module="novel", manuscript_store=STUDIO_MANUSCRIPTS, runner=NOVEL_FLOW_RUNNER,
+    storage=PROJECT_STORAGE, settings_service=NOVEL_SETTINGS_CANVAS_SERVICE,
+)
+
+
 async def studio_article_submit_generation(project_id, payload, accepted_context):
     return await ARTICLE_GENERATION_BRIDGE.submit(project_id, payload, accepted_context)
 
@@ -22687,6 +23019,12 @@ app.include_router(STUDIO_MUSIC.router(
     get_generation=studio_music_get_generation,
     list_generations=studio_music_list_generations,
 ))
+app.include_router(create_studio_manuscript_generation_router(
+    module="script", bridge=SCRIPT_GENERATION_BRIDGE,
+))
+app.include_router(create_studio_manuscript_generation_router(
+    module="novel", bridge=NOVEL_GENERATION_BRIDGE,
+))
 
 
 def studio_hypit_test_statuses(canvas_id, canvas, *, module_id="hypit"):
@@ -22694,7 +23032,10 @@ def studio_hypit_test_statuses(canvas_id, canvas, *, module_id="hypit"):
     service = studio_settings_canvas_service(canvas_id)
     if (service is None or service.module_id != module_id or not isinstance(canvas, dict)
             or canvas.get("id") != canvas_id):
-        module_name = {"hypit": "Hypit", "article": "文章", "music": "音乐"}.get(module_id, "模块")
+        module_name = {
+            "hypit": "Hypit", "article": "文章", "music": "音乐",
+            "script": "剧本", "novel": "小说",
+        }.get(module_id, "模块")
         raise ValueError(f"{module_name} 运行状态只能读取对应保留配置图")
     return project_hypit_execution_statuses(
         canvas,
@@ -22760,6 +23101,18 @@ async def studio_task_status(task_id: str):
         projected = await MUSIC_GENERATION_BRIDGE.get(project_id, task_id)
         if not isinstance(projected, dict):
             raise HTTPException(404, '音乐生成任务不存在')
+        return projected
+    if task.get("kind") in {"script_settings_flow", "novel_settings_flow"}:
+        runner = SCRIPT_FLOW_RUNNER if task.get("kind") == "script_settings_flow" else NOVEL_FLOW_RUNNER
+        bridge = SCRIPT_GENERATION_BRIDGE if task.get("kind") == "script_settings_flow" else NOVEL_GENERATION_BRIDGE
+        flow = runner.get(task_id)
+        context = flow.get("trusted_context") if isinstance(flow, dict) else None
+        project_id = str(context.get("project_id") or "") if isinstance(context, dict) else ""
+        if not project_id:
+            raise HTTPException(404, '剧本或小说优化任务不存在')
+        projected = await bridge.get(project_id, task_id)
+        if not isinstance(projected, dict):
+            raise HTTPException(404, '剧本或小说优化任务不存在')
         return projected
     return task
 
@@ -22855,6 +23208,8 @@ async def studio_cancel_node(canvas, node, task_id):
 
 STUDIO_CANVAS = HeadlessCanvas(studio_load_canvas, studio_save_canvas, CANVAS_LOCK, studio_submit_node,
                               studio_cancel_node, studio_validate_model, studio_notify)
+STUDIO_SCRIPT_IMPORT = StudioScriptImport(STUDIO_MANUSCRIPTS, STUDIO_CANVAS)
+STUDIO_CANVAS.script_import_handler = STUDIO_SCRIPT_IMPORT.execute
 app.include_router(studio_module_models.create_module_models_router(build_model_capability_catalog))
 app.include_router(create_agent_router(BASE_DIR, studio_load_canvas, executor=STUDIO_CANVAS))
 
@@ -23109,7 +23464,10 @@ def canvas_workflow_unique_archive_name(base, used):
 
 def canvas_workflow_replace_strings(value, mapping):
     if isinstance(value, dict):
-        return {k: canvas_workflow_replace_strings(v, mapping) for k, v in value.items()}
+        # Script provenance refers to its original Studio project and import
+        # history, not media files inside this archive. Preserve it verbatim.
+        return {k: (PROJECT_STORAGE._sanitize_snapshot(v) if str(k) in {"sourceRef", "source_ref", "scriptImports", "script_imports"}
+                    else canvas_workflow_replace_strings(v, mapping)) for k, v in value.items()}
     if isinstance(value, list):
         return [canvas_workflow_replace_strings(item, mapping) for item in value]
     if isinstance(value, str):
@@ -23122,7 +23480,10 @@ def canvas_workflow_replace_strings(value, mapping):
         return value
     return value
 
-def canvas_workflow_payload(nodes, connections, resources=None):
+def canvas_workflow_payload(nodes, connections, resources=None, script_imports=None):
+    provenance = PROJECT_STORAGE._sanitize_snapshot(script_imports or {})
+    if not isinstance(provenance, dict):
+        provenance = {}
     return {
         "format": "infinite-canvas-workflow",
         "version": 1,
@@ -23130,6 +23491,10 @@ def canvas_workflow_payload(nodes, connections, resources=None):
         "nodes": nodes or [],
         "connections": connections or [],
         "resources": resources or [],
+        # A workflow file can preserve provenance for display and future
+        # reference; durable receipts are local to the source canvas.
+        "scriptImports": {"schema_version": 1, "snapshots": provenance.get("snapshots", {}),
+                          "advisorySnapshots": provenance.get("advisorySnapshots", {})},
     }
 
 def build_canvas_workflow_archive(payload: CanvasWorkflowExportRequest) -> Tuple[bytes, Dict[str, Any]]:
@@ -23169,7 +23534,7 @@ def build_canvas_workflow_archive(payload: CanvasWorkflowExportRequest) -> Tuple
                 resources.append({"url":url,"archive":archive_path,"name":name,"size":resolved.stat().st_size,"sha256":digest,"media_category":(record or {}).get("media_category")})
         if missing:
             raise HTTPException(400, "以下资源缺失，未生成不完整的资源包：" + "、".join(missing[:12]))
-        workflow = canvas_workflow_payload(nodes_payload, connections_payload, resources)
+        workflow = canvas_workflow_payload(nodes_payload, connections_payload, resources, payload.script_imports)
         workflow.update({"title":payload.name,"settings":PROJECT_STORAGE._sanitize_snapshot(payload.settings)})
         zf.writestr("workflow.json", json.dumps(workflow, ensure_ascii=False, indent=2))
         zf.writestr("使用说明.txt", "这是完整画布资源包。无需解压。新建并打开画布，点击右上角工作流，导入此 ZIP；程序会自动保存资源、映射引用及节点连线。API Key 不包含在包内，运行前请在接收电脑配置相同平台与模型。\nCanvas package: open a new canvas, choose Workflow, and import this ZIP without extracting it. Resources and references are restored automatically. Configure your own API credentials before running models.")
@@ -23366,6 +23731,75 @@ async def get_asset_library():
 @app.get("/api/prompt-libraries")
 async def get_prompt_libraries():
     return {"library": public_prompt_libraries()}
+
+@app.post("/api/asset-library/reorder")
+async def reorder_asset_library(payload: AssetLibraryReorderRequest):
+    """Reorder one visible sibling collection without saving a client-side library snapshot."""
+    lib = load_asset_library()
+    if int(payload.expected_updated_at or 0) != int(lib.get("updated_at") or 0):
+        raise HTTPException(status_code=409, detail="资产目录已更新，请刷新后重试排序")
+    if payload.collection == "libraries":
+        if payload.category_type or payload.library_id:
+            raise HTTPException(status_code=400, detail="资产库排序参数无效")
+        lib["libraries"] = _reorder_preserving_fixed(
+            lib.get("libraries") or [], payload.ids,
+            lambda item: item.get("id"),
+            lambda item: item.get("id") != "default",
+            "资产库",
+        )
+    elif payload.collection == "categories":
+        category_type = str(payload.category_type or "").lower()
+        if category_type not in {"image", "workflow"} or not payload.library_id:
+            raise HTTPException(status_code=400, detail="资产分类排序参数无效")
+        library = next((item for item in (lib.get("libraries") or []) if item.get("id") == payload.library_id), None)
+        if not library:
+            raise HTTPException(status_code=404, detail="资产库不存在")
+        library["categories"] = _reorder_preserving_fixed(
+            library.get("categories") or [], payload.ids,
+            lambda item: item.get("id"),
+            lambda item: (item.get("type") or "image") == category_type,
+            "资产分类",
+        )
+        active_id = lib.get("active_library_id")
+        active_library = next((item for item in (lib.get("libraries") or []) if item.get("id") == active_id), None)
+        lib["categories"] = (active_library or library).get("categories") or []
+    else:
+        raise HTTPException(status_code=400, detail="不支持的资产排序类型")
+    save_asset_library(lib)
+    return {"library": load_asset_library()}
+
+@app.post("/api/prompt-libraries/reorder")
+async def reorder_prompt_libraries(payload: PromptLibraryReorderRequest):
+    """Reorder user-created prompt libraries/categories while keeping system entries fixed."""
+    data = load_prompt_libraries()
+    if int(payload.expected_updated_at or 0) != int(data.get("updated_at") or 0):
+        raise HTTPException(status_code=409, detail="提示词目录已更新，请刷新后重试排序")
+    if payload.collection == "libraries":
+        if payload.library_id:
+            raise HTTPException(status_code=400, detail="提示词库排序参数无效")
+        data["libraries"] = _reorder_preserving_fixed(
+            data.get("libraries") or [], payload.ids,
+            lambda item: item.get("id"),
+            lambda item: item.get("id") != "system",
+            "提示词库",
+        )
+    elif payload.collection == "categories":
+        if not payload.library_id:
+            raise HTTPException(status_code=400, detail="提示词分类排序参数无效")
+        library = next((item for item in (data.get("libraries") or []) if item.get("id") == payload.library_id), None)
+        if not library:
+            raise HTTPException(status_code=404, detail="提示词库不存在")
+        library["categories"] = _reorder_preserving_fixed(
+            library.get("categories") or [], payload.ids,
+            lambda item: item.get("id"),
+            lambda item: item.get("id") not in PROMPT_BUILTIN_CATEGORY_IDS
+            and item.get("id") != PROMPT_UNCATEGORIZED_CATEGORY_ID,
+            "提示词分类",
+        )
+    else:
+        raise HTTPException(status_code=400, detail="不支持的提示词排序类型")
+    data = save_prompt_libraries(data)
+    return {"library": public_prompt_libraries(data)}
 
 @app.post("/api/prompt-libraries")
 async def create_prompt_library(payload: PromptLibraryRequest):
@@ -24061,6 +24495,9 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
             canvas["viewport"] = canvas.get("viewport") or {"x": 0, "y": 0, "scale": 1}
         canvas["logs"] = payload.logs[-500:]
         canvas["settings"] = payload.settings or {}
+        if payload.script_imports is not None or canvas.get("scriptImports") is not None:
+            canvas["scriptImports"] = canvas_script_imports_for_user_save(
+                canvas.get("scriptImports"), payload.script_imports)
         save_canvas(canvas)
     sync_canvas_result_origins(canvas)
     await manager.broadcast_canvas_updated(

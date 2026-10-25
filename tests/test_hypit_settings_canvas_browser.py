@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import shutil
 import socket
 import subprocess
@@ -62,6 +63,11 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         cls.comfy_workflow_detail_responses = []
         cls.comfy_workflow_detail_gets = []
         cls.comfy_workflow_detail_completions = []
+        cls.startup_probe_active = False
+        cls.startup_events = []
+        cls.startup_api_delay_seconds = 0.12
+        cls.startup_resource_delay_seconds = 0.65
+        cls.startup_model_options_delay_seconds = 0.24
 
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
@@ -84,8 +90,61 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                     pass
                 self.close_connection = True
 
+            def _startup_event(self, path, phase):
+                if cls.startup_probe_active:
+                    cls.startup_events.append({"path": path, "phase": phase, "time": time.monotonic()})
+
+            def _startup_api_delay(self, path):
+                if not cls.startup_probe_active:
+                    return
+                delay = cls.startup_model_options_delay_seconds if path == "/api/studio/model-options" else cls.startup_api_delay_seconds
+                self._startup_event(path, "request")
+                time.sleep(delay)
+                self._startup_event(path, "response")
+
             def do_GET(self):
                 path = urlsplit(self.path).path
+                query = urlsplit(self.path).query
+                if path == "/static/smart-canvas.html" and "startup_probe=1" in query:
+                    html = (ROOT / "static" / "smart-canvas.html").read_text(encoding="utf-8")
+                    html = html.replace("</body>", '<img src="/api/__fixture_slow_startup.png" alt="" hidden>\\n</body>')
+                    body = html.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    self.close_connection = True
+                    return
+                if path == "/static/api-settings.html" and "startup_probe=1" in query:
+                    html = (ROOT / "static" / "api-settings.html").read_text(encoding="utf-8")
+                    html = html.replace("</body>", '<img src="/api/__fixture_slow_startup.png" alt="" hidden>\n</body>')
+                    body = html.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    self.close_connection = True
+                    return
+                if path == "/api/__fixture_slow_startup.png":
+                    self._startup_event(path, "request")
+                    time.sleep(cls.startup_resource_delay_seconds)
+                    self._startup_event(path, "response")
+                    body = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c636000020000050001a5f645400000000049454e44ae426082")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    self.close_connection = True
+                    return
+                if path in {"/api/config", "/api/providers", "/api/model-capabilities", "/api/smart-canvas/personalization",
+                            "/api/canvases/hypit-settings", "/api/canvases/script-settings", "/api/canvases/article-settings", "/api/studio/model-options"}:
+                    self._startup_api_delay(path)
                 if path == "/api/hypit/settings-canvas":
                     self._json(200, {
                         "id": "hypit-settings", "canvas": cls.canvas,
@@ -94,6 +153,17 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                 elif path == "/api/canvases/hypit-settings":
                     cls.canvas_gets += 1
                     self._json(200, {"canvas": {**cls.canvas, "test_statuses": cls.test_statuses}})
+                elif path == "/api/canvases/script-settings":
+                    cls.canvas_gets += 1
+                    script_canvas = {**cls.canvas, "id": "script-settings", "title": "剧本文本设置"}
+                    self._json(200, {"canvas": {**script_canvas, "test_statuses": {}}})
+                elif path == "/api/canvases/article-settings":
+                    cls.canvas_gets += 1
+                    article_canvas = {**cls.canvas, "id": "article-settings", "title": "文章文本设置"}
+                    self._json(200, {"canvas": {**article_canvas, "test_statuses": {}}})
+                elif path == "/api/canvases/ordinary-fixture":
+                    cls.canvas_gets += 1
+                    self._json(200, {"canvas": {**cls.canvas, "id": "ordinary-fixture", "test_statuses": {}}})
                 elif path == "/api/canvases/hypit-settings/meta":
                     self._json(200, {"id": "hypit-settings", "revision": cls.canvas["revision"], "updated_at": cls.canvas["updated_at"]})
                 elif path.startswith("/api/studio/tasks/"):
@@ -112,7 +182,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                     run_id = path.rsplit("/", 1)[-1]
                     self._json(200, {"run_id": run_id, **cls.poll_state})
                 elif path == "/api/providers":
-                    self._json(200, {"providers": []})
+                    self._json(200, {"providers": list(cls.api_providers_payload)})
                 elif path == "/api/model-capabilities":
                     self._json(200, cls.model_capabilities_payload)
                 elif path == "/api/studio/model-options":
@@ -181,7 +251,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length) or b"{}")
                 cls.write_paths.append(path)
-                if path == "/api/canvases/hypit-settings":
+                if path in {"/api/canvases/hypit-settings", "/api/canvases/script-settings", "/api/canvases/article-settings", "/api/canvases/ordinary-fixture"}:
                     cls.canvas_put_attempts += 1
                     previous_nodes = {str(node.get("id") or ""): node for node in cls.canvas.get("nodes", [])
                                       if isinstance(node, dict)}
@@ -374,6 +444,11 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         type(self).comfy_workflow_detail_responses = []
         type(self).comfy_workflow_detail_gets = []
         type(self).comfy_workflow_detail_completions = []
+        type(self).startup_probe_active = False
+        type(self).startup_events = []
+        type(self).startup_api_delay_seconds = 0.12
+        type(self).startup_resource_delay_seconds = 0.65
+        type(self).startup_model_options_delay_seconds = 0.24
 
     @classmethod
     def tearDownClass(cls):
@@ -632,6 +707,373 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.cdp("Input.dispatchMouseEvent", {"type": "mousePressed", "x": coords["sx"], "y": coords["sy"], "button": "left", "buttons": 1, "clickCount": 1})
         self.cdp("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": coords["tx"], "y": coords["ty"], "button": "left", "buttons": 1})
         self.cdp("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": coords["tx"], "y": coords["ty"], "button": "left", "buttons": 0, "clickCount": 1})
+
+    def test_canvas_startup_probe_records_delayed_resource_and_first_candidate_fetch(self):
+        self.seed_canvas([{
+            "id": "text-run", "type": "smart-text-generator", "x": 50, "y": 120,
+            "runSettings": {"textProvider": "fixture", "textModel": "fixture-text"},
+            "promptDraftText": "fixture prompt",
+        }, {
+            "id": "text-output", "type": "smart-hypit-output", "hypitSlot": "text",
+            "outputKind": "text", "x": 540, "y": 120,
+        }], [{"id": "text-edge", "from": "text-run", "to": "text-output", "kind": "input"}])
+        type(self).startup_probe_active = True
+        probe = """window.__startupProbe={started:performance.now(),fetches:[]};
+          const nativeFetch=window.fetch.bind(window);
+          window.fetch=(input,init)=>{const url=typeof input==='string'?input:input.url;window.__startupProbe.fetches.push({url,at:performance.now()});return nativeFetch(input,init);};
+          document.addEventListener('DOMContentLoaded',()=>window.__startupProbe.dom=performance.now(),{once:true});
+          window.addEventListener('load',()=>window.__startupProbe.load=performance.now(),{once:true});
+          window.addEventListener('canvas-ready',()=>window.__startupProbe.ready=performance.now(),{once:true});"""
+        installed = self.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": probe})
+        try:
+            self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=script-settings&mode=script-settings&startup_probe=1"})
+            self.wait_for(lambda: self.evaluate("Number.isFinite(window.__startupProbe?.ready)"),
+                          "共享画布启动探针没有收到 canvas-ready", timeout=12)
+            self.wait_for(lambda: self.evaluate("Number.isFinite(window.__startupProbe?.load)"),
+                          "延迟静态资源没有完成 load", timeout=12)
+            self.evaluate("window.__startupProbe.optionClick=performance.now();document.querySelector('.image-node[data-id=text-run]')?.click(); true")
+            self.wait_for(lambda: ("script", "text") in self.model_option_requests,
+                          "首次打开文本模型面板没有读取共享文本候选", timeout=12)
+            self.wait_for(lambda: self.evaluate("(()=>{const node=nodes.find(item=>item.id==='text-run');const ready=hypitModelOptionState(hypitModelSlotContext(node)).status==='ready';if(ready)window.__startupProbe.optionReady??=performance.now();return ready;})()"),
+                          "文本模型白名单未完成", timeout=12)
+            observation = json.loads(self.evaluate("JSON.stringify(window.__startupProbe)"))
+            core = [item for item in observation["fetches"] if any(path in item["url"] for path in
+                    ("/api/config", "/api/model-capabilities", "/api/smart-canvas/personalization", "/api/canvases/script-settings"))]
+            options = [item for item in observation["fetches"] if "/api/studio/model-options" in item["url"]]
+            observation["core_fetches"] = core
+            observation["option_fetches"] = options
+            observation["option_click_to_ready_ms"] = round(observation["optionReady"] - observation["optionClick"], 1)
+            observation["canvas_ready_before_load_ms"] = round(observation["load"] - observation["ready"], 1)
+            observation["resource_delay_s"] = type(self).startup_resource_delay_seconds
+            print("STARTUP_PROBE " + json.dumps(observation, ensure_ascii=False, sort_keys=True))
+            self.assertEqual(len(options), 1, "首次文本候选读取应只请求一次")
+            self.assertLess(observation["ready"], observation["load"],
+                            "核心画布初始化不应等待页面全部静态资源 load")
+            self.assertLess(options[0]["at"], observation["optionClick"],
+                            "script settings 的文本白名单应在文本节点首次打开前预取")
+            self.assertLess(observation["option_click_to_ready_ms"], 100,
+                            "预取后的首次文本候选面板不应再等待候选网络请求")
+        finally:
+            if installed.get("identifier"):
+                self.cdp("Page.removeScriptToEvaluateOnNewDocument", {"identifier": installed["identifier"]})
+
+    def test_api_settings_starts_at_dom_content_loaded_and_waits_for_providers_and_catalog(self):
+        type(self).api_providers_payload = [{
+            "id": "startup-probe-provider", "name": "Startup probe", "protocol": "openai",
+            "enabled": True, "image_models": [], "chat_models": [], "video_models": [],
+            "audio_models": [], "model_names": {},
+        }]
+        type(self).model_capabilities_payload = {"schema_version": 1, "providers": [], "options": []}
+        type(self).startup_api_delay_seconds = 0.22
+        type(self).startup_resource_delay_seconds = 0.65
+        type(self).startup_probe_active = True
+        probe = """window.__apiStartupProbe={started:performance.now(),fetches:[]};
+          const nativeFetch=window.fetch.bind(window);
+          window.fetch=(input,init)=>{const url=typeof input==='string'?input:input.url;const item={url,request:performance.now()};window.__apiStartupProbe.fetches.push(item);return nativeFetch(input,init).then(response=>{item.response=performance.now();return response;});};
+          document.addEventListener('DOMContentLoaded',()=>window.__apiStartupProbe.dom=performance.now(),{once:true});
+          window.addEventListener('load',()=>window.__apiStartupProbe.load=performance.now(),{once:true});
+          const markReady=()=>{const content=document.getElementById('settingsContent');if(content&&!content.hasAttribute('data-api-startup')&&content.getAttribute('aria-busy')==='false'){window.__apiStartupProbe.ready??=performance.now();return true;}return false;};
+          const readyObserver=new MutationObserver(markReady);
+          const watchReady=()=>{if(!document.documentElement)return false;readyObserver.observe(document.documentElement,{subtree:true,attributes:true,attributeFilter:['data-api-startup','aria-busy']});markReady();return true;};
+          window.__apiStartupProbe.markReady=markReady;
+          if(!watchReady())document.addEventListener('DOMContentLoaded',watchReady,{once:true});"""
+        installed = self.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": probe})
+        try:
+            self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/api-settings.html?startup_probe=1"})
+            self.wait_for(lambda: self.evaluate("Number.isFinite(window.__apiStartupProbe?.ready)"),
+                          "API 设置未在 providers 与能力目录读取后进入可编辑状态", timeout=12)
+            self.wait_for(lambda: self.evaluate("Number.isFinite(window.__apiStartupProbe?.load)"),
+                          "隔离慢资源没有完成 load", timeout=12)
+            observed = json.loads(self.evaluate("JSON.stringify({...window.__apiStartupProbe,ready:window.__apiStartupProbe.markReady()&&window.__apiStartupProbe.ready})"))
+            core = [item for item in observed["fetches"] if item["url"].split("?", 1)[0] in {"/api/providers", "/api/model-capabilities"}]
+            requests = {item["url"].split("?", 1)[0]: item for item in core}
+            self.assertEqual(set(requests), {"/api/providers", "/api/model-capabilities"})
+            self.assertTrue(all(item.get("response", 0) for item in core), "providers 与能力目录都必须完成响应")
+            self.assertGreaterEqual(observed["ready"], max(item["response"] for item in core),
+                                    "设置编辑区不得早于 providers 和候选能力目录可用")
+            self.assertLess(observed["ready"], observed["load"],
+                            "API 设置核心初始化应在延迟静态资源 load 前完成")
+            self.assertLess(observed["dom"], observed["load"], "DCL 应先于慢资源 load")
+            print("API_SETTINGS_STARTUP_PROBE " + json.dumps({
+                "dom_ms": round(observed["dom"] - observed["started"], 1),
+                "ready_ms": round(observed["ready"] - observed["started"], 1),
+                "load_ms": round(observed["load"] - observed["started"], 1),
+                "dcl_to_ready_ms": round(observed["ready"] - observed["dom"], 1),
+                "provider_request_ms": round(requests["/api/providers"]["request"] - observed["started"], 1),
+                "catalog_request_ms": round(requests["/api/model-capabilities"]["request"] - observed["started"], 1),
+                "provider_catalog_request_count": len(core),
+                "slow_resource_delay_s": type(self).startup_resource_delay_seconds,
+            }, sort_keys=True))
+        finally:
+            if installed.get("identifier"):
+                self.cdp("Page.removeScriptToEvaluateOnNewDocument", {"identifier": installed["identifier"]})
+
+    def test_text_settings_pending_candidates_keep_saved_selection_system_prompt_and_block_run(self):
+        profile = {
+            "model_id": "fixture-text-model", "node_type": "text_generation", "operation": "chat",
+            "family_id": "series-text-fixture-text", "family_name": "Fixture Text", "variant_id": "chat",
+            "provider_id": "fixture-provider", "capability_provider_id": "fixture-provider",
+            "variant_name": "Chat", "validation_mode": "strict", "readiness": "ready",
+            "runnable": True, "selectable": True,
+            "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
+            "parameters": {},
+        }
+        option = {
+            "option_id": "opt-fixture-text", "connection_id": "fixture-provider",
+            "capability_provider_id": "fixture-provider", "catalog_model_id": "fixture-text-model",
+            "node_type": "text_generation", "operation": "chat", "region_id": "",
+            "validation_mode": "strict", "runnable": True, "selectable": True,
+            "inputs": profile["inputs"], "parameters": {},
+        }
+        type(self).api_providers_payload = [{
+            "id": "fixture-provider", "name": "Fixture Provider", "protocol": "openai", "enabled": True,
+            "chat_models": ["fixture-text-model"], "image_models": [], "video_models": [], "audio_models": [],
+            "model_names": {},
+        }]
+        type(self).model_capabilities_payload = {
+            "schema_version": 1, "catalog_revision": "fixture-revision",
+            "providers": [{"id": "fixture-provider", "name": "Fixture Provider", "protocol": "openai",
+                "capability_provider_id": "fixture-provider", "models": [profile],
+                "families": [{"family_id": "series-text-fixture-text", "family_name": "Fixture Text",
+                    "node_type": "text_generation", "variants": [profile]}]}],
+            "options": [option],
+        }
+        type(self).module_model_options = {"text": [option]}
+        type(self).canvas = {
+            **self._empty_canvas(), "id": "article-settings", "title": "文章文本设置",
+            "nodes": [{"id": "text-run", "type": "smart-text-generator", "x": 50, "y": 120,
+                "runSettings": {"engine": "api", "textProvider": "fixture-provider",
+                    "textFamilyId": "series-text-fixture-text", "textModel": "fixture-text-model",
+                    "textSystemEnabled": True, "textSystemPrompt": "fixture saved system prompt"},
+                "promptDraftText": "fixture request"}],
+            "connections": [],
+        }
+        type(self).startup_model_options_delay_seconds = 0.75
+        type(self).startup_probe_active = True
+        try:
+            self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=article-settings&mode=article-settings&startup_probe=1"})
+            self.wait_for(lambda: self.evaluate("document.querySelector('.image-node[data-id=text-run]') !== null"),
+                          "文章设置图文本节点没有加载")
+            self.wait_for(lambda: any(item.get("path") == "/api/studio/model-options" and item.get("phase") == "request"
+                                      for item in self.startup_events),
+                          lambda: "文本节点首次打开前没有开始模块级候选读取：" + str(self.evaluate("JSON.stringify({mode:isSettingsCanvasMode,module:settingsCanvasModuleId(),nodes:nodes.map(n=>({id:n.id,type:n.type})),fetches:performance.getEntriesByType('resource').map(r=>r.name).filter(u=>u.includes('/api/'))})")))
+            baseline = json.loads(self.evaluate("""JSON.stringify((()=>{const s=nodes.find(item=>item.id==='text-run').runSettings;return {
+              provider:s.textProvider,model:s.textModel,family:s.textFamilyId,systemEnabled:s.textSystemEnabled,systemPrompt:s.textSystemPrompt};})())"""))
+            self.evaluate("document.querySelector('.image-node[data-id=text-run]').click(); true")
+            self.wait_for(lambda: self.evaluate("document.querySelector('.text-generation-params') !== null"),
+                          "候选读取期间没有保留文本参数面板")
+            pending = json.loads(self.evaluate("""JSON.stringify((()=>{
+              const node=nodes.find(item=>item.id==='text-run');
+              const modelButton=document.querySelector('[data-capability-model-picker] .smart-pill');
+              return {status:hypitModelOptionState(hypitModelSlotContext(node)).status,
+                pane:!!document.querySelector('.text-generation-params'),systemPrompt:document.querySelector('[data-text-system-prompt]')?.value,
+                systemEnabled:document.querySelector('[data-text-system-toggle]')?.checked,
+                modelDisabled:modelButton?.disabled,modelText:modelButton?.textContent,
+                statusText:document.querySelector('.text-generation-options-status')?.textContent,
+                promptPlaceholder:document.getElementById('promptInput')?.dataset.placeholder,
+                runDisabled:document.getElementById('runBtn')?.disabled,
+                runSettings:{...node.runSettings}};
+            })())"""))
+            self.assertEqual(pending["status"], "loading", pending)
+            self.assertTrue(pending["pane"] and pending["systemEnabled"], pending)
+            self.assertEqual(pending["systemPrompt"], "fixture saved system prompt", pending)
+            self.assertTrue(pending["modelDisabled"], pending)
+            self.assertIn("正在核对", pending["statusText"], pending)
+            self.assertIn("输入要发送", pending["promptPlaceholder"], pending)
+            self.assertTrue(pending["runDisabled"], pending)
+            self.assertEqual({"provider":pending["runSettings"].get("textProvider"),
+                "model":pending["runSettings"].get("textModel"), "family":pending["runSettings"].get("textFamilyId"),
+                "systemEnabled":pending["runSettings"].get("textSystemEnabled"),
+                "systemPrompt":pending["runSettings"].get("textSystemPrompt")}, baseline,
+                "loading 状态只能呈现现有保存值，不能提交/清空模型与系统提示词")
+            # Exercise both the disabled UI and the direct handler guard. Neither may submit a run.
+            self.evaluate("document.getElementById('runBtn').click(); document.getElementById('promptInput').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); true")
+            self.evaluate("runSelectedNode()")
+            time.sleep(0.12)
+            self.assertEqual(type(self).agent_command_posts, [], "candidate verification pending must not submit a run command")
+            self.assertEqual(type(self).test_posts, [], "candidate verification pending must not invoke a provider/test route")
+            self.wait_for(lambda: self.evaluate("hypitModelOptionState(hypitModelSlotContext(nodes.find(item=>item.id==='text-run'))).status==='ready'"),
+                          "文章文本候选白名单没有完成核验", timeout=8)
+            self.wait_for(lambda: self.evaluate("document.querySelector('[data-capability-model-picker] .smart-pill')?.disabled===false"),
+                          "核验完成后文本模型选择仍不可用")
+            after = json.loads(self.evaluate("""JSON.stringify((()=>{const node=nodes.find(item=>item.id==='text-run');return {
+              provider:node.runSettings.textProvider,model:node.runSettings.textModel,family:node.runSettings.textFamilyId,
+              systemEnabled:node.runSettings.textSystemEnabled,systemPrompt:node.runSettings.textSystemPrompt,
+              panel:!!document.querySelector('.text-generation-params'),status:hypitModelOptionState(hypitModelSlotContext(node)).status};})())"""))
+            self.assertEqual(after["provider"], baseline["provider"], after)
+            self.assertEqual(after["model"], baseline["model"], after)
+            self.assertEqual(after["systemEnabled"], baseline["systemEnabled"], after)
+            self.assertEqual(after["systemPrompt"], baseline["systemPrompt"], after)
+            self.assertTrue(after["panel"] and after["status"]=="ready", after)
+            self.assertEqual(type(self).agent_command_posts, [])
+            self.assertEqual(type(self).test_posts, [])
+        finally:
+            type(self).startup_probe_active = False
+
+    def test_ordinary_canvas_first_text_picker_uses_fresh_startup_catalog(self):
+        profile = {
+            "model_id": "fixture-text-model", "node_type": "text_generation", "operation": "chat",
+            "family_id": "fixture-text-family", "family_name": "Fixture Text", "variant_id": "chat",
+            "provider_id": "fixture-provider", "capability_provider_id": "fixture-provider",
+            "variant_name": "Chat", "validation_mode": "strict", "readiness": "ready",
+            "runnable": True, "selectable": True,
+            "inputs": {"prompt": {"media_type": "text", "min": 1, "max": 1, "role": "prompt"}},
+            "parameters": {},
+        }
+        option = {
+            "option_id": "opt-fixture-text", "connection_id": "fixture-provider",
+            "capability_provider_id": "fixture-provider", "catalog_model_id": "fixture-text-model",
+            "node_type": "text_generation", "operation": "chat", "region_id": "",
+            "validation_mode": "strict", "runnable": True, "selectable": True,
+            "inputs": profile["inputs"], "parameters": {},
+        }
+        type(self).api_providers_payload = [{
+            "id": "fixture-provider", "name": "Fixture Provider", "protocol": "openai", "enabled": True,
+            "chat_models": ["fixture-text-model"], "image_models": [], "video_models": [], "audio_models": [],
+            "model_names": {},
+        }]
+        type(self).model_capabilities_payload = {
+            "schema_version": 1, "catalog_revision": "fixture-text-catalog",
+            "providers": [{"id": "fixture-provider", "name": "Fixture Provider", "protocol": "openai",
+                "capability_provider_id": "fixture-provider", "models": [profile],
+                "families": [{"family_id": "fixture-text-family", "family_name": "Fixture Text",
+                    "node_type": "text_generation", "variants": [profile]}]}],
+            "options": [option],
+        }
+        type(self).canvas = {
+            **self._empty_canvas(), "id": "ordinary-fixture", "title": "普通画布首开测试",
+            "nodes": [{"id": "text-run", "type": "smart-text-generator", "x": 50, "y": 120,
+                "runSettings": {"textProvider": "fixture-provider", "textFamilyId": "fixture-text-family",
+                    "textModel": "fixture-text-model"}, "promptDraftText": "fixture prompt"}],
+        }
+        type(self).startup_probe_active = True
+        probe = """window.__ordinaryProbe={started:performance.now(),fetches:[]};
+          const nativeFetch=window.fetch.bind(window);
+          window.fetch=(input,init)=>{const url=typeof input==='string'?input:input.url;window.__ordinaryProbe.fetches.push({url,at:performance.now()});return nativeFetch(input,init);};
+          window.addEventListener('canvas-ready',()=>window.__ordinaryProbe.ready=performance.now(),{once:true});"""
+        installed = self.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": probe})
+        try:
+            self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=ordinary-fixture"})
+            self.wait_for(lambda: self.evaluate("Number.isFinite(window.__ordinaryProbe?.ready)"),
+                          "普通画布没有完成初次加载")
+            self.evaluate("window.__ordinaryProbe.nodeClick=performance.now();document.querySelector('.image-node[data-id=text-run]')?.click(); true")
+            self.wait_for(lambda: self.evaluate("!!document.querySelector('[data-capability-model-picker] .smart-pill')"),
+                          "普通画布的文本模型面板没有显示")
+            self.evaluate("window.__ordinaryProbe.pickerClick=performance.now();document.querySelector('[data-capability-model-picker] .smart-pill').click(); true")
+            self.wait_for(lambda: self.evaluate("document.querySelector('[data-capability-model-picker]')?.classList.contains('pinned')"),
+                          "普通画布文本模型菜单没有打开")
+            self.evaluate("window.__ordinaryProbe.pickerReady=performance.now(); true")
+            allowed = self.evaluate("verifiedTextGenerationModels(nodes.find(node=>node.id==='text-run')).some(model=>model.model_id==='fixture-text-model')")
+            self.assertTrue(allowed, "普通画布首开应保留共享能力目录中真实启用、可运行的文本候选")
+            time.sleep(0.18)
+            observed = json.loads(self.evaluate("JSON.stringify(window.__ordinaryProbe)"))
+            route_counts = {}
+            for item in observed["fetches"]:
+                route = item["url"].split("?", 1)[0]
+                if route in {"/api/config", "/api/model-capabilities", "/api/smart-canvas/personalization"}:
+                    route_counts[route] = route_counts.get(route, 0) + 1
+            print("ORDINARY_TEXT_PICKER_PROBE " + json.dumps({
+                "ready_ms": round(observed["ready"] - observed["started"], 1),
+                "node_click_to_picker_ready_ms": round(observed["pickerReady"] - observed["nodeClick"], 1),
+                "picker_click_to_menu_ready_ms": round(observed["pickerReady"] - observed["pickerClick"], 1),
+                "route_counts": route_counts,
+                "option": "fixture-text-model",
+            }, ensure_ascii=False, sort_keys=True))
+            self.assertEqual(route_counts, {
+                "/api/config": 1, "/api/model-capabilities": 1, "/api/smart-canvas/personalization": 1,
+            }, "首次打开普通画布文本菜单不应重复读取刚载入的配置/候选/偏好")
+            self.assertNotIn("fixture-secret", json.dumps(self.evaluate("Object.fromEntries(Object.entries(localStorage))")),
+                             "模型候选启动不得把凭据写进 localStorage")
+        finally:
+            if installed.get("identifier"):
+                self.cdp("Page.removeScriptToEvaluateOnNewDocument", {"identifier": installed["identifier"]})
+
+    def test_canvas_text_field_expansion_keeps_same_dom_selection_and_composition(self):
+        type(self).canvas = {
+            **self._empty_canvas(), "id": "ordinary-fixture", "title": "文本编辑器隔离测试",
+            "nodes": [{"id": "text-run", "type": "smart-text-generator", "x": 50, "y": 120,
+                "runSettings": {"textSystemEnabled": True, "textSystemPrompt": "系统提示第一行\\n第二行"},
+                "promptDraftText": "片段甲\\n片段乙",
+                "promptDraftHtml": '开头<span class="mention-image-token" contenteditable="false" data-url="/fixture.png" data-kind="image" data-name="参考素材" data-text="" data-node-id="" data-source-node-id="" data-image-index="" data-asset-uris="{}"><span>参考素材</span></span> 结尾'}],
+        }
+        type(self).api_providers_payload = []
+        type(self).model_capabilities_payload = {"schema_version": 1, "catalog_revision": "fixture-empty", "providers": [], "options": []}
+        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=ordinary-fixture"})
+        self.wait_for(lambda: self.evaluate("document.querySelector('.image-node[data-id=text-run]') !== null"),
+                      "测试文本节点未加载")
+        self.evaluate("document.querySelector('.image-node[data-id=text-run]').click(); true")
+        self.wait_for(lambda: self.evaluate("document.getElementById('composer')?.classList.contains('open')"),
+                      "文本生成节点 composer 未打开")
+        self.wait_for(lambda: self.evaluate("!!document.querySelector('[data-text-system-prompt]')"),
+                      "系统提示词输入框未渲染")
+        self.evaluate("""(()=>{const editor=document.getElementById('promptInput');const text=editor.firstChild;
+          const range=document.createRange();range.setStart(text,1);range.collapse(true);
+          const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+          window.__promptTokenRef=editor.querySelector('.mention-image-token');
+          window.__promptEditorRef=editor;window.rememberPromptFieldSelection();
+          document.getElementById('promptExpandButton').click();
+          return true;})()""")
+        self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldDialog')?.open"),
+                      "提示词放大对话框未打开")
+        self.wait_for(lambda: self.evaluate("(()=>{const sel=getSelection();return sel?.rangeCount&&document.getElementById('promptInput').contains(sel.anchorNode)&&sel.anchorOffset===1;})()"),
+                      lambda: self.evaluate("(()=>{const sel=getSelection(),editor=document.getElementById('promptInput'),saved=canvasExpandedTextField?.selection;return JSON.stringify({open:document.getElementById('canvasTextFieldDialog').open,active:document.activeElement?.id,anchorText:sel?.anchorNode?.textContent,anchorOffset:sel?.anchorOffset,inside:editor.contains(sel?.anchorNode),savedAnchorPath:saved?.anchorPath,savedAnchorOffset:saved?.anchorOffset});})()"))
+        prompt_open = json.loads(self.evaluate("""JSON.stringify({same:window.__promptEditorRef===document.getElementById('promptInput'),
+          tokenSame:window.__promptTokenRef===document.querySelector('#promptInput .mention-image-token'),
+          inDialog:document.getElementById('canvasTextFieldDialog').contains(document.getElementById('promptInput')),
+          selection:getSelection().anchorOffset,anchorText:getSelection().anchorNode?.textContent})"""))
+        self.assertTrue(prompt_open["same"] and prompt_open["tokenSame"] and prompt_open["inDialog"],
+                        f"放大必须移动原DOM并保留 mention token：{prompt_open}")
+        self.assertEqual(prompt_open["selection"], 1, f"放大时应保留文本光标：{prompt_open}")
+        prompt_shot = self.cdp("Page.captureScreenshot", {"format":"png", "fromSurface":True})
+        (type(self).cache / "canvas-text-editor-prompt-expanded.png").write_bytes(base64.b64decode(prompt_shot["data"]))
+        self.evaluate("window.StudioI18n.set('en'); true")
+        self.assertEqual(self.evaluate("document.getElementById('canvasTextFieldHeading').textContent"), "Prompt",
+                         "提示词仍在放大时切换语言应立即更新对话框标题")
+        self.evaluate("window.StudioI18n.set('zh'); true")
+        self.assertEqual(self.evaluate("document.getElementById('canvasTextFieldHeading').textContent"), "提示词",
+                         "提示词放大标题应随语言切回更新")
+        self.evaluate("document.getElementById('promptInput').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})); true")
+        self.assertEqual(len(type(self).agent_command_posts), 0, "放大编辑器内 Enter 不应触发画布 Agent 运行")
+        self.evaluate("document.getElementById('canvasTextFieldDone').click(); true")
+        self.wait_for(lambda: self.evaluate("(()=>{const sel=getSelection();return !document.getElementById('canvasTextFieldDialog').open&&sel?.rangeCount&&document.getElementById('promptInput').contains(sel.anchorNode)&&sel.anchorOffset===1;})()"),
+                      "收起后的提示词光标未恢复到原位置")
+        prompt_closed = json.loads(self.evaluate("""JSON.stringify({closed:!document.getElementById('canvasTextFieldDialog').open,
+          same:window.__promptEditorRef===document.getElementById('promptInput'),
+          tokenSame:window.__promptTokenRef===document.querySelector('#promptInput .mention-image-token'),
+          selection:getSelection().anchorOffset})"""))
+        self.assertTrue(prompt_closed["closed"] and prompt_closed["same"] and prompt_closed["tokenSame"],
+                        f"收起后应恢复原prompt和mention DOM：{prompt_closed}")
+        self.assertEqual(prompt_closed["selection"], 1, f"收起时应恢复当前文本光标：{prompt_closed}")
+
+        self.evaluate("document.querySelector('[data-canvas-text-expand=system]').click(); true")
+        self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldDialog')?.open"),
+                      "系统提示词放大对话框未打开")
+        self.assertTrue(self.evaluate("document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]') === document.querySelector('[data-text-system-prompt]')"),
+                        "放大必须复用原系统提示词 textarea")
+        self.wait_for(lambda: self.evaluate("document.activeElement===document.querySelector('[data-text-system-prompt]')"),
+                      "系统提示词输入框未在放大器中获得焦点")
+        self.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))")
+        system_shot = self.cdp("Page.captureScreenshot", {"format":"png", "fromSurface":True})
+        (type(self).cache / "canvas-text-editor-system-expanded.png").write_bytes(base64.b64decode(system_shot["data"]))
+        self.evaluate("window.__expandedSystemEditor=document.querySelector('[data-text-system-prompt]'); window.__expandedSystemEditor.value='新系统提示\\n第二行'; window.__expandedSystemEditor.dispatchEvent(new Event('input',{bubbles:true})); window.dispatchEvent(new Event('studio-lang-change')); true")
+        self.wait_for(lambda: self.evaluate("!document.getElementById('canvasTextFieldDialog')?.open && document.querySelectorAll('#dynamicParams [data-text-system-prompt]').length===1 && !document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]')"),
+                      "语言切换后系统提示词应唯一归位，不留旧 textarea")
+        self.assertEqual(self.evaluate("nodes.find(node=>node.id==='text-run').runSettings.textSystemPrompt"), "新系统提示\n第二行",
+                         "重绘前输入必须通过原系统提示词保存链路进入节点设置")
+
+        self.evaluate("document.querySelector('[data-canvas-text-expand=system]').click(); true")
+        self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldDialog')?.open"),
+                      "系统提示词不能在语言重绘后再次放大")
+        self.evaluate("""(()=>{const editor=document.querySelector('[data-text-system-prompt]');
+          editor.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
+          window.__composeCheck={state:!!canvasExpandedTextField,same:canvasExpandedTextField?.editor===editor,composing:canvasExpandedTextField?.composing};
+          window.dispatchEvent(new Event('studio-lang-change'));return true;})()""")
+        composing_state = self.evaluate("JSON.stringify({composeCheck:window.__composeCheck,open:document.getElementById('canvasTextFieldDialog').open,host:!!document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]'),composing:canvasExpandedTextField?.composing,closeRequested:canvasExpandedTextField?.closeRequested,deferred:canvasTextFieldDeferredParamsRender,systemCount:document.querySelectorAll('[data-text-system-prompt]').length})")
+        self.assertTrue(json.loads(composing_state)["open"] and json.loads(composing_state)["host"],
+                        f"IME composing 时应延后参数重绘，不能夺走当前编辑框：{composing_state}")
+        self.evaluate("document.querySelector('[data-text-system-prompt]').dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'字'})); true")
+        self.wait_for(lambda: self.evaluate("!document.getElementById('canvasTextFieldDialog')?.open && document.querySelectorAll('#dynamicParams [data-text-system-prompt]').length===1 && !document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]')"),
+                      "compositionend 后应安全收起并只保留一个系统提示词输入框")
 
     def test_hypit_settings_opens_the_shared_smart_canvas(self):
         self.open_hypit_canvas()

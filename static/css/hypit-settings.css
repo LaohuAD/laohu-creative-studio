@@ -386,6 +386,33 @@
     background: var(--studio-focus-soft, var(--soft));
 }
 
+/* 剧本与小说各用独立配置图，沿用文章/音乐设置的共享画布外壳。 */
+.layout.script-settings-mode #providerSettingsView > :not(#scriptSettingsBlock),
+.layout.novel-settings-mode #providerSettingsView > :not(#novelSettingsBlock) {
+    display: none !important;
+}
+
+.layout.script-settings-mode .content-head,
+.layout.novel-settings-mode .content-head {
+    display: none !important;
+}
+
+.layout.script-settings-mode #scriptSettingsBlock,
+.layout.novel-settings-mode #novelSettingsBlock {
+    display: flex !important;
+}
+
+.layout.script-settings-mode #canvasModelSettingsBlock,
+.layout.novel-settings-mode #canvasModelSettingsBlock {
+    display: none !important;
+}
+
+.layout.script-settings-mode #scriptSettingsNav,
+.layout.novel-settings-mode #novelSettingsNav {
+    border-color: var(--studio-focus, var(--strong));
+    background: var(--studio-focus-soft, var(--soft));
+}
+
 @media (max-width: 860px) {
     .hypit-capability-summary {
         grid-template-columns: 1fr 1fr;

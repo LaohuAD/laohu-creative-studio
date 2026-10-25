@@ -2,7 +2,7 @@
     'use strict';
 
     const supportedCanvasIds = new Set([
-        'hypit-settings', 'article-settings', 'music-settings', 'canvas-settings',
+        'hypit-settings', 'article-settings', 'music-settings', 'script-settings', 'novel-settings', 'canvas-settings',
     ]);
 
     function detailMessage(payload, fallback) {

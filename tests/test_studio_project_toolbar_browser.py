@@ -172,7 +172,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     pitches:items.slice(1).map((node,index)=>node.getBoundingClientRect().top-items[index].getBoundingClientRect().top)
                   };
                 })()""")
-                self.assertEqual(report["labels"], ["画布", "Hypit克隆", "公众号文章", "音乐创作", "素材库"], report)
+                self.assertEqual(report["labels"], ["画布", "Hypit克隆", "公众号文章", "音乐创作", "剧本创作", "小说创作", "素材库"], report)
                 self.assertTrue(all(height >= 44 for height in report["heights"]), report)
                 self.assertTrue(all(52 <= pitch <= 56 for pitch in report["pitches"]), report)
 
