@@ -149,6 +149,9 @@ class StudioBrandBrowserTests(unittest.TestCase):
                         "node_schema_version": cls.canvas_schema_version, "nodes": [], "connections": [], "settings": {},
                     }})
                     return
+                if path == "/api/canvases/brand-fixture/meta":
+                    self._json(200, {"id": "brand-fixture", "revision": 1, "updated_at": 1791060000})
+                    return
                 if path == "/api/canvas-runs":
                     self._json(200, {"runs": []})
                     return
@@ -213,8 +216,12 @@ class StudioBrandBrowserTests(unittest.TestCase):
                     return
                 self._json(403, {"detail": "隔离视觉测试只允许 Hypit 本地预览样例"})
 
+        class BrowserFixtureHTTPServer(ThreadingHTTPServer):
+            # 页面会并行请求多个静态资源和 API；扩大隔离服务器的 accept 队列，
+            # 避免默认小队列成为浏览器 fixture 的容量瓶颈。
+            request_queue_size = 64
 
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.server = BrowserFixtureHTTPServer(("127.0.0.1", 0), Handler)
         cls.http_port = cls.server.server_address[1]
         cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.server_thread.start()
@@ -257,7 +264,8 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
         cls.cdp("Page.enable")
         cls.cdp("Runtime.enable")
         cls.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": r"""(() => {
-          const state = window.__brandBrowserDiagnostics = {errors:[], apiFetches:[]};
+          const state = window.__brandBrowserDiagnostics = {errors:[], apiFetches:[], canvasReady:false};
+          window.addEventListener('canvas-ready',()=>{state.canvasReady=true;},{once:true});
           const pathOf = value => { try { return new URL(value, location.href).pathname; } catch (_) { return String(value || ''); } };
           addEventListener('error', event => {
             state.errors.push({type:'error', message:String(event.message || ''), source:pathOf(event.filename || event.target?.src || ''), line:Number(event.lineno || 0)});
@@ -381,13 +389,15 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
         ready_checks = {
             "shell": "(() => { const frame=document.querySelector('iframe.active'); const style=frame&&getComputedStyle(frame); return document.querySelectorAll('.side-pill').length >= 4 && getComputedStyle(document.body).visibility === 'visible' && frame?.contentDocument?.readyState === 'complete' && frame.contentDocument.querySelector('[data-project-id=\"safe-canvas\"]') && Number(style.opacity) >= .99 && style.filter === 'blur(0px)'; })()",
             "projects": "document.querySelector('[data-project-id=\"safe-canvas\"]') !== null",
-            "canvas": "document.getElementById('smartTitle')?.textContent === '安全画布样例'",
+            # DOMContentLoaded 启动是异步的；标题默认值不能代表画布已完成读取。
+            "canvas": "window.__brandBrowserDiagnostics?.canvasReady === true && document.getElementById('smartTitle')?.textContent === '安全画布样例' && !!document.getElementById('world')",
             "api": "document.getElementById('settingsContent')?.dataset.apiStartup === 'empty'",
             "assets": "document.getElementById('assetStatus')?.textContent === '准备就绪' && !!document.querySelector('.asset-nav .nav-tree') && !!document.querySelector('[data-asset-card=\"safe-image\"]')",
             "hypit": "(() => { const frame = document.getElementById('nativeStudio'); const target = frame?.contentDocument; return frame?.hidden === false && target?.readyState === 'complete' && target.documentElement?.dataset?.fixtureReady === 'true' && frame.contentWindow?.location?.pathname === '/fixture/hypit-studio.html'; })()",
         }
+        ready_poll_count = 300 if page == "canvas" else 120
         canvas_ready = self.evaluate(f"""(async()=>{{
-          for(let i=0;i<120;i++){{if({ready_checks[page]})return true;await new Promise(r=>setTimeout(r,50));}}
+          for(let i=0;i<{ready_poll_count};i++){{if({ready_checks[page]})return true;await new Promise(r=>setTimeout(r,50));}}
           return false;
         }})()""")
         if not canvas_ready:
@@ -406,6 +416,7 @@ ws.onmessage=event=>{const message=JSON.parse(event.data);if(message.id!==undefi
               apiFetches: window.__brandBrowserDiagnostics?.apiFetches || [],
               browserErrors: window.__brandBrowserDiagnostics?.errors || [],
               canvasRoot: !!document.getElementById('world'),
+              canvasReady: window.__brandBrowserDiagnostics?.canvasReady || false,
               nodeCount: document.querySelectorAll('.smart-node').length,
               startupText: document.querySelector('.canvas-status,.canvas-empty-state,[role="alert"]')?.textContent?.trim() || null,
               canvasRequest: performance.getEntriesByType('resource')

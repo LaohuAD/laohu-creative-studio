@@ -31,6 +31,7 @@ ACTIONS = {
     'arrange': '整理指定节点',
     'snapshot': '读取画布实时状态',
     'production_status': '读取各段的剧本、图片、音频和视频节点实际状态',
+    'import_script_segments': '把剧本项目中已保存的分段以来源快照原子导入本画布并登记创作进度；只读写文本，不调用生成模型',
 }
 
 class CommandRequest(BaseModel):
@@ -131,7 +132,7 @@ class AgentMailbox:
             self.write(canvas_id, commands)
             return self.public(command)
 
-    def complete_backend(self, canvas_id, command_id, status, result=None, error=''):
+    def complete_backend(self, canvas_id, command_id, status, result=None, error='', error_status=None):
         if status not in {'succeeded', 'failed'}:
             raise HTTPException(400, '结果状态必须为 succeeded 或 failed')
         with self.lock:
@@ -142,6 +143,8 @@ class AgentMailbox:
             if command['status'] in {'succeeded', 'failed'}:
                 return self.public(command)
             command.update(status=status, result=result or {}, error=error or '', completed_at=time.time())
+            if error_status is not None:
+                command['error_status'] = int(error_status)
             self.write(canvas_id, commands)
             return self.public(command)
 
@@ -196,8 +199,10 @@ def create_agent_router(root, load_canvas, executor=None):
                 mailbox.complete_backend(canvas_id, command['id'], 'succeeded', result=result if isinstance(result, dict) else {'value': result})
             except BaseException as exc:
                 detail = getattr(exc, 'detail', None) or str(exc) or exc.__class__.__name__
+                error = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False, sort_keys=True)
                 try:
-                    mailbox.complete_backend(canvas_id, command['id'], 'failed', error=str(detail))
+                    mailbox.complete_backend(canvas_id, command['id'], 'failed', error=error,
+                                             error_status=getattr(exc, 'status_code', None))
                 except Exception:
                     # 原命令已进入 running；不能因为写回异常而创建第二次执行。
                     pass
@@ -281,6 +286,25 @@ def create_agent_router(root, load_canvas, executor=None):
     async def submit(canvas_id: str, payload: CommandRequest):
         load_canvas(canvas_id)
         command = mailbox.submit(canvas_id, payload)
+        if (backend_executor is not None and command.get('status') == 'running'
+            and command.get('action') == 'import_script_segments'):
+            active = backend_tasks.get(command['id'])
+            if active is not None and not active.done():
+                return command
+            # Import is a pure, durable graph transaction. Re-running the same
+            # request after a lost mailbox response is safe: scriptImports
+            # returns the committed receipt or the canvas lock performs it once.
+            try:
+                result = backend_executor(canvas_id, command.get('action'), command.get('args') or {}, command['request_id'])
+                if inspect.isawaitable(result):
+                    result = await result
+                return mailbox.complete_backend(canvas_id, command['id'], 'succeeded',
+                    result=result if isinstance(result, dict) else {'value': result})
+            except BaseException as exc:
+                detail = getattr(exc, 'detail', None) or str(exc) or exc.__class__.__name__
+                error = detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False, sort_keys=True)
+                return mailbox.complete_backend(canvas_id, command['id'], 'failed', error=error,
+                    error_status=getattr(exc, 'status_code', None))
         return schedule_backend(canvas_id, command)
 
     @router.get('/canvases/{canvas_id}/commands/{command_id}')

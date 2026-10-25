@@ -54,7 +54,8 @@ _PRIVATE_QUERY_KEYS = {"api_key", "apikey", "auth", "authorization", "key", "pas
 _TRUSTED_CONTEXT_FIELDS = {
     "module_id", "project_id", "purpose", "slot", "accepted_revision", "source_hash",
     "client_operation_id", "source_snapshot", "client_request_sha256", "client_base_revision",
-    "settings_revision", "resolved_request",
+    "settings_revision", "resolved_request", "scope", "source_id", "source_revision",
+    "source_sha256", "source_object_sha256",
 }
 _ARTICLE_PURPOSES = {"cover", "illustration", "knowledge"}
 _MUSIC_PURPOSES = {"song", "cover"}
@@ -132,6 +133,7 @@ class HypitFlowRunner:
         self.flow_kind = f"{module_id}_settings_flow"
         self._active: dict[str, asyncio.Task] = {}
         self._active_guard = threading.RLock()
+        self._cancel_requested: set[str] = set()
 
     @staticmethod
     def _canonical(value: Any) -> str:
@@ -155,6 +157,22 @@ class HypitFlowRunner:
                 ("Hypit 配置", "音乐配置"), ("Hypit", "音乐生成"),
             )
             for old, new in replacements:
+                text = text.replace(old, new)
+            return text
+        if self.module_id == "script":
+            for old, new in (("Hypit 测试请求", "剧本优化请求"), ("Hypit 流程请求", "剧本优化请求"),
+                             ("Hypit 设置流程画布", "剧本配置图"), ("Hypit 设置流程", "剧本优化流程"),
+                             ("Hypit 输出", "剧本文本输出"), ("Hypit 节点", "剧本优化节点"),
+                             ("Hypit 参数", "剧本优化参数"), ("Hypit 输入", "剧本优化输入"),
+                             ("Hypit", "剧本优化")):
+                text = text.replace(old, new)
+            return text
+        if self.module_id == "novel":
+            for old, new in (("Hypit 测试请求", "小说优化请求"), ("Hypit 流程请求", "小说优化请求"),
+                             ("Hypit 设置流程画布", "小说配置图"), ("Hypit 设置流程", "小说优化流程"),
+                             ("Hypit 输出", "小说文本输出"), ("Hypit 节点", "小说优化节点"),
+                             ("Hypit 参数", "小说优化参数"), ("Hypit 输入", "小说优化输入"),
+                             ("Hypit", "小说优化")):
                 text = text.replace(old, new)
             return text
         replacements = (
@@ -329,6 +347,46 @@ class HypitFlowRunner:
             context["project_id"] = project_id
             context["purpose"] = purpose
             context["source_hash"] = source_hash
+        elif self.module_id in {"script", "novel"}:
+            project_id = str(context.get("project_id") or "").strip()
+            scope = str(context.get("scope") or "").strip()
+            source_id = str(context.get("source_id") or "").strip()
+            revision = context.get("accepted_revision")
+            source_revision = context.get("source_revision")
+            source_hash = str(context.get("source_hash") or "").strip().lower()
+            snapshot = context.get("source_snapshot")
+            purposes = {"scene", "segment", "episode_outline"} if self.module_id == "script" else {"chapter", "chapter_outline"}
+            if slot != "text" or context.get("purpose") != "optimize" or scope not in purposes:
+                raise HTTPException(status_code=400, detail="文本优化任务的模块、范围或输出槽无效")
+            if not project_id or len(project_id) > 160 or not source_id or len(source_id) > 160:
+                raise HTTPException(status_code=400, detail="文本优化任务缺少项目或来源对象 ID")
+            if (isinstance(revision, bool) or not isinstance(revision, int) or revision <= 0
+                    or isinstance(source_revision, bool) or not isinstance(source_revision, int) or source_revision < 0):
+                raise HTTPException(status_code=400, detail="文本优化任务缺少有效来源修订号")
+            if not re.fullmatch(r"[a-f0-9]{64}", source_hash) or not isinstance(snapshot, Mapping):
+                raise HTTPException(status_code=400, detail="文本优化任务缺少服务端来源指纹或快照")
+            source_text = snapshot.get("text")
+            object_hash = str(context.get("source_object_sha256") or "").strip().lower()
+            expected_source_hash = str(context.get("source_sha256") or "")
+            if (not isinstance(source_text, str) or len(source_text.encode("utf-8")) > 2 * 1024 * 1024
+                    or hashlib.sha256(source_text.encode("utf-8")).hexdigest() != object_hash
+                    or len(expected_source_hash) > 64
+                    or (expected_source_hash and not re.fullmatch(r"[a-f0-9]{64}", expected_source_hash))):
+                raise HTTPException(status_code=400, detail="文本优化来源快照格式或指纹无效")
+            request_hash = str(context.get("client_request_sha256") or "").strip().lower()
+            settings_revision = context.get("settings_revision")
+            resolved_request = context.get("resolved_request")
+            client_base_revision = context.get("client_base_revision")
+            if (not re.fullmatch(r"[a-f0-9]{64}", request_hash)
+                    or isinstance(settings_revision, bool) or not isinstance(settings_revision, int)
+                    or settings_revision <= 0 or not isinstance(resolved_request, Mapping)
+                    or str(resolved_request.get("prompt") or "") == ""):
+                raise HTTPException(status_code=400, detail="文本优化任务缺少可恢复的执行快照")
+            if client_base_revision is not None and (isinstance(client_base_revision, bool)
+                    or not isinstance(client_base_revision, int) or client_base_revision <= 0):
+                raise HTTPException(status_code=400, detail="文本优化任务的设置图修订号无效")
+            context.update({"project_id": project_id, "scope": scope, "source_id": source_id,
+                            "source_hash": source_hash, "source_sha256": expected_source_hash})
         try:
             self._canonical(context)
         except HTTPException as exc:
@@ -1156,15 +1214,20 @@ class HypitFlowRunner:
                         pass
             await self._notify(run_id, "succeeded")
         except asyncio.CancelledError:
-            message = "服务中断，保留原任务供查询；系统不会自动重新提交。"
+            with self._active_guard:
+                explicit_cancel = run_id in self._cancel_requested
+                self._cancel_requested.discard(run_id)
+            message = ("已取消当前优化等待；上游服务可能仍在继续。" if explicit_cancel
+                       else "服务中断，保留原任务供查询；系统不会自动重新提交。")
             task_record = self.storage.get_canvas_task(run_id) or {}
             result = copy.deepcopy(task_record.get("result") if isinstance(task_record.get("result"), dict) else {})
-            result.update({"error_category": "interrupted", "error": message})
-            self._save_task_result(run_id, result, status="recoverable", error=message)
+            result.update({"error_category": "cancelled" if explicit_cancel else "interrupted", "error": message})
+            final_status = "cancelled" if explicit_cancel else "recoverable"
+            self._save_task_result(run_id, result, status=final_status, error=message)
             run = self.storage.get_run(run_id)
             if run and self._attempt(run).get("status") in {"queued", "submitted", "processing"}:
-                self.storage.update_run_status(run_id, "recoverable", error=message)
-            await self._notify(run_id, "recoverable")
+                self.storage.update_run_status(run_id, final_status, error=message)
+            await self._notify(run_id, final_status)
             raise
         except Exception as exc:
             error = self._safe_error(exc)
@@ -1180,6 +1243,32 @@ class HypitFlowRunner:
                 if current not in {"failed", "cancelled", "succeeded"}:
                     self.storage.update_run_status(run_id, "failed", error=error)
             await self._notify(run_id, "failed")
+
+    async def cancel(self, run_id: str) -> dict[str, Any]:
+        """Cancel only this runner's persistent task, preserving service-restart recovery semantics."""
+        run_id = str(run_id or "").strip()
+        flow = self.get(run_id)
+        if not isinstance(flow, Mapping):
+            raise HTTPException(status_code=404, detail="模块文本优化任务不存在")
+        status = str(flow.get("status") or "")
+        if status in {"succeeded", "failed", "cancelled"}:
+            return {"task_id": run_id, "status": status, "cancelled": status == "cancelled"}
+        with self._active_guard:
+            active = self._active.get(run_id)
+            if active and not active.done():
+                self._cancel_requested.add(run_id)
+                active.cancel()
+                return {"task_id": run_id, "status": "cancelling", "cancelled": False}
+        message = "已取消；未在此进程中运行的上游调用不会自动重试。"
+        task = self.storage.get_canvas_task(run_id) or {}
+        result = copy.deepcopy(task.get("result") if isinstance(task.get("result"), Mapping) else {})
+        result.update({"error_category": "cancelled", "error": message})
+        self.storage.update_canvas_task(run_id, status="cancelled", error=message, result=result)
+        run = self.storage.get_run(run_id)
+        if run and self._attempt(run).get("status") not in {"succeeded", "failed", "cancelled"}:
+            self.storage.update_run_status(run_id, "cancelled", error=message)
+        await self._notify(run_id, "cancelled")
+        return {"task_id": run_id, "status": "cancelled", "cancelled": True}
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         """从 ProjectStorage 读取任务，不依赖 runner 进程内存。"""

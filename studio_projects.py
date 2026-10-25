@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import os
 import re
 import shutil
@@ -92,7 +93,7 @@ def _clean_module(value: Any, *, allow_none: bool = False) -> Optional[str]:
         return None
     module = str(value or "").strip().lower()
     if module not in PROJECT_MODULES:
-        raise StudioProjectError("项目模块必须是 canvas、hypit、article 或 music")
+        raise StudioProjectError("项目模块不受支持")
     return module
 
 
@@ -360,6 +361,57 @@ class StudioProjectStore:
             raise DataFileError(f"音乐记录 {path.name} 内容损坏，原文件已保留，请从备份恢复。")
         return raw
 
+    def _read_manuscript_record(
+        self, project_id: str, module: str, *, missing_ok: bool = False
+    ) -> Optional[dict[str, Any]]:
+        if module not in {"script", "novel"}:
+            raise StudioProjectStoreError("手稿项目模块不匹配")
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            if missing_ok:
+                return None
+            raise StudioProjectNotFound("该 ID 保留给模块设置画布")
+        path = self._hypit_record_path(project_id)
+        if not path.exists():
+            if missing_ok:
+                return None
+            raise StudioProjectNotFound("项目不存在")
+        raw = read_json(path)
+        if not isinstance(raw, dict):
+            raise DataFileError(f"项目记录 {path.name} 格式损坏，原文件已保留，请从备份恢复。")
+        if raw.get("id") != project_id or raw.get("module") != module:
+            raise DataFileError(f"项目记录 {path.name} 与模块或文件名不匹配，原文件已保留，请从备份恢复。")
+        version = raw.get("version", 1)
+        revision = raw.get("revision", 1)
+        if not isinstance(version, int) or version > PROJECT_RECORD_VERSION:
+            raise DataFileError(f"项目记录 {path.name} 版本不受支持，原文件已保留，请从备份恢复。")
+        if not PROJECT_ID_PATTERN.fullmatch(str(raw.get("id") or "")) or not isinstance(raw.get("name"), str):
+            raise DataFileError(f"项目记录 {path.name} 的身份或名称不合法，原文件已保留，请从备份恢复。")
+        if not isinstance(revision, int) or revision < 1:
+            raise DataFileError(f"项目记录 {path.name} 的修订号不合法，原文件已保留，请从备份恢复。")
+        content = raw.get(module)
+        if content is not None and not isinstance(content, dict):
+            raise DataFileError(f"项目记录 {path.name} 内容损坏，原文件已保留，请从备份恢复。")
+        return raw
+
+    def read_manuscript_record(self, project_id: str, module: str) -> dict[str, Any]:
+        project_id = _clean_project_id(project_id)
+        with self.lock:
+            record = self._read_manuscript_record(project_id, module)
+            assert record is not None
+            return record
+
+    def write_manuscript_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """原子更新 script/novel 根记录；调用方须已持有共享项目锁。"""
+        project_id = _clean_project_id(record.get("id"))
+        module = str(record.get("module") or "")
+        if module not in {"script", "novel"} or not isinstance(record.get(module), Mapping):
+            raise StudioProjectStoreError("手稿项目内容格式无效")
+        if project_id in RESERVED_SETTINGS_CANVAS_IDS:
+            raise StudioProjectStoreError("保留设置画布 ID 不能作为手稿项目 ID")
+        value = dict(record)
+        write_json(self._hypit_record_path(project_id), value)
+        return value
+
     def read_article_record(self, project_id: str) -> dict[str, Any]:
         """在共享项目锁内读取文章主记录，损坏数据不会被空文章覆盖。"""
         project_id = _clean_project_id(project_id)
@@ -435,6 +487,21 @@ class StudioProjectStore:
         )
 
     @staticmethod
+    def _manuscript_public(record: Mapping[str, Any]) -> dict[str, Any]:
+        module = str(record.get("module") or "")
+        if module not in {"script", "novel"}:
+            raise StudioProjectStoreError("手稿项目模块不匹配")
+        project_id = _clean_project_id(record.get("id"))
+        return _public_project(
+            module=module,
+            project_id=project_id,
+            name=record.get("name", "未命名项目"),
+            updated_at=_timestamp(record),
+            url=f"/static/{module}-list.html?id={quote(project_id, safe='')}",
+            revision=_revision(record),
+        )
+
+    @staticmethod
     def _check_revision(current: Mapping[str, Any], expected_revision: Optional[int]) -> None:
         if expected_revision is None:
             return
@@ -474,6 +541,64 @@ class StudioProjectStore:
         index["updated_at"] = now_ms()
         write_json(self.recycle_index, index)
 
+    def list_recoverable_article_records(self) -> list[dict[str, Any]]:
+        """Read article records that remain restorable from the project recycle archive.
+
+        Archive paths come from a local index, but are still constrained to the
+        article archive directory before reading. Broken active archive entries
+        fail closed so shared media cannot be deleted while a restorable article
+        may still refer to it. No archive path is included in the returned data.
+        """
+        with self.lock:
+            index = self._load_recycle_index()
+            backup_root = self.backup_dir.resolve()
+            article_root = (self.backup_dir / "article").resolve()
+            records: list[dict[str, Any]] = []
+            for item in index.get("items") or []:
+                if not isinstance(item, Mapping) or item.get("module") != "article" or item.get("restored_at"):
+                    continue
+                try:
+                    project_id = _clean_project_id(item.get("id"))
+                except StudioProjectError as exc:
+                    raise DataFileError("文章回收归档索引损坏，引用保护已停止。") from exc
+                relative = str(item.get("backup_path") or "")
+                relative_path = Path(relative)
+                if (
+                    not relative
+                    or "\\" in relative
+                    or relative_path.is_absolute()
+                    or ".." in relative_path.parts
+                ):
+                    raise DataFileError("文章回收归档路径无效，引用保护已停止。")
+                archive = (self.root / relative_path).resolve()
+                if (
+                    not archive.is_relative_to(backup_root)
+                    or archive.parent != article_root
+                    or not archive.name.startswith(f"{project_id}-")
+                ):
+                    raise DataFileError("文章回收归档路径无效，引用保护已停止。")
+                record_path = archive / "project.json"
+                if not record_path.is_file() or not record_path.resolve().is_relative_to(archive):
+                    raise DataFileError("可恢复的文章归档记录缺失，引用保护已停止。")
+                try:
+                    record = read_json(record_path)
+                except DataFileError as exc:
+                    raise DataFileError("可恢复的文章归档记录损坏，引用保护已停止。") from exc
+                if (
+                    not isinstance(record, dict)
+                    or record.get("id") != project_id
+                    or record.get("module") != "article"
+                    or not isinstance(record.get("article"), dict)
+                    or not isinstance(record.get("name"), str)
+                    or not isinstance(record.get("revision", 1), int)
+                    or record.get("revision", 1) < 1
+                    or not isinstance(record.get("version", 1), int)
+                    or record.get("version", 1) > PROJECT_RECORD_VERSION
+                ):
+                    raise DataFileError("可恢复的文章归档记录格式无效，引用保护已停止。")
+                records.append(record)
+            return records
+
     def resolve_module(self, project_id: str, module: Optional[str] = None) -> str:
         project_id = _clean_project_id(project_id)
         normalized = _clean_module(module, allow_none=True)
@@ -482,11 +607,9 @@ class StudioProjectStore:
         canvas_item = self._canvas_item(project_id)
         hypit_exists = self._hypit_record_path(project_id).exists()
         record_module = self._record_module(self._hypit_record_path(project_id)) if hypit_exists else ""
-        article_exists = hypit_exists and record_module == "article"
-        music_exists = hypit_exists and record_module == "music"
-        hypit_exists = hypit_exists and record_module == "hypit"
-        matches = [name for name, exists in (("canvas", canvas_item is not None), ("hypit", hypit_exists),
-                                               ("article", article_exists), ("music", music_exists)) if exists]
+        matches = ["canvas"] if canvas_item is not None else []
+        if hypit_exists and record_module in PROJECT_MODULES - {"canvas"}:
+            matches.append(record_module)
         if len(matches) > 1:
             raise StudioProjectConflict("项目 ID 在多个模块中都存在，请附带 module 参数")
         if matches:
@@ -510,7 +633,7 @@ class StudioProjectStore:
             if normalized in (None, "canvas"):
                 for item in self._canvas_items():
                     output.append(self._canvas_public(item))
-            if normalized in (None, "hypit", "article", "music"):
+            if normalized is None or normalized in PROJECT_MODULES - {"canvas"}:
                 if self.studio_dir.exists():
                     for path in sorted(self.studio_dir.glob("*.json")):
                         record = self._record_module(path)
@@ -520,7 +643,10 @@ class StudioProjectStore:
                             output.append(self._article_public(self._read_article_record(path.stem) or {}))
                         elif record == "music" and normalized in (None, "music"):
                             output.append(self._music_public(self._read_music_record(path.stem) or {}))
-                        elif record not in {"hypit", "article", "music"}:
+                        elif record in {"script", "novel"} and normalized in (None, record):
+                            manuscript = self._read_manuscript_record(path.stem, record)
+                            output.append(self._manuscript_public(manuscript or {}))
+                        elif record not in PROJECT_MODULE_IDS - {"canvas"}:
                             raise DataFileError(f"项目记录 {path.name} 模块不受支持，原文件已保留。")
             return sorted(output, key=lambda item: (-int(item.get("updated_at") or 0), item["name"], item["id"]))
 
@@ -539,8 +665,11 @@ class StudioProjectStore:
             if normalized == "article":
                 article = self._read_article_record(project_id)
                 return self._article_public(article or {})
-            music = self._read_music_record(project_id)
-            return self._music_public(music or {})
+            if normalized == "music":
+                music = self._read_music_record(project_id)
+                return self._music_public(music or {})
+            manuscript = self._read_manuscript_record(project_id, normalized)
+            return self._manuscript_public(manuscript or {})
 
     def create(self, module: str, name: str) -> dict[str, Any]:
         normalized = _clean_module(module)
@@ -600,6 +729,10 @@ class StudioProjectStore:
                     "selected_cover_variant_id": None,
                     "selected_audio_variant_id": None,
                 }
+            if normalized == "script":
+                record["script"] = {"schema_version": 1, "state": "draft", "draft_sha256": "", "episodes": []}
+            if normalized == "novel":
+                record["novel"] = {"schema_version": 2, "volumes": [], "handoff": None}
             if workflow_path is not None:
                 workflow_path.mkdir(parents=True, exist_ok=False)
             try:
@@ -612,9 +745,13 @@ class StudioProjectStore:
                     except OSError:
                         pass
                 raise
-            return self._hypit_public(record) if normalized == "hypit" else (
-                self._article_public(record) if normalized == "article" else self._music_public(record)
-            )
+            if normalized == "hypit":
+                return self._hypit_public(record)
+            if normalized == "article":
+                return self._article_public(record)
+            if normalized == "music":
+                return self._music_public(record)
+            return self._manuscript_public(record)
 
     def rename(
         self,
@@ -643,17 +780,27 @@ class StudioProjectStore:
                     raise StudioProjectStoreError("画布重命名后无法重新读取画布")
                 return self._canvas_public(updated)
 
-            record = (self._read_hypit_record(project_id) if normalized == "hypit" else
-                      self._read_article_record(project_id) if normalized == "article" else
-                      self._read_music_record(project_id))
+            if normalized == "hypit":
+                record = self._read_hypit_record(project_id)
+            elif normalized == "article":
+                record = self._read_article_record(project_id)
+            elif normalized == "music":
+                record = self._read_music_record(project_id)
+            else:
+                record = self._read_manuscript_record(project_id, normalized)
             self._check_revision(record or {}, expected_revision)
             assert record is not None
             record["name"] = clean_name
             record["updated_at"] = now_ms()
             record["revision"] = _revision(record) + 1
             write_json(self._hypit_record_path(project_id), record)
-            return (self._hypit_public(record) if normalized == "hypit" else
-                    self._article_public(record) if normalized == "article" else self._music_public(record))
+            if normalized == "hypit":
+                return self._hypit_public(record)
+            if normalized == "article":
+                return self._article_public(record)
+            if normalized == "music":
+                return self._music_public(record)
+            return self._manuscript_public(record)
 
     def delete(
         self,
@@ -676,9 +823,14 @@ class StudioProjectStore:
                 )
                 return self._canvas_public(current)
 
-            record = (self._read_hypit_record(project_id) if normalized == "hypit" else
-                      self._read_article_record(project_id) if normalized == "article" else
-                      self._read_music_record(project_id))
+            if normalized == "hypit":
+                record = self._read_hypit_record(project_id)
+            elif normalized == "article":
+                record = self._read_article_record(project_id)
+            elif normalized == "music":
+                record = self._read_music_record(project_id)
+            else:
+                record = self._read_manuscript_record(project_id, normalized)
             self._check_revision(record or {}, expected_revision)
             assert record is not None
             # 先读回收索引，索引损坏时在任何移动动作前拒绝操作。
@@ -692,8 +844,79 @@ class StudioProjectStore:
             # 移动记录而非 unlink，方便从备份恢复，也避免删除用户资产。
             shutil.move(str(self._hypit_record_path(project_id)), str(archive / "project.json"))
             self._append_recycle_item(record, archive)
-            return (self._hypit_public(record) if normalized == "hypit" else
-                    self._article_public(record) if normalized == "article" else self._music_public(record))
+            if normalized == "hypit":
+                return self._hypit_public(record)
+            if normalized == "article":
+                return self._article_public(record)
+            if normalized == "music":
+                return self._music_public(record)
+            return self._manuscript_public(record)
+
+    def restore(self, project_id: str, module: str) -> dict[str, Any]:
+        """恢复最近一次归档记录；归档本身保留，供继续追溯。"""
+        project_id = _clean_project_id(project_id)
+        normalized = _clean_module(module)
+        if normalized == "canvas":
+            raise StudioProjectError("画布恢复请使用画布回收站")
+        with self.lock:
+            if self._hypit_record_path(project_id).exists():
+                raise StudioProjectConflict("当前项目 ID 已被使用，不能覆盖现有项目")
+            index = self._load_recycle_index()
+            match = next((item for item in reversed(index.get("items") or [])
+                          if isinstance(item, Mapping) and item.get("id") == project_id
+                          and item.get("module") == normalized and not item.get("restored_at")), None)
+            if match is None:
+                raise StudioProjectNotFound("没有可恢复的项目归档")
+            relative = str(match.get("backup_path") or "")
+            archive = (self.root / relative).resolve()
+            backup_root = self.backup_dir.resolve()
+            if not archive.is_relative_to(backup_root):
+                raise StudioProjectStoreError("项目归档路径无效")
+            source = archive / "project.json"
+            if not source.is_file():
+                raise StudioProjectNotFound("归档记录缺失，无法恢复")
+            raw = read_json(source)
+            if not isinstance(raw, dict) or raw.get("id") != project_id or raw.get("module") != normalized:
+                raise DataFileError("归档项目身份校验失败，原归档已保留。")
+            if normalized in {"script", "novel"}:
+                expected_hashes = set()
+                def collect(value: Any, key: str = "") -> None:
+                    if isinstance(value, Mapping):
+                        for child_key, child in value.items():
+                            collect(child, str(child_key))
+                    elif isinstance(value, list):
+                        for child in value:
+                            collect(child, key)
+                    elif key in {"content_sha256", "draft_sha256", "body_sha256", "body_ref"}:
+                        candidate = str(value or "")
+                        if re.fullmatch(r"[a-f0-9]{64}", candidate):
+                            expected_hashes.add(candidate)
+                collect(raw.get(normalized) or {})
+                blob_root = self.root / "data" / "studio_manuscripts" / "blobs"
+                for digest in expected_hashes:
+                    blob = blob_root / f"{digest}.md"
+                    if not blob.is_file() or hashlib.sha256(blob.read_bytes()).hexdigest() != digest:
+                        raise DataFileError("归档引用的正文块缺失或校验失败；归档保持不变。")
+            self.studio_dir.mkdir(parents=True, exist_ok=True)
+            if normalized in {"script", "novel"}:
+                # A restored manuscript keeps its durable operation receipts, but
+                # must advance the project revision so stale tabs cannot write
+                # over the restored state (the ABA case).
+                raw["revision"] = _revision(raw) + 1
+                raw["updated_at"] = now_ms()
+                write_json(self._hypit_record_path(project_id), raw)
+            else:
+                shutil.copy2(source, self._hypit_record_path(project_id))
+            match["restored_at"] = now_ms()
+            index["updated_at"] = now_ms()
+            write_json(self.recycle_index, index)
+            if normalized == "hypit":
+                return self._hypit_public(raw)
+            if normalized == "article":
+                return self._article_public(raw)
+            if normalized == "music":
+                return self._music_public(raw)
+            return self._manuscript_public(raw)
 
 
 def _revision_from_request(
@@ -824,7 +1047,15 @@ def create_studio_projects_router(
             expected = _revision_from_request(query_revision=revision, headers=request.headers if request else None)
             project = await run_in_threadpool(store.delete, project_id, module, expected)
             return {"ok": True, "project": project,
-                    "recycled": project.get("module") in {"hypit", "article", "music"}}
+                    "recycled": project.get("module") in PROJECT_MODULE_IDS - {"canvas"}}
+        except Exception as exc:
+            _raise_store_error(exc)
+
+    @router.post("/projects/{project_id}/restore", dependencies=[Depends(_guard_local_write)])
+    async def restore_project(project_id: str, module: str):
+        try:
+            project = await run_in_threadpool(store.restore, project_id, module)
+            return {"ok": True, "project": project, "recycled": True}
         except Exception as exc:
             _raise_store_error(exc)
 

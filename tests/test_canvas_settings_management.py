@@ -11,6 +11,7 @@ import re
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -667,6 +668,20 @@ class CanvasSettingsManagementTests(unittest.TestCase):
         }
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(ROOT / "main.py"), "exec"), namespace)
         return namespace
+
+    def test_capability_build_reads_one_fresh_identity_snapshot_per_request(self):
+        registry, root = self._isolated_registry()
+        records = [{"id": "fixture", "enabled": True, "chat_models": [],
+                    "image_models": ["fixture-image"], "video_models": [], "audio_models": [],
+                    "disabled_model_options": ["nonmatching-option"]}]
+        namespace = self._management_main_functions(registry, root / "providers.json", lambda: records)
+        with patch.object(studio_model_selection, "load_identity_document", wraps=studio_model_selection.load_identity_document) as load:
+            first = namespace["build_model_capability_catalog"](records)
+            self.assertTrue(first["options"])
+            self.assertEqual(load.call_count, 1)
+            second = namespace["build_model_capability_catalog"](records)
+            self.assertEqual(load.call_count, 2, "下一次请求必须重新读取身份文件")
+            self.assertEqual(first["options"], second["options"])
 
     def test_real_main_callbacks_first_enable_one_operation_and_block_disabled_preflight(self):
         """真实 main 回调把启用白名单与精确操作停用分开，并限定管理图试跑旁路。"""

@@ -130,6 +130,30 @@ class StudioArticleConnectionTests(unittest.TestCase):
 
         self.assertEqual(self.project_calls, [("article-1", "article")] * 4)
 
+    def test_fresh_article_connection_explains_final_html_version_workflow(self):
+        for lang in ("zh", "en"):
+            with self.subTest(lang=lang):
+                connection = self.client.get(
+                    f"/api/studio/projects/article-1/connection?module=article&lang={lang}"
+                ).json()
+                text = self.client.get(connection["document_url"]).text
+                for fragment in (
+                    "/api/studio/articles/article-1/versions",
+                    '/versions/body/{version_id}/restore',
+                    'body_view:"preview"', "expected_revision", "409",
+                ):
+                    self.assertIn(fragment, text)
+                if lang == "zh":
+                    for fragment in ("不展示 Markdown 原文", "内部创作源稿", "过程稿", "相同 HTML", "一次", "对比只 GET", "回执不确定"):
+                        self.assertIn(fragment, text)
+                    self.assertNotIn("任一改变都会让旧排版版本过期", text)
+                    self.assertNotIn("且 source_sha256 匹配当前文章的版本才能复制", text)
+                else:
+                    for fragment in ("no Markdown source", "internal authoring input", "process drafts", "identical HTML", "one expected_revision-protected PUT", "Comparison only GETs", "uncertain PUT"):
+                        self.assertIn(fragment, text)
+                    self.assertNotIn("either changing makes an old layout stale", text)
+                    self.assertNotIn("only valid=true with a source_sha256 matching", text)
+
     def test_article_skill_preparation_reuses_parent_entry_and_official_installer_instructions(self):
         for lang in ("zh", "en"):
             with self.subTest(lang=lang):
@@ -276,3 +300,108 @@ class StudioArticleConnectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StudioConnectionTests(unittest.TestCase):
+    def setUp(self):
+        self.app = FastAPI()
+
+        def get_project(project_id: str, module: str):
+            return {"id": project_id, "module": module, "name": "真实项目名"}
+
+        self.app.include_router(create_connection_router(get_project))
+        self.client = TestClient(self.app, base_url="http://studio.test:8123", client=("127.0.0.1", 42001))
+
+    def test_script_and_novel_preparation_and_connection_docs_use_the_requested_module_and_origin(self):
+        for module, route, title in (
+            ("script", "scripts", "剧本"),
+            ("novel", "novels", "小说"),
+        ):
+            project_id = f"{module}-actual-id"
+            for lang in ("zh", "en"):
+                with self.subTest(module=module, lang=lang):
+                    prep = self.client.get(f"/api/studio/modules/{module}/preparation?lang={lang}")
+                    self.assertEqual(prep.status_code, 200, prep.text)
+                    self.assertEqual(
+                        prep.json()["document_url"],
+                        f"http://studio.test:8123/api/studio/modules/{module}/preparation.md?lang={lang}",
+                    )
+                    self.assertIn("Read the preparation guide" if lang == "en" else "技能准备文档", prep.json()["text"])
+                    prep_text = prep.json()["text"].lower() if lang == "en" else prep.json()["text"]
+                    self.assertIn("do not call a model" if lang == "en" else "不自动调用模型", prep_text)
+                    self.assertIn("explicit request to optimize" if lang == "en" else "明确要求优化", prep_text)
+
+                    prep_doc = self.client.get(f"/api/studio/modules/{module}/preparation.md?lang={lang}")
+                    self.assertEqual(prep_doc.status_code, 200, prep_doc.text)
+                    self.assertIn("creative", prep_doc.text.lower() if lang == "en" else prep_doc.text)
+
+                    connected = self.client.get(
+                        f"/api/studio/projects/{project_id}/connection?module={module}&lang={lang}"
+                    )
+                    self.assertEqual(connected.status_code, 200, connected.text)
+                    expected_doc = (
+                        f"http://studio.test:8123/api/studio/projects/{project_id}/connection.md"
+                        f"?module={module}&lang={lang}"
+                    )
+                    self.assertEqual(connected.json()["project_id"], project_id)
+                    self.assertEqual(connected.json()["module"], module)
+                    self.assertEqual(connected.json()["document_url"], expected_doc)
+                    self.assertIn(project_id, connected.json()["text"])
+                    if lang == "en":
+                        self.assertIn("script projects" if module == "script" else "novel projects", connected.json()["text"])
+                        self.assertNotIn("music", connected.json()["text"].lower())
+                    else:
+                        self.assertIn(title, connected.json()["text"])
+                        self.assertNotIn("音乐", connected.json()["text"])
+
+                    connection_doc = self.client.get(expected_doc)
+                    self.assertEqual(connection_doc.status_code, 200, connection_doc.text)
+                    self.assertIn(f"http://studio.test:8123/api/studio/{route}/{project_id}", connection_doc.text)
+                    self.assertIn(f"/api/studio/{route}/{project_id}/generations", connection_doc.text)
+                    self.assertIn("Only after an explicit request to optimize non-empty saved text" if lang == "en" else "只有用户明确要求优化非空的已保存文本后", connection_doc.text)
+                    self.assertIn("non-empty saved text" if lang == "en" else "非空的已保存文本", connection_doc.text)
+                    self.assertIn("cannot be optimized" if lang == "en" else "才能优化", connection_doc.text)
+                    self.assertNotIn("the script module does not generate text", connection_doc.text.lower())
+                    self.assertNotIn("it does not generate prose", connection_doc.text.lower())
+                    outline_parent = "episodes" if module == "script" else "chapters"
+                    outline_action = "set_episode_outline" if module == "script" else "set_chapter_outline"
+                    outline_id_arg = "episode_id" if module == "script" else "chapter_id"
+                    self.assertIn(
+                        f"http://studio.test:8123/api/studio/{route}/{project_id}/{outline_parent}/{{{outline_id_arg}}}/outline",
+                        connection_doc.text,
+                    )
+                    self.assertIn(outline_action, connection_doc.text)
+                    self.assertIn(f"{{{outline_id_arg},body_markdown}}", connection_doc.text)
+                    for field in ("project_id", "revision", "parent_id", "outline_revision", "current_outline_revision", "outline_sha256", "outline_markdown"):
+                        self.assertIn(field, connection_doc.text)
+                    self.assertIn("selected_revision is current or history" if lang == "en" else "selected_revision 为 current 或 history", connection_doc.text)
+                    if lang == "en":
+                        self.assertIn("OpenAPI", connection_doc.text)
+                        self.assertNotIn("/api/studio/music/", connection_doc.text)
+                        if module == "script":
+                            self.assertIn("excluded from screenplay Markdown export, scene body/ranges", connection_doc.text)
+                            self.assertIn("import_script_segments", connection_doc.text)
+                            self.assertIn("history/{content_sha256}", connection_doc.text)
+                            self.assertIn("restore_draft", connection_doc.text)
+                            self.assertIn("replace_structured:true", connection_doc.text)
+                        else:
+                            self.assertIn("excluded from novel Markdown export, chapter body fingerprints, and body statistics", connection_doc.text)
+                            self.assertIn("/manifest", connection_doc.text)
+                            self.assertIn("exists:false,record:null", connection_doc.text)
+                            self.assertIn("include_drafts=true", connection_doc.text)
+                            self.assertIn("excluded by default" if lang == "en" else "默认不搜索 draft", connection_doc.text)
+                    else:
+                        self.assertIn("运行服务 OpenAPI", connection_doc.text)
+                        self.assertNotIn("/api/studio/music/", connection_doc.text)
+                        if module == "script":
+                            self.assertIn("章纲不进入剧本 Markdown 导出、场次正文、分段范围", connection_doc.text)
+                            self.assertIn("import_script_segments", connection_doc.text)
+                            self.assertIn("history/{content_sha256}", connection_doc.text)
+                            self.assertIn("restore_draft", connection_doc.text)
+                            self.assertIn("replace_structured:true", connection_doc.text)
+                        else:
+                            self.assertIn("章纲不是章节正文，不进入小说 Markdown 导出、正文指纹或正文统计", connection_doc.text)
+                            self.assertIn("/manifest", connection_doc.text)
+                            self.assertIn("exists:false,record:null", connection_doc.text)
+                            self.assertIn("include_drafts=true", connection_doc.text)
+                            self.assertIn("默认不搜索 draft", connection_doc.text)

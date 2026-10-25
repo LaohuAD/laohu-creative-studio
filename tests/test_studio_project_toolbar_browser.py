@@ -172,7 +172,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     pitches:items.slice(1).map((node,index)=>node.getBoundingClientRect().top-items[index].getBoundingClientRect().top)
                   };
                 })()""")
-                self.assertEqual(report["labels"], ["画布", "Hypit克隆", "公众号文章", "音乐创作", "素材库"], report)
+                self.assertEqual(report["labels"], ["画布", "Hypit克隆", "公众号文章", "音乐创作", "剧本创作", "小说创作", "素材库"], report)
                 self.assertTrue(all(height >= 44 for height in report["heights"]), report)
                 self.assertTrue(all(52 <= pitch <= 56 for pitch in report["pitches"]), report)
 
@@ -224,7 +224,15 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     }})()""")
                     self.assertEqual(report["ids"], [refresh_id, language_id, theme_id], report)
                     self.assertEqual(report["metrics"], [{"width": 34, "height": 34, "radius": "9px"}] * 3, report)
-                    self.assertEqual(report["gap"], "7px" if width > 420 else "5px", report)
+                    # 各作品页按各自 CSS 断点断言，不套用同一套窄屏阈值。
+                    gap_rule = {
+                        ".article-toolbar-actions": (520, "4px"),
+                        ".music-toolbar-actions": (520, "5px"),
+                        ".hypit-toolbar-actions": (650, "5px"),
+                    }[group_selector]
+                    breakpoint, narrow_gap = gap_rule
+                    expected_gap = narrow_gap if width <= breakpoint else "7px"
+                    self.assertEqual(report["gap"], expected_gap, report)
                     self.assertEqual(report["managementLinks"], 0, report)
                     self.assertFalse(report["agentButton"] or report["connectionDialog"], report)
                     self.assertFalse(report["overflow"], report)

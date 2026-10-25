@@ -121,6 +121,16 @@ button { border:0; cursor:pointer; }
 .nav-tree { display:flex; flex-direction:column; gap:6px; }
 .tree-branch { display:flex; flex-direction:column; gap:3px; }
 .tree-row { width:100%; min-height:34px; border-radius:9px; border:1px solid transparent; background:transparent; color:var(--text); display:grid; align-items:center; gap:7px; text-align:left; }
+.tree-sort-line { display:flex; align-items:center; gap:2px; min-width:0; }
+.tree-sort-line > .tree-row { width:auto; min-width:0; flex:1 1 auto; }
+.tree-sort-handle { width:24px; height:28px; flex:0 0 24px; display:inline-flex; align-items:center; justify-content:center; border:1px solid transparent; border-radius:7px; background:transparent; color:var(--faint); cursor:grab; touch-action:manipulation; }
+.tree-sort-handle:hover { background:var(--soft); border-color:var(--line); color:var(--text); }
+.tree-sort-handle:active { cursor:grabbing; }
+.tree-sort-handle:focus-visible { outline:2px solid var(--studio-focus,var(--strong)); outline-offset:1px; color:var(--text); }
+.tree-sort-handle svg { width:14px; height:14px; }
+.tree-sort-item.is-dragging { opacity:.45; }
+.tree-sort-item.drop-before .tree-sort-line { box-shadow:inset 0 2px var(--strong); }
+.tree-sort-item.drop-after .tree-sort-line { box-shadow:inset 0 -2px var(--strong); }
 .tree-parent { grid-template-columns:18px minmax(0,1fr) auto auto; padding:6px 8px; font-weight:900; }
 .tree-child { grid-template-columns:14px 16px minmax(0,1fr) auto; min-height:30px; padding:5px 7px 5px 12px; color:var(--muted); }
 .tree-row:hover { background:var(--soft); border-color:var(--line); }

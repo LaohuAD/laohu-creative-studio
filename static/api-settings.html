@@ -88,6 +88,24 @@
                             </span>
                         </button>
                     </div>
+                    <div id="scriptSettingsSubnav" class="hypit-subnav article-settings-subnav script-settings-subnav">
+                        <button id="scriptSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openScriptSettings()" aria-current="false">
+                            <span class="provider-mark"><i data-lucide="clapperboard" class="w-3.5 h-3.5"></i></span>
+                            <span class="provider-info">
+                                <span class="provider-name" data-i18n="scriptSettings.navLabel">剧本创作</span>
+                                <span class="provider-meta" data-i18n="scriptSettings.navMeta">文本优化配置</span>
+                            </span>
+                        </button>
+                    </div>
+                    <div id="novelSettingsSubnav" class="hypit-subnav article-settings-subnav novel-settings-subnav">
+                        <button id="novelSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openNovelSettings()" aria-current="false">
+                            <span class="provider-mark"><i data-lucide="book-open-text" class="w-3.5 h-3.5"></i></span>
+                            <span class="provider-info">
+                                <span class="provider-name" data-i18n="novelSettings.navLabel">小说创作</span>
+                                <span class="provider-meta" data-i18n="novelSettings.navMeta">文本优化配置</span>
+                            </span>
+                        </button>
+                    </div>
                     <div class="api-nav-group api-connection-nav">
                         <div class="side-section-title" data-i18n="api.connectionsTitle">平台连接</div>
                         <div id="providerList" class="provider-list"></div>
@@ -476,6 +494,44 @@
                         </div>
                         <div id="musicSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
                         <iframe id="musicSettingsCanvasFrame" class="hypit-settings-canvas" title="音乐生成配置画布" data-i18n-title="musicSettings.canvasFrameTitle" loading="eager" hidden></iframe>
+                    </section>
+
+                    <section id="scriptSettingsBlock" class="hypit-settings-block script-settings-block" hidden>
+                        <div class="hypit-settings-toolbar">
+                            <div class="hypit-settings-heading">
+                                <div class="block-title" data-i18n="scriptSettings.canvasTitle">剧本文本优化配置</div>
+                                <div class="block-desc" data-i18n="scriptSettings.canvasDescription">为剧本正文与章纲配置文本优化使用的模型。</div>
+                            </div>
+                            <div class="hypit-settings-toolbar-actions">
+                                <button id="scriptSettingsReset" class="action-btn" type="button" data-i18n-title="scriptSettings.canvasResetTitle" title="重置配置">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span data-i18n="scriptSettings.canvasReset">重置配置</span>
+                                </button>
+                                <button id="scriptSettingsNewTab" class="action-btn" type="button" data-i18n-title="scriptSettings.canvasNewTabTitle" title="打开画布编辑">
+                                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i><span data-i18n="scriptSettings.canvasNewTab">打开画布编辑</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="scriptSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
+                        <iframe id="scriptSettingsCanvasFrame" class="hypit-settings-canvas" title="剧本文本优化配置画布" data-i18n-title="scriptSettings.canvasFrameTitle" loading="eager" hidden></iframe>
+                    </section>
+
+                    <section id="novelSettingsBlock" class="hypit-settings-block novel-settings-block" hidden>
+                        <div class="hypit-settings-toolbar">
+                            <div class="hypit-settings-heading">
+                                <div class="block-title" data-i18n="novelSettings.canvasTitle">小说文本优化配置</div>
+                                <div class="block-desc" data-i18n="novelSettings.canvasDescription">为小说正文与章纲配置文本优化使用的模型。</div>
+                            </div>
+                            <div class="hypit-settings-toolbar-actions">
+                                <button id="novelSettingsReset" class="action-btn" type="button" data-i18n-title="novelSettings.canvasResetTitle" title="重置配置">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i><span data-i18n="novelSettings.canvasReset">重置配置</span>
+                                </button>
+                                <button id="novelSettingsNewTab" class="action-btn" type="button" data-i18n-title="novelSettings.canvasNewTabTitle" title="打开画布编辑">
+                                    <i data-lucide="external-link" class="w-3.5 h-3.5"></i><span data-i18n="novelSettings.canvasNewTab">打开画布编辑</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div id="novelSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
+                        <iframe id="novelSettingsCanvasFrame" class="hypit-settings-canvas" title="小说文本优化配置画布" data-i18n-title="novelSettings.canvasFrameTitle" loading="eager" hidden></iframe>
                     </section>
 
                     <section id="comfyuiSettingsBlock" class="comfyui-settings-block" hidden>

@@ -13,6 +13,7 @@ import html
 import inspect
 import json
 import math
+import re
 import time
 import uuid
 from collections.abc import Mapping
@@ -20,14 +21,21 @@ from typing import Any, Callable
 
 from canvas_core.hypit_config import (
     HYPIT_OUTPUT_KINDS,
-    HYPIT_OUTPUT_SLOTS,
     HYPIT_SETTINGS_CANVAS_ID,
+    MODULE_SETTINGS_CANVAS_OUTPUT_SLOTS,
+    SETTINGS_CANVAS_MODULES,
     validate_hypit_settings_canvas,
 )
+from studio_modules import RESERVED_SETTINGS_CANVAS_IDS
 
 
 class HeadlessCanvasError(ValueError):
     """命令不符合当前画布契约。"""
+
+    def __init__(self, detail: Any, status_code: int = 400):
+        self.detail = detail
+        self.status_code = int(status_code or 400)
+        super().__init__(str(detail))
 
 
 class HeadlessCanvas:
@@ -119,6 +127,7 @@ class HeadlessCanvas:
         self.validate_model = validate_model
         self.notify = notify
         self._request_cache: dict[tuple[str, str], tuple[str, Any]] = {}
+        self.script_import_handler: Callable[[str, Mapping[str, Any], str], Any] | None = None
 
     async def execute(
         self,
@@ -143,6 +152,15 @@ class HeadlessCanvas:
         if not isinstance(args, Mapping):
             raise HeadlessCanvasError("命令 args 必须是对象")
         args = copy.deepcopy(dict(args))
+        if action == "import_script_segments":
+            if self.script_import_handler is None:
+                raise HeadlessCanvasError("剧本导入服务尚未连接")
+            value = self.script_import_handler(canvas_id, args, request_id)
+            if inspect.isawaitable(value):
+                value = await value
+            if not isinstance(value, Mapping):
+                raise HeadlessCanvasError("剧本导入服务返回格式无效")
+            return copy.deepcopy(dict(value))
         fingerprint = self._fingerprint(action, args)
         cache_key = (canvas_id, request_id)
         with self.lock:
@@ -180,6 +198,275 @@ class HeadlessCanvas:
         with self.lock:
             self._request_cache[cache_key] = (fingerprint, copy.deepcopy(result))
         return result
+
+    async def import_script_snapshot(
+        self,
+        canvas_id: str,
+        args: Mapping[str, Any],
+        request_id: str,
+        snapshot: Mapping[str, Any],
+        *,
+        expected_canvas_revision: int,
+    ) -> dict[str, Any]:
+        """Commit complete source/segment nodes, production rows and receipt once."""
+        import hashlib
+        import json
+        import re
+        import uuid
+
+        from studio_script_import import import_fingerprint
+
+        if canvas_id in RESERVED_SETTINGS_CANVAS_IDS:
+            raise HeadlessCanvasError("剧本只能导入普通画布，不能导入模块设置图")
+        fingerprint = import_fingerprint("import_script_segments", args)
+        with self.lock:
+            original = self._load(canvas_id)
+            if original.get("id") != canvas_id or str(original.get("kind") or "").lower() != "smart":
+                raise HeadlessCanvasError("剧本只能导入智能画布")
+            imports = original.get("scriptImports")
+            if imports is None:
+                imports = {"schema_version": 1, "requests": {}, "snapshots": {}}
+            if (not isinstance(imports, dict) or imports.get("schema_version") != 1
+                or not isinstance(imports.get("requests"), dict) or not isinstance(imports.get("snapshots"), dict)):
+                raise HeadlessCanvasError("画布剧本导入索引格式损坏，拒绝覆盖", status_code=500)
+            prior = imports["requests"].get(request_id)
+            if prior is not None and isinstance(prior, dict) and prior.get("server_trusted") is True:
+                if not isinstance(prior, dict) or prior.get("fingerprint") != fingerprint:
+                    raise HeadlessCanvasError("同一 request_id 不能提交不同剧本导入载荷", status_code=409)
+                return copy.deepcopy(prior.get("receipt") or {})
+            actual_revision = self._positive_int(original.get("revision"), 1)
+            if expected_canvas_revision != actual_revision:
+                raise HeadlessCanvasError({"code": "CANVAS_REVISION_CONFLICT",
+                    "message": f"目标画布已更新，当前 revision 为 {actual_revision}；请重新读取后再导入。",
+                    "current_revision": actual_revision}, status_code=409)
+
+            candidate = copy.deepcopy(original)
+            self._ensure_canvas_shape(candidate, canvas_id)
+            candidate_imports = copy.deepcopy(imports)
+            source_project_id = str(snapshot.get("project_id") or "")
+            source_revision = self._positive_int(snapshot.get("project_revision"), 0)
+            mode = str(args.get("mode") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source_project_id) or not source_revision:
+                raise HeadlessCanvasError("来源剧本快照身份无效")
+            episodes = snapshot.get("episodes")
+            if not isinstance(episodes, list) or not episodes:
+                raise HeadlessCanvasError("来源剧本快照没有可导入剧集")
+
+            import_id = "scriptimport_" + uuid.uuid4().hex
+            node_by_id = {str(node.get("id")): node for node in candidate.get("nodes") or [] if isinstance(node, dict)}
+            segment_orders = [self._positive_int((node.get("production") or {}).get("order"), 0)
+                              for node in candidate.get("nodes") or []
+                              if isinstance(node, dict) and (node.get("production") or {}).get("role") == "segment"]
+            next_order = max(segment_orders + [0]) + 1
+            result_episodes = []
+            added_count = skipped_count = 0
+            warnings = []
+
+            # Portable workflow provenance is advisory. Only snapshots written
+            # by this server's atomic import transaction may drive deduplication.
+            all_prior_snapshots = [item for item in candidate_imports["snapshots"].values()
+                                   if isinstance(item, dict) and item.get("server_trusted") is True]
+            current_import_episodes = []
+            for episode_index, episode in enumerate(episodes):
+                if not isinstance(episode, Mapping):
+                    raise HeadlessCanvasError("来源剧集快照格式无效")
+                episode_id = str(episode.get("id") or "")
+                episode_hash = str(episode.get("content_sha256") or "")
+                episode_body = episode.get("body_markdown")
+                if (not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", episode_id)
+                    or not isinstance(episode_body, str) or not re.fullmatch(r"[a-f0-9]{64}", episode_hash)
+                    or hashlib.sha256(episode_body.encode("utf-8")).hexdigest() != episode_hash):
+                    raise HeadlessCanvasError("来源剧集正文或指纹校验失败")
+                segment_specs = episode.get("segments")
+                if not isinstance(segment_specs, list) or not segment_specs:
+                    raise HeadlessCanvasError("来源剧集没有已保存分段")
+
+                matching_episode_snapshots = []
+                prior_segments: dict[str, list[dict[str, Any]]] = {}
+                for saved in all_prior_snapshots:
+                    if not isinstance(saved, dict) or saved.get("source_project_id") != source_project_id:
+                        continue
+                    for saved_episode in saved.get("episodes") or []:
+                        if isinstance(saved_episode, dict) and saved_episode.get("source_episode_id") == episode_id:
+                            matching_episode_snapshots.append(saved_episode)
+                            for saved_segment in saved_episode.get("segments") or []:
+                                if isinstance(saved_segment, dict):
+                                    prior_segments.setdefault(str(saved_segment.get("source_segment_id") or ""), []).append(saved_segment)
+                if mode == "append" and any(
+                    item.get("source_content_sha256") != episode_hash for item in matching_episode_snapshots
+                ):
+                    raise HeadlessCanvasError({"code": "SOURCE_SNAPSHOT_CHANGED", "message": "此剧集已有不同来源快照；请明确使用 new_snapshot，旧节点及结果会保留。"}, status_code=409)
+
+                saved_episode = next((item for item in reversed(matching_episode_snapshots)
+                    if item.get("source_content_sha256") == episode_hash), None) if mode == "append" else None
+                script_node_id = str((saved_episode or {}).get("source_node_id") or "")
+                script_node = node_by_id.get(script_node_id)
+                if script_node is not None:
+                    source_ref = script_node.get("sourceRef")
+                    if not isinstance(source_ref, dict) or source_ref.get("projectId") != source_project_id \
+                       or source_ref.get("episodeId") != episode_id or source_ref.get("contentSha256") != episode_hash \
+                       or self._node_text(script_node) != episode_body:
+                        raise HeadlessCanvasError("已导入的完整剧本来源节点已被编辑；请使用 new_snapshot 保留并另建快照。", status_code=409)
+                else:
+                    script_node_id = ""
+
+                imported_segment_rows = []
+                new_specs = []
+                for segment in segment_specs:
+                    if not isinstance(segment, Mapping):
+                        raise HeadlessCanvasError("来源分段快照格式无效")
+                    segment_id = str(segment.get("id") or "")
+                    body = segment.get("body_markdown")
+                    digest = str(segment.get("content_sha256") or "")
+                    start, end = segment.get("source_start"), segment.get("source_end")
+                    if (not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", segment_id) or not isinstance(body, str)
+                        or not body or not re.fullmatch(r"[a-f0-9]{64}", digest)
+                        or hashlib.sha256(body.encode("utf-8")).hexdigest() != digest
+                        or isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int)
+                        or not isinstance(end, int) or start < 0 or end <= start or end > len(episode_body)
+                        or episode_body[start:end] != body):
+                        raise HeadlessCanvasError("分段正文与完整剧集的 Unicode 码点范围不一致")
+                    old_matches = prior_segments.get(segment_id, []) if mode == "append" else []
+                    if old_matches and any(row.get("content_sha256") != digest for row in old_matches):
+                        raise HeadlessCanvasError({"code": "SOURCE_SEGMENT_CHANGED", "message": "同一来源分段的正文已变化；请明确使用 new_snapshot。"}, status_code=409)
+                    existing = None
+                    for row in reversed(old_matches):
+                        mapped_node = node_by_id.get(str(row.get("node_id") or ""))
+                        if mapped_node is not None:
+                            if self._node_text(mapped_node) != body:
+                                raise HeadlessCanvasError("已导入分段已被编辑；请使用 new_snapshot 保留旧内容。", status_code=409)
+                            existing = row
+                            break
+                    if existing:
+                        skipped_count += 1
+                        imported_segment_rows.append({"source_segment_id": segment_id,
+                            "content_sha256": digest, "node_id": existing["node_id"], "order": existing.get("order"),
+                            "source_start": start, "source_end": end, "status": "skipped"})
+                    else:
+                        new_specs.append((segment, segment_id, body, digest, start, end))
+
+                if new_specs and not script_node_id:
+                    x = 120 + episode_index * 900
+                    created_source = self._create_node(candidate, {"kind": "material",
+                        "title": f"{episode.get('title') or '剧集'} · 完整剧本", "text": episode_body,
+                        "source_kind": "input", "x": x, "y": 120})
+                    script_node_id = created_source["node_id"]
+                    script_node = self._find_node_id(candidate, script_node_id)
+                    script_ref = {"module": "script", "projectId": source_project_id,
+                        "episodeId": episode_id, "projectRevision": source_revision,
+                        "contentSha256": episode_hash, "importId": import_id}
+                    self._validate_source_ref(script_ref)
+                    script_node["sourceRef"] = script_ref
+                    self._update_production(candidate, script_node, {"role": "script"})
+                    node_by_id[script_node_id] = script_node
+                    added_count += 1
+                elif not script_node_id and imported_segment_rows:
+                    warnings.append({"code": "MISSING_SOURCE_NODE", "episode_id": episode_id,
+                                     "message": "已存在分段的完整来源节点已被删除；此请求保留现有分段。"})
+
+                for segment_index, (segment, segment_id, body, digest, start, end) in enumerate(new_specs):
+                    segment_title = str(segment.get("title") or "未命名分段")[:160]
+                    x = 520 + episode_index * 900
+                    y = 120 + (int(segment.get("order") or segment_index + 1) - 1) * 230
+                    created_segment = self._create_node(candidate, {"kind": "material",
+                        "title": f"{episode.get('title') or '剧集'} · {segment.get('scene_title') or '场次'} · {segment_title}",
+                        "text": body, "source_kind": "input", "x": x, "y": y})
+                    segment_node_id = created_segment["node_id"]
+                    segment_node = self._find_node_id(candidate, segment_node_id)
+                    segment_ref = {"module": "script", "projectId": source_project_id,
+                        "episodeId": episode_id, "sceneId": str(segment.get("scene_id") or ""),
+                        "segmentId": segment_id, "projectRevision": source_revision,
+                        "contentSha256": digest, "importId": import_id}
+                    self._validate_source_ref(segment_ref)
+                    segment_node["sourceRef"] = segment_ref
+                    self._update_production(candidate, segment_node, {"role": "segment", "order": next_order,
+                        "sourceNodeId": script_node_id, "sourceStart": start, "sourceEnd": end})
+                    self._add_connection(candidate, script_node_id, segment_node_id, "story")
+                    node_by_id[segment_node_id] = segment_node
+                    row = {"source_segment_id": segment_id, "content_sha256": digest,
+                           "node_id": segment_node_id, "order": next_order, "source_start": start,
+                           "source_end": end, "scene_id": segment.get("scene_id"), "status": "added"}
+                    imported_segment_rows.append(row)
+                    next_order += 1
+                    added_count += 1
+
+                episode_source_ref = {"module": "script", "projectId": source_project_id,
+                    "episodeId": episode_id, "projectRevision": source_revision,
+                    "contentSha256": episode_hash,
+                    "importId": (script_node or {}).get("sourceRef", {}).get("importId", import_id)}
+                candidate_episode = {"source_episode_id": episode_id, "source_content_sha256": episode_hash,
+                    "source_node_id": script_node_id, "source_ref": episode_source_ref,
+                    "segments": imported_segment_rows}
+                result_episodes.append({"episode_id": episode_id, "title": episode.get("title"),
+                    "source_node_id": script_node_id or None, "segments": imported_segment_rows})
+                current_import_episodes.append(candidate_episode)
+
+            candidate_imports["snapshots"][import_id] = {
+                "server_trusted": True,
+                "source_project_id": source_project_id, "source_project_revision": source_revision,
+                "scope": copy.deepcopy(snapshot.get("scope") or {}), "mode": mode,
+                "payload_fingerprint": fingerprint, "created_at": int(time.time() * 1000),
+                "episodes": current_import_episodes,
+            }
+            next_revision = actual_revision + 1
+            receipt = {"request_id": request_id, "import_id": import_id, "status": "succeeded",
+                "canvas_id": canvas_id, "canvas_revision": next_revision,
+                "source": {"module": "script", "project_id": source_project_id,
+                           "project_revision": source_revision, "scope": copy.deepcopy(snapshot.get("scope") or {})},
+                "added_count": added_count, "skipped_count": skipped_count,
+                "episodes": result_episodes, "warnings": warnings}
+            candidate_imports["requests"][request_id] = {"server_trusted": True,
+                "fingerprint": fingerprint, "receipt": copy.deepcopy(receipt)}
+            candidate["scriptImports"] = candidate_imports
+            self.save_canvas(candidate)
+            if self._positive_int(candidate.get("revision"), 0) != next_revision:
+                # A saver must advance exactly one revision for this single
+                # atomic graph commit. Its mutated object is also the response
+                # source of truth.
+                raise HeadlessCanvasError("画布保存器返回了意外 revision；导入回执未提交")
+        await self._notify(candidate)
+        return receipt
+
+    def script_import_receipt(self, canvas_id: str, request_id: str, args: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Find a durably committed receipt before rereading a now-changed source."""
+        from studio_script_import import import_fingerprint
+
+        fingerprint = import_fingerprint("import_script_segments", args)
+        with self.lock:
+            canvas = self._load(canvas_id)
+            imports = canvas.get("scriptImports") or {}
+            requests = imports.get("requests") if isinstance(imports, dict) else None
+            prior = requests.get(request_id) if isinstance(requests, dict) else None
+            if prior is None or not isinstance(prior, dict) or prior.get("server_trusted") is not True:
+                return None
+            if not isinstance(prior, dict) or prior.get("fingerprint") != fingerprint:
+                raise HeadlessCanvasError("同一 request_id 不能提交不同剧本导入载荷", status_code=409)
+            receipt = prior.get("receipt")
+            if not isinstance(receipt, dict):
+                raise HeadlessCanvasError("已保存的剧本导入回执损坏", status_code=500)
+            return copy.deepcopy(receipt)
+
+    @staticmethod
+    def _validate_source_ref(value: Mapping[str, Any]) -> None:
+        import re
+
+        allowed = {"module", "projectId", "episodeId", "sceneId", "segmentId", "projectRevision", "contentSha256", "importId"}
+        required = {"module", "projectId", "episodeId", "projectRevision", "contentSha256", "importId"}
+        if set(value) - allowed or required - set(value):
+            raise HeadlessCanvasError("剧本来源引用字段不合法")
+        if value.get("module") != "script" or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(value.get("projectId") or "")):
+            raise HeadlessCanvasError("剧本来源引用身份无效")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(value.get("episodeId") or "")):
+            raise HeadlessCanvasError("剧本来源引用集 ID 无效")
+        if isinstance(value.get("projectRevision"), bool) or not isinstance(value.get("projectRevision"), int) or value["projectRevision"] < 1:
+            raise HeadlessCanvasError("剧本来源引用 revision 无效")
+        if not re.fullmatch(r"[a-f0-9]{64}", str(value.get("contentSha256") or "")):
+            raise HeadlessCanvasError("剧本来源引用指纹无效")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(value.get("importId") or "")):
+            raise HeadlessCanvasError("剧本来源引用导入 ID 无效")
+        for key in ("sceneId", "segmentId"):
+            if key in value and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(value.get(key) or "")):
+                raise HeadlessCanvasError(f"剧本来源引用 {key} 无效")
 
     def _load(self, canvas_id: str) -> dict[str, Any]:
         canvas = self.load_canvas(canvas_id)
@@ -486,11 +773,13 @@ class HeadlessCanvas:
         return result
 
     def _create_hypit_output(self, canvas: dict[str, Any], args: Mapping[str, Any]) -> dict[str, Any]:
-        if not self._is_hypit_settings_canvas(canvas):
-            raise HeadlessCanvasError("Hypit 输出端口只能创建在 Hypit 配置图中")
+        module_id = self._settings_module_id(canvas)
+        allowed_slots = MODULE_SETTINGS_CANVAS_OUTPUT_SLOTS.get(module_id, ())
+        if not module_id or not allowed_slots:
+            raise HeadlessCanvasError("输出端口只能创建在已登记的模块设置图中")
         slot = str(args.get("slot") or args.get("hypitSlot") or "").strip().lower()
-        if slot not in HYPIT_OUTPUT_SLOTS:
-            raise HeadlessCanvasError("Hypit 输出用途必须是 text/image/video/audio/music/voice")
+        if slot not in allowed_slots:
+            raise HeadlessCanvasError(f"{module_id} 设置图仅允许输出用途：{','.join(allowed_slots)}")
         existing = next((node for node in canvas.get("nodes", [])
                          if isinstance(node, dict)
                          and node.get("type") == "smart-hypit-output"
@@ -507,7 +796,7 @@ class HeadlessCanvas:
             "text": "文本输出", "image": "图片输出", "video": "视频输出",
             "audio": "音频输出", "music": "音乐输出", "voice": "语音输出",
         }
-        index = HYPIT_OUTPUT_SLOTS.index(slot)
+        index = allowed_slots.index(slot)
         node = {
             "id": self._new_id(canvas, f"hypit-output-{slot}"),
             "type": "smart-hypit-output",
@@ -524,7 +813,11 @@ class HeadlessCanvas:
         }
         canvas.setdefault("nodes", []).append(node)
         try:
-            validate_hypit_settings_canvas(canvas)
+            validate_hypit_settings_canvas(
+                canvas,
+                canvas_id=str(canvas.get("id") or ""),
+                module_id=module_id,
+            )
         except (TypeError, ValueError) as exc:
             raise HeadlessCanvasError(str(exc)) from exc
         return {"node_id": node["id"], "node": copy.deepcopy(node), "existing": False}
@@ -801,10 +1094,11 @@ class HeadlessCanvas:
             return {"connections": copy.deepcopy(canvas["connections"])}
 
         if target_is_output:
-            if not self._is_hypit_settings_canvas(canvas):
-                raise HeadlessCanvasError("Hypit 输出端口只能连接在 Hypit 配置图中")
+            module_id = self._settings_module_id(canvas)
+            if not module_id:
+                raise HeadlessCanvasError("模块输出端口只能连接在已登记的设置图中")
             if not self._can_connect(source, target, hypit_settings=True):
-                raise HeadlessCanvasError("Hypit 输出只能连接执行节点")
+                raise HeadlessCanvasError("模块输出只能连接执行节点")
             kind = self._connection_kind(source, target)
             target_field_key = str(args.get("target_field_key") or args.get("targetFieldKey") or "").strip()
             candidate = copy.deepcopy(canvas)
@@ -826,7 +1120,11 @@ class HeadlessCanvas:
                 target_field_key=target_field_key,
             )
             try:
-                validate_hypit_settings_canvas(candidate)
+                validate_hypit_settings_canvas(
+                    candidate,
+                    canvas_id=str(candidate.get("id") or ""),
+                    module_id=module_id,
+                )
             except (TypeError, ValueError) as exc:
                 raise HeadlessCanvasError(str(exc)) from exc
             canvas["connections"] = candidate["connections"]
@@ -1055,6 +1353,10 @@ class HeadlessCanvas:
         if source_type in {"smart-prompt", "smart-loop", "smart-group"}:
             return self._is_execution(target) or target_type in {"smart-loop", "smart-material"}
         return False
+
+    @staticmethod
+    def _settings_module_id(canvas: Mapping[str, Any]) -> str:
+        return SETTINGS_CANVAS_MODULES.get(str(canvas.get("id") or ""), "")
 
     @staticmethod
     def _is_hypit_settings_canvas(canvas: Mapping[str, Any]) -> bool:

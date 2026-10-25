@@ -9,8 +9,11 @@ const canvasId = params.get('id') || '';
 const isHypitSettingsMode = canvasId === 'hypit-settings' && params.get('mode') === 'hypit-settings';
 const isArticleSettingsMode = canvasId === 'article-settings' && params.get('mode') === 'article-settings';
 const isMusicSettingsMode = canvasId === 'music-settings' && params.get('mode') === 'music-settings';
+const isScriptSettingsMode = canvasId === 'script-settings' && params.get('mode') === 'script-settings';
+const isNovelSettingsMode = canvasId === 'novel-settings' && params.get('mode') === 'novel-settings';
 const isCanvasSettingsMode = canvasId === 'canvas-settings' && params.get('mode') === 'canvas-settings';
-const isSettingsCanvasMode = isHypitSettingsMode || isArticleSettingsMode || isMusicSettingsMode;
+const isTextOptimizationSettingsMode = isScriptSettingsMode || isNovelSettingsMode;
+const isSettingsCanvasMode = isHypitSettingsMode || isArticleSettingsMode || isMusicSettingsMode || isTextOptimizationSettingsMode;
 const isSettingsCanvasEmbedded = isSettingsCanvasMode && params.get('embedded') === '1';
 const isCanvasSettingsEmbedded = isCanvasSettingsMode && params.get('embedded') === '1';
 const HYPIT_OUTPUT_SLOTS = ['text','image','video','audio','music','voice'];
@@ -25,9 +28,15 @@ const world = document.getElementById('world');
 const composer = document.getElementById('composer');
 const createMenu = document.getElementById('createMenu');
 const promptInput = document.getElementById('promptInput');
+const promptExpandButton = document.getElementById('promptExpandButton');
 const mentionPicker = document.getElementById('mentionPicker');
 const mentionPreview = document.getElementById('mentionPreview');
 const dynamicParams = document.getElementById('dynamicParams');
+const canvasTextFieldDialog = document.getElementById('canvasTextFieldDialog');
+const canvasTextFieldHost = document.getElementById('canvasTextFieldHost');
+const canvasTextFieldHeading = document.getElementById('canvasTextFieldHeading');
+const canvasTextFieldHint = document.getElementById('canvasTextFieldHint');
+const canvasTextFieldDone = document.getElementById('canvasTextFieldDone');
 const runBtn = document.getElementById('runBtn');
 const cascadeRunBtn = document.getElementById('cascadeRunBtn');
 const smartExecutionCountControl = document.getElementById('smartExecutionCountControl');
@@ -522,9 +531,143 @@ const API_RATIO_VALUES = {
 };
 const RES_LONG_SIDE = { '1k':1536, '2k':2048, '4k':3840 };
 const RES_PIXEL_LIMIT = { '1k':1572864, '2k':4194304, '4k':8294400 };
+let canvasExpandedTextField = null;
+let canvasLastPromptSelection = null;
+let canvasTextFieldDeferredParamsRender = false;
 function tr(key){ return window.StudioI18n?.t ? window.StudioI18n.t(key) : key; }
 function trf(key, values={}){
     return Object.entries(values).reduce((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), tr(key));
+}
+function canvasPromptNodePath(root,node){
+    const path=[];
+    while(node&&node!==root){
+        const parent=node.parentNode;
+        if(!parent)return null;
+        const index=Array.prototype.indexOf.call(parent.childNodes,node);
+        if(index<0)return null;
+        path.unshift(index);
+        node=parent;
+    }
+    return node===root?path:null;
+}
+function canvasPromptSelectionBookmark(root){
+    const selection=window.getSelection?.();
+    if(!selection?.rangeCount||!root?.contains(selection.anchorNode)||!root.contains(selection.focusNode))return null;
+    const anchorPath=canvasPromptNodePath(root,selection.anchorNode);
+    const focusPath=canvasPromptNodePath(root,selection.focusNode);
+    if(!anchorPath||!focusPath)return null;
+    return {anchorPath,anchorOffset:selection.anchorOffset,focusPath,focusOffset:selection.focusOffset};
+}
+function resolveCanvasPromptPath(root,path){
+    let node=root;
+    for(const index of Array.isArray(path)?path:[]){
+        node=node?.childNodes?.[Number(index)]||null;
+        if(!node)return null;
+    }
+    return node;
+}
+function canvasPromptSelectionOffset(node,offset){
+    const limit=node?.nodeType===Node.TEXT_NODE?String(node.textContent||'').length:(node?.childNodes?.length||0);
+    return Math.max(0,Math.min(limit,Number(offset)||0));
+}
+function rememberPromptFieldSelection(){
+    const bookmark=canvasPromptSelectionBookmark(promptInput);
+    if(bookmark)canvasLastPromptSelection=bookmark;
+}
+function canvasTextFieldSelection(editor, kind){
+    if(kind==='prompt'){
+        const bookmark=canvasPromptSelectionBookmark(editor);
+        return bookmark|| (canvasLastPromptSelection?{
+            anchorPath:[...canvasLastPromptSelection.anchorPath],anchorOffset:canvasLastPromptSelection.anchorOffset,
+            focusPath:[...canvasLastPromptSelection.focusPath],focusOffset:canvasLastPromptSelection.focusOffset
+        }:null);
+    }
+    return {start:editor.selectionStart,end:editor.selectionEnd,direction:editor.selectionDirection};
+}
+function restoreCanvasTextFieldSelection(editor, kind, saved){
+    if(!editor?.isConnected)return;
+    editor.focus({preventScroll:true});
+    if(kind==='prompt'){
+        if(!saved)return;
+        try{
+            const selection=window.getSelection();
+            selection.removeAllRanges();
+            const anchor=resolveCanvasPromptPath(editor,saved.anchorPath);
+            const focus=resolveCanvasPromptPath(editor,saved.focusPath);
+            if(anchor&&focus&&selection.setBaseAndExtent){
+                selection.setBaseAndExtent(anchor,canvasPromptSelectionOffset(anchor,saved.anchorOffset),
+                    focus,canvasPromptSelectionOffset(focus,saved.focusOffset));
+            }else{
+                const range=document.createRange();
+                const target=focus||editor;
+                const offset=canvasPromptSelectionOffset(target,focus?saved.focusOffset:target.childNodes.length);
+                range.setStart(target,offset);range.collapse(true);selection.addRange(range);
+            }
+            rememberPromptFieldSelection();
+        }catch(_){ }
+        return;
+    }
+    try{ editor.setSelectionRange(saved?.start??editor.value.length,saved?.end??editor.value.length,saved?.direction||'none'); }catch(_){ }
+}
+function updateCanvasTextFieldDialogLabels(kind){
+    if(!canvasTextFieldHeading||!canvasTextFieldHint||!canvasTextFieldDone)return;
+    canvasTextFieldHeading.textContent=tr(kind==='system'?'smart.expandDialogSystemTitle':'smart.expandDialogPromptTitle');
+    canvasTextFieldHint.textContent=tr('smart.expandDialogHint');
+    canvasTextFieldDone.textContent=tr('smart.expandDone');
+    canvasTextFieldDone.setAttribute('aria-label',tr('smart.expandDone'));
+    promptExpandButton?.setAttribute('aria-label',tr('smart.expandPrompt'));
+    promptExpandButton?.setAttribute('title',tr('smart.expandPrompt'));
+    dynamicParams?.querySelector('[data-canvas-text-expand="system"]')?.setAttribute('aria-label',tr('smart.expandSystemPrompt'));
+    dynamicParams?.querySelector('[data-canvas-text-expand="system"]')?.setAttribute('title',tr('smart.expandSystemPrompt'));
+}
+function expandCanvasTextField(kind){
+    if(!canvasTextFieldDialog||canvasTextFieldDialog.open||!canvasTextFieldHost)return false;
+    const editor=kind==='system'?dynamicParams?.querySelector('[data-text-system-prompt]'):promptInput;
+    const row=kind==='system'?editor?.closest('.text-generation-system-row'):editor?.closest('.prompt-row');
+    if(!editor||!row||(kind==='prompt'&&!editor.isContentEditable))return false;
+    const placeholder=document.createComment(`canvas-expanded-${kind}`);
+    const selection=canvasTextFieldSelection(editor,kind);
+    row.before(placeholder);
+    canvasTextFieldHost.append(row);
+    canvasExpandedTextField={kind,editor,row,placeholder,selection,composing:false,closeRequested:false,restoreFocus:true};
+    updateCanvasTextFieldDialogLabels(kind);
+    try{ canvasTextFieldDialog.showModal(); }
+    catch(_){
+        placeholder.before(row);placeholder.remove();canvasExpandedTextField=null;return false;
+    }
+    requestAnimationFrame(()=>restoreCanvasTextFieldSelection(editor,kind,selection));
+    return true;
+}
+function closeCanvasTextField({restoreFocus=true}={}){
+    const state=canvasExpandedTextField;
+    if(!state||!canvasTextFieldDialog?.open)return false;
+    state.restoreFocus=restoreFocus;
+    state.selection=canvasTextFieldSelection(state.editor,state.kind);
+    if(state.composing){state.closeRequested=true;return false;}
+    canvasTextFieldDialog.close();
+    // The native `close` event is queued. Restore the same editor synchronously
+    // so a caller can safely replace its original parent immediately afterward.
+    restoreCanvasTextFieldRow();
+    return true;
+}
+function restoreCanvasTextFieldRow(){
+    const state=canvasExpandedTextField;
+    if(!state)return;
+    if(state.placeholder?.isConnected){state.placeholder.before(state.row);state.placeholder.remove();}
+    else if(canvasTextFieldHost?.contains(state.row))state.row.remove();
+    const {editor,kind,selection,restoreFocus}=state;
+    canvasExpandedTextField=null;
+    if(restoreFocus)requestAnimationFrame(()=>restoreCanvasTextFieldSelection(editor,kind,selection));
+    if(canvasTextFieldDeferredParamsRender){
+        canvasTextFieldDeferredParamsRender=false;
+        requestAnimationFrame(()=>renderDynamicParams());
+    }
+}
+function deferCanvasTextFieldCloseForComposition(){
+    const state=canvasExpandedTextField;
+    if(!state)return;
+    state.composing=false;
+    if(state.closeRequested)closeCanvasTextField({restoreFocus:state.restoreFocus});
 }
 function copyTextWithCopyEvent(value){
     let handled = false;
@@ -1054,13 +1197,40 @@ function selectedSmartWorkflowPayload(){
         exported_at:Date.now(),
         nodes:selectedNodes,
         connections:selectedConnections,
+        script_imports:workflowScriptImportProjection(selectedSet),
         settings:ids.length ? {} : {agentDefaults:canvasDefaultSmartSettings.agentDefaults || {}}
     };
 }
+function workflowScriptImportProjection(selectedNodeIds=new Set()){
+    const source=canvas?.scriptImports;
+    const snapshots={...(source?.snapshots&&typeof source.snapshots==='object'?source.snapshots:{}),
+        ...(source?.advisorySnapshots&&typeof source.advisorySnapshots==='object'?source.advisorySnapshots:{})};
+    if(!Object.keys(snapshots).length)return {schema_version:1,snapshots:{}};
+    const projected={schema_version:1,snapshots:{}};
+    Object.entries(snapshots).forEach(([key,value])=>{
+        if(!value||typeof value!=='object')return;
+        const snapshot=JSON.parse(JSON.stringify(value));
+        delete snapshot.server_trusted;
+        const episodes=(Array.isArray(snapshot.episodes)?snapshot.episodes:[]).map(episode=>{
+            const sourceNodeId=String(episode?.source_node_id||'');
+            const hasSource=selectedNodeIds.has(sourceNodeId);
+            const segments=(Array.isArray(episode?.segments)?episode.segments:[])
+                .filter(segment=>selectedNodeIds.has(String(segment?.node_id||'')));
+            if(!hasSource&&!segments.length)return null;
+            episode.source_node_id=hasSource?sourceNodeId:'';
+            episode.segments=segments;
+            return episode;
+        }).filter(Boolean);
+        if(!episodes.length)return;
+        snapshot.episodes=episodes;
+        projected.snapshots[key]=snapshot;
+    });
+    return projected;
+}
 function normalizeImportedSmartWorkflow(data){
-    if(Array.isArray(data)) return {nodes:data, connections:[]};
-    if(Array.isArray(data?.nodes)) return {nodes:data.nodes, connections:Array.isArray(data.connections) ? data.connections : [],settings:data.settings || data.workflow?.settings || {}};
-    if(Array.isArray(data?.workflow?.nodes)) return {nodes:data.workflow.nodes, connections:Array.isArray(data.workflow.connections) ? data.workflow.connections : []};
+    if(Array.isArray(data)) return {nodes:data, connections:[],scriptImports:null};
+    if(Array.isArray(data?.nodes)) return {nodes:data.nodes, connections:Array.isArray(data.connections) ? data.connections : [],settings:data.settings || data.workflow?.settings || {},scriptImports:data.scriptImports||data.script_imports||data.workflow?.scriptImports||data.workflow?.script_imports||null};
+    if(Array.isArray(data?.workflow?.nodes)) return {nodes:data.workflow.nodes, connections:Array.isArray(data.workflow.connections) ? data.workflow.connections : [],scriptImports:data.workflow.scriptImports||data.workflow.script_imports||null};
     return {nodes:[], connections:[]};
 }
 function openSmartWorkflowTransferModal(){
@@ -1135,8 +1305,35 @@ function remapImportedWorkflowNodeRefs(value, idMap){
         return value.replace(/(data-(?:source-)?node-id=["'])([^"']+)(["'])/g, (match,prefix,id,suffix)=>prefix+(idMap.get(id)||id)+suffix);
     }
     if(Array.isArray(value)) return value.map(item=>remapImportedWorkflowNodeRefs(item,idMap));
-    if(value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,remapImportedWorkflowNodeRefs(item,idMap)]));
+    if(value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,
+        key === 'sourceRef' ? JSON.parse(JSON.stringify(item)) : remapImportedWorkflowNodeRefs(item,idMap)]));
     return value;
+}
+function remapImportedScriptImports(source,idMap){
+    const snapshots=source?.snapshots;
+    if(!snapshots||typeof snapshots!=='object')return null;
+    const result={schema_version:1,snapshots:{}};
+    Object.values(snapshots).forEach(snapshot=>{
+        if(!snapshot||typeof snapshot!=='object')return;
+        const copy=JSON.parse(JSON.stringify(snapshot));
+        copy.episodes=(Array.isArray(copy.episodes)?copy.episodes:[]).map(episode=>{
+            const oldSourceId=String(episode?.source_node_id||'');
+            episode.source_node_id=idMap.get(oldSourceId)||'';
+            episode.segments=(Array.isArray(episode?.segments)?episode.segments:[]).map(segment=>{
+                const oldNodeId=String(segment?.node_id||'');
+                return idMap.has(oldNodeId)?{...segment,node_id:idMap.get(oldNodeId)}:null;
+            }).filter(Boolean);
+            return episode.source_node_id||episode.segments.length?episode:null;
+        }).filter(Boolean);
+        if(!copy.episodes.length)return;
+        // Mailbox request IDs and receipts belong to the source canvas. Copy
+        // only the verified-by-node lineage projection into the target.
+        delete copy.requests;
+        delete copy.receipt;
+        const key=`scriptimport_transfer_${uid('')}`;
+        result.snapshots[key]=copy;
+    });
+    return result;
 }
 function insertSmartWorkflowIntoCanvas(imported){
     const srcNodes = (imported.nodes || []).filter(Boolean);
@@ -1163,6 +1360,13 @@ function insertSmartWorkflowIntoCanvas(imported){
         .map(conn => ({...JSON.parse(JSON.stringify(conn)), from:idMap.get(conn.from), to:idMap.get(conn.to)}))
         .filter(conn => conn.from && conn.to);
     newNodes.forEach((node,index)=>{newNodes[index]=remapImportedWorkflowNodeRefs(node,idMap);clearSmartNodeTransientRunState(newNodes[index]);});
+    const transferredScriptImports=remapImportedScriptImports(imported.scriptImports,idMap);
+    if(transferredScriptImports){
+        const existing=canvas.scriptImports&&typeof canvas.scriptImports==='object'?canvas.scriptImports:{schema_version:1,requests:{},snapshots:{},advisorySnapshots:{}};
+        canvas.scriptImports={schema_version:1,requests:existing.requests&&typeof existing.requests==='object'?existing.requests:{},
+            snapshots:existing.snapshots&&typeof existing.snapshots==='object'?existing.snapshots:{},
+            advisorySnapshots:{...(existing.advisorySnapshots&&typeof existing.advisorySnapshots==='object'?existing.advisorySnapshots:{}),...transferredScriptImports.snapshots}};
+    }
     if(!nodes.length && imported.settings?.agentDefaults) canvasDefaultSmartSettings.agentDefaults=JSON.parse(JSON.stringify(imported.settings.agentDefaults));
     appendSmartNodes(newNodes);
     canvas.connections = [...(canvas.connections || []), ...newConnections];
@@ -1208,6 +1412,7 @@ let smartCanvasPersonalizationPendingWrites = 0;
 let smartCanvasPersonalizationDirty = false;
 let canvasPickerCatalogRefreshPromise = null;
 let deferredCapabilityControlRefresh = null;
+let lastSmartCanvasPersonalizationRefreshAt = 0;
 
 document.addEventListener('pointerdown',()=>{smartPreferenceDragClickSuppression=null;},true);
 
@@ -1243,6 +1448,7 @@ async function loadSmartCanvasPersonalization(){
             smartCanvasPersonalization = serverEpoch!==localEpoch || serverHasPreferences || !localHasPreferences ? serverValue : localValue;
             smartCanvasPersonalizationStore();
             localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalization));
+            lastSmartCanvasPersonalizationRefreshAt=Date.now();
             if(!serverHasPreferences && localHasPreferences) saveSmartCanvasPersonalization();
             return;
         }
@@ -1340,6 +1546,7 @@ async function refreshSmartCanvasPersonalizationForUse(){
         smartCanvasPersonalization = value;
         smartCanvasPersonalizationStore();
         try { localStorage.setItem(SMART_CANVAS_PERSONALIZATION_KEY, JSON.stringify(smartCanvasPersonalization)); } catch(e) {}
+        lastSmartCanvasPersonalizationRefreshAt=Date.now();
         return before!==JSON.stringify(smartCanvasPersonalizationStore());
     } catch(e) {
         return false;
@@ -3116,6 +3323,13 @@ function hypitSlotName(slot){
     const pair=labels[slot]||['输出','Output'];
     return capabilityUiText(pair[0],pair[1]);
 }
+function settingsCanvasModuleId(){
+    if(isArticleSettingsMode)return 'article';
+    if(isMusicSettingsMode)return 'music';
+    if(isScriptSettingsMode)return 'script';
+    if(isNovelSettingsMode)return 'novel';
+    return 'hypit';
+}
 function hypitSlotLabel(slot){
     const labels={
         text:['文本输出','Text output'],
@@ -3263,20 +3477,29 @@ if(isSettingsCanvasMode){
 }
 function updateHypitModeUi(){
     if(!isSettingsCanvasMode)return;
-    document.documentElement.dataset.canvasMode=isArticleSettingsMode?'article-settings':isMusicSettingsMode?'music-settings':'hypit-settings';
+    document.documentElement.dataset.canvasMode=canvasId;
     document.documentElement.dataset.canvasSettings='true';
+    if(isTextOptimizationSettingsMode)document.documentElement.dataset.textOptimizationSettings='true';
+    else delete document.documentElement.dataset.textOptimizationSettings;
     if(isSettingsCanvasEmbedded)document.documentElement.dataset.canvasEmbedded='1';
     hypitCanvasTools?.removeAttribute('hidden');
     const title=document.getElementById('smartTitle');
-    if(title)title.textContent=isArticleSettingsMode?capabilityUiText('文章生成配置','Article generation setup'):isMusicSettingsMode?capabilityUiText('音乐生成配置','Music generation setup'):capabilityUiText('Hypit 流程设置','Hypit flow settings');
+    if(title)title.textContent=isArticleSettingsMode?capabilityUiText('文章生成配置','Article generation setup'):
+        isMusicSettingsMode?capabilityUiText('音乐生成配置','Music generation setup'):
+        isScriptSettingsMode?capabilityUiText('剧本文本优化配置','Script text optimization setup'):
+        isNovelSettingsMode?capabilityUiText('小说文本优化配置','Novel text optimization setup'):
+        capabilityUiText('Hypit 流程设置','Hypit flow settings');
+    document.title=title?.textContent||document.title;
     const drawerTitle=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head strong');
     const drawerHelp=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head span');
     if(drawerTitle)drawerTitle.textContent=capabilityUiText('输出端口',drawerTitle.dataset.hypitLabelEn||'Output ports');
     if(drawerHelp)drawerHelp.textContent=capabilityUiText('只添加对应输出端口；重复选择会定位已有端口',drawerHelp.dataset.hypitLabelEn||'Adds only this output port; selecting it again focuses the existing one.');
-    if(hypitOutputDrawer)hypitOutputDrawer.setAttribute('aria-label',capabilityUiText(isArticleSettingsMode?'文章输出端口':isMusicSettingsMode?'音乐输出端口':'Hypit 输出端口',isArticleSettingsMode?'Article output ports':isMusicSettingsMode?'Music output ports':(hypitOutputDrawer.dataset.hypitAriaLabelEn||'Hypit output ports')));
+    if(hypitOutputDrawer)hypitOutputDrawer.setAttribute('aria-label',capabilityUiText(isArticleSettingsMode?'文章输出端口':isMusicSettingsMode?'音乐输出端口':isTextOptimizationSettingsMode?'文本优化输出端口':'Hypit 输出端口',isArticleSettingsMode?'Article output ports':isMusicSettingsMode?'Music output ports':isTextOptimizationSettingsMode?'Text optimization output ports':(hypitOutputDrawer.dataset.hypitAriaLabelEn||'Hypit output ports')));
     const close=hypitOutputDrawer?.querySelector('[data-hypit-drawer-close]');if(close)close.setAttribute('aria-label',capabilityUiText('关闭',close.dataset.hypitLabelEn||'Close'));
     if(hypitOutputDrawerToggle){
-        const label=capabilityUiText('添加输出端口',hypitOutputDrawerToggle.dataset.hypitLabelEn||'Add output port');
+        const label=isTextOptimizationSettingsMode
+            ?capabilityUiText('添加文本输出', 'Add text output')
+            :capabilityUiText('添加输出端口',hypitOutputDrawerToggle.dataset.hypitLabelEn||'Add output port');
         const text=hypitOutputDrawerToggle.querySelector('span');
         if(text)text.textContent=label;
         hypitOutputDrawerToggle.setAttribute('aria-label',label);
@@ -3284,7 +3507,7 @@ function updateHypitModeUi(){
     }
     hypitOutputDrawer?.querySelectorAll('[data-hypit-slot]').forEach(button=>{
         const slot=button.dataset.hypitSlot,span=button.querySelector('span');
-        button.hidden=isMusicSettingsMode&&!['music','image'].includes(slot);
+        button.hidden=isTextOptimizationSettingsMode?slot!=='text':isMusicSettingsMode&&!['music','image'].includes(slot);
         if(span)span.textContent=hypitSlotName(slot);
     });
     if(typeof requestAnimationFrame==='function')requestAnimationFrame(positionHypitCanvasTools);
@@ -3490,6 +3713,13 @@ async function waitForHypitStudioTasks(taskIds=[]){
 async function runHypitExecutionNode(node,requestId=''){
     if(!isSettingsCanvasMode||!isSmartExecutionNode(node)||!node?.id)return false;
     if(hypitNodeRunOperations.has(node.id))return hypitNodeRunOperations.get(node.id);
+    if(!settingsNodeModelOptionsReady(node)){
+        const state=hypitModelOptionState(hypitModelSlotContext(node));
+        errorToast(state.status==='error'
+            ?canvasSyncText('当前用途模型读取失败，请在参数面板重试。','Could not verify models for this use. Retry in the parameter panel.')
+            :canvasSyncText('正在核对当前用途可用模型，请稍后再运行。','Verifying models for this use. Try running again shortly.'),{node});
+        return false;
+    }
     const operationId=String(hypitStoredRunRequestId(node.id)||requestId||createCanvasOperationId(node.id));
     hypitStoreRunRequestId(node.id,operationId);
     const operation=(async()=>{
@@ -3534,7 +3764,7 @@ async function runHypitExecutionNode(node,requestId=''){
     return operation;
 }
 function addHypitOutput(slot){
-    const allowedSlots=isMusicSettingsMode?new Set(['music','image']):new Set(HYPIT_OUTPUT_SLOTS);
+    const allowedSlots=isTextOptimizationSettingsMode?new Set(['text']):isMusicSettingsMode?new Set(['music','image']):new Set(HYPIT_OUTPUT_SLOTS);
     if(!isSettingsCanvasMode||!allowedSlots.has(slot)||!canvas)return null;
     const existing=nodes.find(node=>isHypitOutputNode(node)&&node.hypitSlot===slot);
     if(existing){selectedId=existing.id;selectedIds=[];render();focusSmartNodeInViewport(existing.id);return existing;}
@@ -3573,6 +3803,7 @@ function connectInputToHypitOutput(fromId,outputId,options={}){
         if(!isSmartExecutionNode(node))return;
         node.inputNodeIds=inputNodesFor(node).map(item=>item.id);
     });
+    warmTextSettingsModelOptions();
     render();scheduleSave();
     return true;
 }
@@ -3595,7 +3826,7 @@ function removeHypitOutput(nodeId){
     render();scheduleSave();return true;
 }
 async function prepareHypitReset(){
-    if(!isSettingsCanvasMode||!['hypit-settings','article-settings','music-settings'].includes(canvasId)||!canvas)return false;
+    if(!isSettingsCanvasMode||!['hypit-settings','article-settings','music-settings','script-settings','novel-settings'].includes(canvasId)||!canvas)return false;
     hypitResetPending=true;clearTimeout(saveTimer);saveTimer=null;canvasSyncSaveQueued=false;
     const started=Date.now();
     while(canvasSyncInFlight&&Date.now()-started<15000)await hypitSleep(40);
@@ -4232,7 +4463,7 @@ function hypitModelSlotContext(node){
 function requestHypitModelOptions(slot){
     if(hypitSlotModelOptionLoads.has(slot)) return hypitSlotModelOptionLoads.get(slot);
     const generation = hypitModelOptionGeneration;
-    const moduleId=isArticleSettingsMode?'article':isMusicSettingsMode?'music':'hypit';
+    const moduleId=settingsCanvasModuleId();
     const query = new URLSearchParams({module_id:moduleId, slot_id:slot});
     let promise;
     promise = (async()=>{
@@ -4272,6 +4503,12 @@ function requestHypitModelOptions(slot){
     hypitSlotModelOptionLoads.set(slot, promise);
     return promise;
 }
+function warmTextSettingsModelOptions(){
+    const supportsTextSlot=isTextOptimizationSettingsMode||isArticleSettingsMode||isHypitSettingsMode;
+    if(!isSettingsCanvasMode||!supportsTextSlot||!nodes.some(node=>node?.type===SMART_NODE_TYPES.textGenerator))return false;
+    void requestHypitModelOptions('text');
+    return true;
+}
 function hypitModelOptionState(context){
     if(!context) return {status:'not-applicable'};
     const states = context.slots.map(slot => hypitSlotModelOptions.get(slot));
@@ -4284,6 +4521,11 @@ function hypitModelOptionState(context){
         return {status:'loading'};
     }
     return {status:'ready'};
+}
+function settingsNodeModelOptionsReady(node){
+    if(!isSettingsCanvasMode)return true;
+    const context=hypitModelSlotContext(node);
+    return !context||hypitModelOptionState(context).status==='ready';
 }
 function hypitOptionAllowedForContext(option, context){
     if(!context) return true;
@@ -4305,7 +4547,6 @@ function hypitProfileMatchesOption(option, profile, nodeType){
     return true;
 }
 function hypitProfileAllowedForCurrentUse(profile, nodeType){
-    if(isArticleSettingsMode)return true;
     const context = hypitModelSlotContext(activeSettingsSubject());
     if(!context) return true;
     const states = context.slots.map(slot => hypitSlotModelOptions.get(slot));
@@ -4345,6 +4586,14 @@ async function loadCanvasModelManagementCatalog(){
 }
 async function refreshCanvasPickerSources(){
     if(canvasPickerCatalogRefreshPromise) return canvasPickerCatalogRefreshPromise;
+    const settingsFresh=Date.now()-lastConfigRefreshAt<=1200
+        && !window.__smartConfigLoadError && !modelCapabilityLoadError
+        && !configRefreshPromise && !configRefreshPending;
+    const personalizationFresh=Date.now()-lastSmartCanvasPersonalizationRefreshAt<=1200
+        && !smartCanvasPersonalizationSaveTimer && !smartCanvasPersonalizationPendingWrites && !smartCanvasPersonalizationDirty;
+    if(settingsFresh&&personalizationFresh){
+        return Promise.resolve({configChanged:false,catalogChanged:false,managementCatalogChanged:false,preferencesUpdated:false,ok:true});
+    }
     canvasPickerCatalogRefreshPromise=(async()=>{
         const [configResult,preferencesUpdated]=await Promise.all([
             loadConfig(),
@@ -7651,7 +7900,7 @@ function mountCanvasModelConfigPickers(subject){
     if(canvasModelConfigInstance){ canvasModelConfigInstance.destroy(); canvasModelConfigInstance = null; }
     canvasModelConfigInstance = window.mountModelConfigControl(container, {
         context:{
-            host:'canvas', moduleId:isSettingsCanvasMode?(isArticleSettingsMode?'article':isMusicSettingsMode?'music':'hypit'):'canvas',
+            host:'canvas', moduleId:isSettingsCanvasMode?settingsCanvasModuleId():'canvas',
             slotId:isSettingsCanvasMode?(hypitModelSlotContext(subject)?.slots?.[0] || canvasSelectionNodeType(subject)):canvasSelectionNodeType(subject), phase:'live',
             nodeId:String(subject.id || '')
         },
@@ -7661,6 +7910,12 @@ function mountCanvasModelConfigPickers(subject){
     });
 }
 function renderDynamicParams({preserveState=true}={}){
+    if(canvasExpandedTextField?.kind==='system'){
+        if(!closeCanvasTextField({restoreFocus:false})){
+            canvasTextFieldDeferredParamsRender=true;
+            return;
+        }
+    }
     const editableState = preserveState ? captureCanvasEditableState(document.activeElement) : null;
     renderDynamicParamsContent({preserveState});
     if(editableState) restoreCanvasEditableState(editableState);
@@ -7710,13 +7965,29 @@ function renderDynamicParamsContent({preserveState=true}={}){
     settings = SMART_NODE_CONTRACT.normalizeExecutionSettings(subject, settings);
     clearVolcengineSelectionOutsideVolcengine(settings);
     syncApiKindToggleVisibility();
+    // Refresh the shared composer placeholder before any module-specific candidate
+    // lookup can return early. Otherwise a text node can retain the last image
+    // node's placeholder while its verified model list is loading.
+    updatePromptPlaceholder();
     const hypitModelContext = hypitModelSlotContext(subject);
     const hypitModelState = hypitModelOptionState(hypitModelContext);
     if(hypitModelState.status === 'loading'){
+        if(subject?.type === SMART_NODE_TYPES.textGenerator){
+            renderTextGenerationParamsPending(subject, hypitModelState);
+            bindDynamicParams();
+            if(window.lucide) lucide.createIcons();
+            return;
+        }
         dynamicParams.innerHTML = `<div class="smart-capability-note" role="status">${escapeHtml(capabilityUiText('正在核对当前用途可用模型…','Checking models available for this use…'))}</div>`;
         return;
     }
     if(hypitModelState.status === 'error'){
+        if(subject?.type === SMART_NODE_TYPES.textGenerator){
+            renderTextGenerationParamsPending(subject, hypitModelState);
+            bindDynamicParams();
+            if(window.lucide) lucide.createIcons();
+            return;
+        }
         dynamicParams.innerHTML = `<div class="smart-capability-note warning" role="alert"><span>${escapeHtml(capabilityUiText('读取当前用途模型失败','Could not load models for this use'))}${hypitModelState.error ? ` · ${escapeHtml(hypitModelState.error)}` : ''}</span><button type="button" class="smart-inline-retry" data-hypit-model-options-retry>${escapeHtml(capabilityUiText('重试','Retry'))}</button></div>`;
         dynamicParams.querySelector('[data-hypit-model-options-retry]')?.addEventListener('click',()=>{
             (hypitModelContext?.slots || []).forEach(slot=>hypitSlotModelOptions.delete(slot));
@@ -7832,10 +8103,45 @@ function renderTextGenerationParams(node=activeSettingsSubject()){
         <label class="text-generation-toggle"><input type="checkbox" data-text-system-toggle ${settings.textSystemEnabled ? 'checked' : ''}><span>${escapeHtml(tr('smart.enableSystemPrompt'))}</span></label>
         ${settings.textSystemEnabled ? `<div class="text-generation-system-row">
             <textarea data-text-system-prompt placeholder="${escapeAttr(tr('smart.systemPromptPlaceholder'))}">${escapeHtml(settings.textSystemPrompt || '')}</textarea>
+            <button class="canvas-text-expand-btn system-text-expand-btn" type="button" data-canvas-text-expand="system" title="${escapeAttr(tr('smart.expandSystemPrompt'))}" aria-label="${escapeAttr(tr('smart.expandSystemPrompt'))}"><i data-lucide="maximize-2" aria-hidden="true"></i></button>
             <button class="text-generation-template-btn" type="button" data-text-system-template title="${escapeAttr(tr('smart.systemTemplate'))}" aria-label="${escapeAttr(tr('smart.systemTemplate'))}"><i data-lucide="library"></i></button>
         </div>` : ''}
         ${parameterBundle?.markup ? `<div class="capability-fields text-capability-fields capability-layout-${escapeAttr(parameterBundle.layout.mode)}" data-capability-layout data-layout-key="${escapeAttr(parameterBundle.layout.key)}" data-layout-mode="${escapeAttr(parameterBundle.layout.mode)}">${parameterBundle.markup}</div>` : ''}
     </div>`, selection.profile, 'text-execution-config', parameterBundle?.settingsControl || '');
+}
+function renderTextGenerationParamsPending(node, modelState){
+    const descriptor=executionSelectionDescriptor(node);
+    const providerId=String(settings?.[descriptor?.providerKey]||'').trim();
+    const modelId=String(settings?.[descriptor?.modelKey]||'').trim();
+    const region=capabilityRegionForProvider(providerId,settings);
+    const profile=providerId&&modelId?capabilityProfileFor(providerId,modelId,'text_generation',region):null;
+    const provider=capabilityProviderConfig(providerId);
+    const familyLabel=profile?capabilityFamilyLabel(profile):String(settings?.[descriptor?.familyKey]||'').trim();
+    const modelSummary=[familyLabel,provider?.name||providerId,modelId].filter(Boolean).join(' · ')
+        || capabilityUiText('尚未选择模型','No model selected');
+    const modelTitle=capabilityUiText('当前保存的模型；正在核对可用候选','Saved model; verifying available candidates');
+    const stateMarkup=modelState.status==='error'
+        ? `<div class="smart-capability-note warning text-generation-options-status" role="alert"><span>${escapeHtml(capabilityUiText('读取当前用途模型失败','Could not load models for this use'))}${modelState.error?` · ${escapeHtml(modelState.error)}`:''}</span><button type="button" class="smart-inline-retry" data-hypit-model-options-retry>${escapeHtml(capabilityUiText('重试','Retry'))}</button></div>`
+        : `<div class="smart-capability-note text-generation-options-status" role="status">${escapeHtml(capabilityUiText('正在核对当前用途可用模型…','Checking models available for this use…'))}</div>`;
+    dynamicParams.innerHTML=renderExecutionConfigPanel(`<div class="text-generation-params">
+        <div class="smart-control capability-model-picker capability-model-picker-control" data-capability-model-picker data-capability-subject-id="${escapeAttr(node?.id||'')}">
+            <button class="smart-pill capability-model-picker-pill" type="button" disabled aria-disabled="true" title="${escapeAttr(modelTitle)}"><i data-lucide="boxes"></i><span class="capability-model-picker-value">${escapeHtml(modelSummary)}</span></button>
+        </div>
+        ${stateMarkup}
+        <label class="text-generation-toggle"><input type="checkbox" data-text-system-toggle ${settings.textSystemEnabled?'checked':''}><span>${escapeHtml(tr('smart.enableSystemPrompt'))}</span></label>
+        ${settings.textSystemEnabled?`<div class="text-generation-system-row">
+            <textarea data-text-system-prompt placeholder="${escapeAttr(tr('smart.systemPromptPlaceholder'))}">${escapeHtml(settings.textSystemPrompt||'')}</textarea>
+            <button class="canvas-text-expand-btn system-text-expand-btn" type="button" data-canvas-text-expand="system" title="${escapeAttr(tr('smart.expandSystemPrompt'))}" aria-label="${escapeAttr(tr('smart.expandSystemPrompt'))}"><i data-lucide="maximize-2" aria-hidden="true"></i></button>
+            <button class="text-generation-template-btn" type="button" data-text-system-template title="${escapeAttr(tr('smart.systemTemplate'))}" aria-label="${escapeAttr(tr('smart.systemTemplate'))}"><i data-lucide="library"></i></button>
+        </div>`:''}
+    </div>`,profile,'text-execution-config','');
+    dynamicParams.querySelector('[data-hypit-model-options-retry]')?.addEventListener('click',event=>{
+        event.preventDefault();
+        event.stopPropagation();
+        const context=hypitModelSlotContext(node);
+        (context?.slots||[]).forEach(slot=>hypitSlotModelOptions.delete(slot));
+        renderDynamicParams();
+    });
 }
 function renderApiParams(){
     const inputCounts = capabilityInputCounts('image');
@@ -11870,8 +12176,28 @@ function canvasSyncNormalizeConnections(connections){
         id:connection.id || CANVAS_SYNC.connectionId(connection)
     }));
 }
+function canvasSyncNormalizeScriptImports(value){
+    if(value === undefined || value === null){
+        return {schema_version:1, requests:{}, snapshots:{}, advisorySnapshots:{}};
+    }
+    if(typeof value !== 'object' || Array.isArray(value)) return value;
+    const normalized = {...value};
+    if(!Object.prototype.hasOwnProperty.call(normalized, 'schema_version')) normalized.schema_version = 1;
+    if(!Object.prototype.hasOwnProperty.call(normalized, 'requests')) normalized.requests = {};
+    if(!Object.prototype.hasOwnProperty.call(normalized, 'snapshots')) normalized.snapshots = {};
+    if(!Object.prototype.hasOwnProperty.call(normalized, 'advisorySnapshots')) normalized.advisorySnapshots = {};
+    return normalized;
+}
 function canvasSyncIncomingSnapshot(source){
     const snapshot = CANVAS_SYNC.clone(source || {});
+    // Accept the wire spelling returned by older/fake Canvas adapters, then
+    // keep one canonical field so an empty optional index is not a local edit.
+    if(!Object.prototype.hasOwnProperty.call(snapshot, 'scriptImports')
+        && Object.prototype.hasOwnProperty.call(snapshot, 'script_imports')){
+        snapshot.scriptImports = snapshot.script_imports;
+    }
+    delete snapshot.script_imports;
+    snapshot.scriptImports = canvasSyncNormalizeScriptImports(snapshot.scriptImports);
     if(isSettingsCanvasMode){
         if(Object.prototype.hasOwnProperty.call(snapshot,'test_statuses')||Object.prototype.hasOwnProperty.call(snapshot,'testStatuses')){
             const statuses=snapshot.test_statuses||snapshot.testStatuses;
@@ -12182,7 +12508,8 @@ function syncRunButtonState(node=selectedNode()){
     if(!runBtn) return;
     // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
-    runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id);
+    runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id)
+        || !settingsNodeModelOptionsReady(node);
 }
 function smartGenerationVersionKey(version){
     if(!version) return '';
@@ -12998,17 +13325,27 @@ function smartRunRecordedReferences(run){
     });
     return result.filter(hasMentionReferenceContent);
 }
-async function loadCanvas(){
+async function fetchCanvasSnapshot(){
+    const response=await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
+    const payload=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(apiErrorMessage(payload,`HTTP ${response.status}`));
+    if(!payload?.canvas||typeof payload.canvas!=='object')throw new Error(capabilityUiText('画布服务没有返回有效内容','The canvas service did not return a valid snapshot'));
+    return payload.canvas;
+}
+async function loadCanvas({snapshotPromise=null}={}){
     if(!canvasId) return;
     try {
         // Hypit API 页在挂载 iframe 前已通过单例 bootstrap 取得专用画布地址；
         // 画布本体随后只走标准 GET/PUT，避免在 iframe 内再重复 get-or-create。
         if(isSettingsCanvasMode)updateHypitModeUi();
         if(isCanvasSettingsMode)updateCanvasSettingsModeUi();
-        const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
-        if(!res.ok) return;
-        const data = await res.json();
-        canvas = canvasSyncIncomingSnapshot(data.canvas);
+        const snapshotResult=snapshotPromise
+            ?await snapshotPromise
+            :await fetchCanvasSnapshot().then(canvas=>({canvas}),error=>({error}));
+        if(snapshotResult?.error)throw snapshotResult.error;
+        const snapshot=snapshotResult?.canvas;
+        if(!snapshot||typeof snapshot!=='object')throw new Error(capabilityUiText('画布读取失败','Failed to load the canvas'));
+        canvas = canvasSyncIncomingSnapshot(snapshot);
         canvasSyncRememberBase(canvas);
         rememberCanvasListProject(canvas.project || 'default');
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
@@ -13079,6 +13416,7 @@ async function loadCanvas(){
         if(isSettingsCanvasMode){
             hypitObserveRecipeChanges();
         }
+        warmTextSettingsModelOptions();
         applyViewport();
         render();
     if(smartNodeMigrationPending || migratedMusicNodes || initializedRunningHubRegions || initializedExecutionDefaults || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers || hydratedTextResults) scheduleSave();
@@ -13170,6 +13508,9 @@ async function saveCanvas(options={}){
                 viewport:storageCanvas.viewport || {x:0,y:0,scale:1},
                 logs:storageCanvas.logs || [],
                 settings:storageCanvas.settings,
+                // The screenplay import index is canvas data (provenance and
+                // durable dedupe receipts), not a client-only projection.
+                script_imports:storageCanvas.scriptImports || {},
                 base_updated_at:storageCanvas.updated_at,
                 base_revision:storageCanvas.revision,
                 client_id:smartClientId,
@@ -29877,6 +30218,7 @@ function createNodeFromMenu(type){
     else if(type === 'ai-app') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.aiApp, createOptions);
     else if(type === 'comfy-workflow') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.comfyWorkflow, createOptions);
     else created = createTextMaterialNodeAt(p, '', createOptions);
+    if(created?.type===SMART_NODE_TYPES.textGenerator)warmTextSettingsModelOptions();
     createMenuGroupId = groupId;
     addCreatedNodeToMenuGroup(created);
     createMenuGroupId = '';
@@ -31340,12 +31682,45 @@ promptInput.addEventListener('input', () => {
     savePromptDraftForCurrent();
     renderInputThumbsRow(selectedNode());
     scheduleSave();
+    rememberPromptFieldSelection();
 });
 promptInput.addEventListener('keyup', maybeOpenMentionPicker);
 promptInput.addEventListener('mouseup', saveMentionRange);
 promptInput.addEventListener('focus', saveMentionRange);
+promptInput.addEventListener('keyup', rememberPromptFieldSelection);
+promptInput.addEventListener('mouseup', rememberPromptFieldSelection);
+document.addEventListener('selectionchange', rememberPromptFieldSelection);
+promptExpandButton?.addEventListener('pointerdown',event=>{event.preventDefault();rememberPromptFieldSelection();});
+promptExpandButton?.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();expandCanvasTextField('prompt');});
+dynamicParams?.addEventListener('pointerdown',event=>{
+    if(event.target.closest?.('[data-canvas-text-expand="system"]'))event.preventDefault();
+});
+dynamicParams?.addEventListener('click',event=>{
+    const button=event.target.closest?.('[data-canvas-text-expand="system"]');
+    if(!button)return;
+    event.preventDefault();event.stopPropagation();expandCanvasTextField('system');
+});
+canvasTextFieldDone?.addEventListener('click',()=>closeCanvasTextField());
+canvasTextFieldDialog?.addEventListener('cancel',event=>{event.preventDefault();closeCanvasTextField();});
+canvasTextFieldDialog?.addEventListener('close',()=>{
+    // Native dialog close events are queued. An event from the previous editor
+    // must not restore a newer editor that has already reopened in this dialog.
+    if(!canvasTextFieldDialog?.open)restoreCanvasTextFieldRow();
+});
+canvasTextFieldDialog?.addEventListener('click',event=>{if(event.target===canvasTextFieldDialog)closeCanvasTextField();});
+canvasTextFieldDialog?.addEventListener('compositionstart',event=>{
+    if(canvasExpandedTextField?.editor===event.target)canvasExpandedTextField.composing=true;
+});
+canvasTextFieldDialog?.addEventListener('compositionend',event=>{
+    if(canvasExpandedTextField?.editor!==event.target)return;
+    setTimeout(deferCanvasTextFieldCloseForComposition,0);
+});
+canvasTextFieldDialog?.addEventListener('keydown',event=>{
+    if(event.key==='Enter'||event.key==='Escape')event.stopPropagation();
+});
 function canvasInputEnterAction(editable){
     if(!editable || editable.closest('input[type="search"], [data-capability-picker-search], .model-config-search, .node-title, .prompt-template-panel')) return null;
+    if(canvasTextFieldDialog?.open&&canvasTextFieldDialog.contains(editable))return {ignore:true};
     const textEditor = editable.closest('#smartTextEditorModal.open');
     if(textEditor) return {button:textEditor.querySelector('[data-text-editor-save]')};
     if(editable.matches('.media-text-inline-editor')) return {saveInline:true};
@@ -31367,6 +31742,7 @@ function handleCanvasInputEnter(event){
     const editable = canvasTextEditableForTarget(event.target);
     const action = canvasInputEnterAction(editable);
     if(!action) return;
+    if(action.ignore)return;
     event.preventDefault();
     event.stopPropagation();
     if(event.repeat || action.busy || action.button?.disabled) return;
@@ -31761,6 +32137,7 @@ window.addEventListener('message', event => {
 window.addEventListener('studio-lang-change', () => {
     updateHypitModeUi();
     document.title = canvasDocumentTitle();
+    if(canvasTextFieldDialog?.open&&canvasExpandedTextField) updateCanvasTextFieldDialogLabels(canvasExpandedTextField.kind);
     renderDynamicParams();
     renderInputThumbsRow(selectedNode());
     renderAssetLibrary();
@@ -31770,7 +32147,10 @@ window.addEventListener('studio-lang-change', () => {
     if(promptTemplatePanel?.classList?.contains('open')) renderPromptTemplatePanel();
     render();
 });
-window.onload = async () => {
+let smartCanvasStartupPromise=null;
+function startSmartCanvasStartup(){
+    if(smartCanvasStartupPromise)return smartCanvasStartupPromise;
+    smartCanvasStartupPromise=(async()=>{
     loadPromptPresets();
     loadPromptTemplateGroups();
     loadPromptTemplateOverrides();
@@ -31781,11 +32161,22 @@ window.onload = async () => {
     // 与核心请求并行读取，完成后只刷新实际变化的对应区域。
     void loadPromptTemplates();
     void loadAssetLibrary();
+    // 请求画布快照不依赖模型配置；先并发读取，但 loadCanvas 仍等配置完成后才迁移、规范化和渲染。
+    const snapshotPromise=canvasId
+        ?fetchCanvasSnapshot().then(canvas=>({canvas}),error=>({error}))
+        :Promise.resolve({canvas:null});
     await Promise.all([loadSmartCanvasPersonalization(),loadConfig()]);
-    await loadCanvas();
+    await loadCanvas({snapshotPromise});
     syncApiKindToggleVisibility();
     render();
-};
+    })();
+    return smartCanvasStartupPromise;
+}
+if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',()=>{void startSmartCanvasStartup();},{once:true});
+}else{
+    queueMicrotask(()=>{void startSmartCanvasStartup();});
+}
 
 document.getElementById("imageEditStage").addEventListener('click',event=>{
     if(imageEditMode==='preview' && (event.target===document.getElementById("imageEditStage") || event.target.classList.contains('media-preview-exit-hints')))closeImageEditor();

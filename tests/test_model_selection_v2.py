@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,11 @@ def load_fixture_records() -> list[dict]:
 
 class OptionIdentityTests(unittest.TestCase):
     """option_id 的稳定性、敏感性与语言无关性。"""
+
+    def test_catalog_compile_reuses_explicit_identity_snapshot(self):
+        snapshot = {"families": [], "bindings": []}
+        with patch.object(sms, "load_identity_document", side_effect=AssertionError("unexpected file reread")):
+            self.assertEqual(sms.compile_catalog_options({"providers": []}, identity_document=snapshot), [])
 
     def test_option_id_is_stable_for_same_tuple(self):
         first = sms.compute_option_id(

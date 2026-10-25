@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import base64
+import re
 import shutil
 import socket
 import struct
@@ -12,6 +13,7 @@ import threading
 import time
 import unittest
 import zlib
+from html import unescape
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -69,7 +71,7 @@ def visible_cover_png(width=640, height=274):
 def article_payload(selected="moyu-green"):
     source = "# 隔离样例\n\n正文第一段。\n\n```text\n第一行\n第二行\n```"
     digest = "source-current"
-    green_html = "<section style='font-family:serif'><h1>隔离样例</h1><p>正文第一段。</p><picture><source srcset='/api/results/unused-picture-source 2x'><img alt='知识卡图片' src='/api/results/result-fixture-image' srcset='/api/results/unused-image-source 2x' sizes='100vw' data-src='/api/results/unused-lazy-source'></picture><pre><code>第一行\n第二行</code></pre></section>"
+    green_html = "<section style='font-family:serif'><h1>隔离样例</h1><p>正文第一段。</p><picture><source srcset='/api/results/result-fixture-image 2x'><img alt='知识卡图片' src='/api/results/result-fixture-image' srcset='/api/results/result-fixture-image 2x' sizes='100vw' data-src='/api/results/unused-lazy-source'></picture><pre><code>第一行\n第二行</code></pre></section>"
     red_html = "<section style='border-top:3px solid #ad3838'><h1><span>隔离样例</span></h1><table><tbody><tr><td>01</td><td>正文第一段。</td></tr></tbody></table><pre><code>第一行\n第二行</code></pre></section>"
     stale_html = "<section><h1>过期内容不应显示</h1></section>"
     return {
@@ -80,7 +82,7 @@ def article_payload(selected="moyu-green"):
                 "short": {"title": "隔离短标题", "source_sha256": digest, "source_matches": True, "valid": True},
                 "long": {"title": "隔离历史标题", "source_sha256": "source-older", "source_matches": False, "valid": True},
                 "stale": {"title": "过期标题不应显示", "source_sha256": "source-old", "source_matches": False, "valid": True},
-                "alternate": {"title": "同原文备选标题", "source_sha256": "source-alternate-title", "source_matches": True, "valid": True},
+            "alternate": {"title": "同原文备选标题", "source_sha256": "source-alternate-title", "source_matches": True, "valid": True},
             },
             "selected_title_variant_id": "short",
             "cover_variants": [
@@ -107,6 +109,81 @@ def article_payload(selected="moyu-green"):
     }
 
 
+def article_versions_payload(article):
+    """Contract-shaped version manifest and snapshots for the isolated article API."""
+    title_specs = [
+        ("title-v1", 1, "long", "source-older"),
+        ("title-v2", 2, "short", article.get("source_sha256", "source-current")),
+        ("title-v3", 3, "alternate", article.get("source_sha256", "source-current")),
+    ]
+    title_versions = []
+    details = {}
+    for version_id, number, variant_id, digest in title_specs:
+        variant = article.get("title_variants", {}).get(variant_id)
+        if not variant:
+            continue
+        title_versions.append({"id": version_id, "number": number, "created_at": None, "source_revision": 1 + number,
+                              "origin": "legacy" if number == 1 else "put", "label": variant.get("title", ""),
+                              "source_sha256": digest, "active": article.get("selected_title_variant_id") == variant_id,
+                              "availability": {"available": True}})
+        details["title:" + version_id] = {"project_id": "article-fixture", "current_revision": article["revision"],
+            "kind": "title", "id": version_id, "number": number, "created_at": None, "source_revision": 1 + number,
+            "origin": "legacy" if number == 1 else "put", "active": article.get("selected_title_variant_id") == variant_id,
+            "snapshot": {"title": variant.get("title", ""), "title_variant_id": variant_id, "source_sha256": digest}}
+
+    cover_versions = []
+    for index, cover in enumerate(article.get("cover_variants", []), start=1):
+        version_id = "cover-v-" + str(cover.get("id", index))
+        active = article.get("selected_cover_variant_id") == cover.get("id")
+        cover_versions.append({"id": version_id, "number": index, "created_at": None, "source_revision": index,
+                               "origin": "legacy" if index == 1 else "generation", "label": cover.get("name", f"Cover {index}"),
+                               "source_sha256": cover.get("source_sha256", ""), "active": active,
+                               "availability": {"available": bool(cover.get("valid") and cover.get("url"))},
+                               "public_media": {"url": cover.get("url", "") if cover.get("valid") else "",
+                                                "name": cover.get("name", "") if cover.get("valid") else "",
+                                                "mime": cover.get("mime", "") if cover.get("valid") else "",
+                                                "available": bool(cover.get("valid") and cover.get("url"))}})
+        details["cover:" + version_id] = {"project_id": "article-fixture", "current_revision": article["revision"],
+            "kind": "cover", "id": version_id, "number": index, "created_at": None, "source_revision": index,
+            "origin": "legacy" if index == 1 else "generation", "active": active,
+            "snapshot": {"cover_variant_id": cover.get("id"), "asset_id": cover.get("asset_id"), "result_id": cover.get("result_id"),
+                         "source_sha256": cover.get("source_sha256", ""),
+                         "public_media": {"url": cover.get("url", ""), "name": cover.get("name", ""), "mime": cover.get("mime", "image/png"),
+                                          "available": bool(cover.get("valid") and cover.get("url"))}}}
+
+    body_specs = [
+        ("body-v1", 1, "<article><h1>隔离旧稿</h1><p>旧版本正文。</p></article>", "legacy"),
+        ("body-v2", 2, article_payload()["article"]["variants"]["moyu-green"]["body_html"], "put"),
+    ]
+    body_versions = []
+    for version_id, number, layout_html, origin in body_specs:
+        layout_sha = hashlib.sha256(layout_html.encode()).hexdigest()
+        layout_excerpt = re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]*>", " ", layout_html))).strip()[:180]
+        current_layout = article.get("variants", {}).get("moyu-green", {})
+        layout_active = current_layout.get("html_sha256") == layout_sha or current_layout.get("body_html") == layout_html
+        body_versions.append({"id": version_id, "number": number, "created_at": None, "source_revision": number,
+                              "origin": origin, "label": f"Body {number}", "active": layout_active,
+                              "layout_active": layout_active, "layout_available": True,
+                              "availability": {"available": True}, "preview_theme_id": "moyu-green",
+                              "layout_excerpt": layout_excerpt})
+        layouts = [{"theme_id": "moyu-green", "html_sha256": layout_sha,
+                    "catalog_fingerprint": "fixture-catalog", "result_id": f"result-body-{number}",
+                    "available": True,
+                    "body_html": layout_html}]
+        details["body:" + version_id] = {"project_id": "article-fixture", "current_revision": article["revision"],
+            "kind": "body", "id": version_id, "number": number, "created_at": None, "source_revision": number,
+            "origin": origin, "active": layout_active, "layout_active": layout_active,
+            "layout_available": True, "preview_theme_id": "moyu-green",
+            "snapshot": {"layout_available": True, "layouts": layouts}}
+
+    manifest = {"project_id": "article-fixture", "revision": article["revision"], "streams": [
+        {"kind": "title", "title": "标题", "versions": title_versions},
+        {"kind": "cover", "title": "封面", "versions": cover_versions},
+        {"kind": "body", "title": "正文", "versions": body_versions},
+    ]}
+    return manifest, details
+
+
 def article_settings_canvas():
     return {
         "id": "article-settings", "title": "文章生成配置", "icon": "notebook-pen",
@@ -123,12 +200,15 @@ class StudioArticleBrowserTests(unittest.TestCase):
     def setUpClass(cls):
         cls.fixture = {
             "projects": [], "article": article_payload()["article"], "requests": [],
+            "article_restore_conflict_once": False,
             "article_canvas": article_settings_canvas(), "article_canvas_bootstraps": 0,
             "article_canvas_gets": 0, "article_canvas_puts": [], "article_canvas_resets": [],
+            "article_canvas_get_gate": None,
             "article_model_option_requests": [],
             "article_put_conflict_once": False,
             "article_template_reads": 0,
             "fail_body_image": False,
+            "body_image_requests": [],
         }
 
         class Handler(SimpleHTTPRequestHandler):
@@ -179,6 +259,9 @@ class StudioArticleBrowserTests(unittest.TestCase):
                     return
                 if path == "/api/canvases/article-settings":
                     cls.fixture["article_canvas_gets"] += 1
+                    gate = cls.fixture.get("article_canvas_get_gate")
+                    if gate is not None:
+                        gate.wait(timeout=10)
                     canvas = json.loads(json.dumps(cls.fixture["article_canvas"], ensure_ascii=False))
                     self._json(200, {"canvas": canvas})
                     return
@@ -220,6 +303,7 @@ class StudioArticleBrowserTests(unittest.TestCase):
                     self._json(200, {"items": [], "counts": {}})
                     return
                 if path == "/api/results/result-fixture-image":
+                    cls.fixture["body_image_requests"].append({"path": path, "accept": self.headers.get("Accept", "")})
                     image = visible_cover_png()
                     status = 404 if cls.fixture["fail_body_image"] else 200
                     self.send_response(status)
@@ -250,6 +334,20 @@ class StudioArticleBrowserTests(unittest.TestCase):
                     cls.fixture["requests"].append({"method": "GET", "path": path})
                     self._json(200, {"article": json.loads(json.dumps(cls.fixture["article"], ensure_ascii=False))})
                     return
+                if path == "/api/studio/articles/article-fixture/versions":
+                    cls.fixture["requests"].append({"method": "GET", "path": path})
+                    manifest, details = article_versions_payload(cls.fixture["article"])
+                    cls.fixture["article_version_details"] = details
+                    self._json(200, manifest)
+                    return
+                version_match = __import__('re').fullmatch(r"/api/studio/articles/article-fixture/versions/(title|cover|body)/([^/]+)", path)
+                if version_match:
+                    cls.fixture["requests"].append({"method": "GET", "path": path})
+                    manifest, details = article_versions_payload(cls.fixture["article"])
+                    cls.fixture["article_version_details"] = details
+                    detail = details.get(version_match.group(1) + ":" + version_match.group(2))
+                    self._json(200 if detail else 404, detail or {"detail": "版本不存在"})
+                    return
                 if path.startswith("/fixture/gallery/"):
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -278,6 +376,59 @@ class StudioArticleBrowserTests(unittest.TestCase):
                     project = {"id": "article-fixture", "module": "article", "name": body.get("name", ""), "revision": 1, "updated_at": 1791060000, "url": "/static/article.html?id=article-fixture"}
                     cls.fixture["projects"] = [project]
                     self._json(201, {"project": project})
+                    return
+                restore_match = __import__('re').fullmatch(r"/api/studio/articles/article-fixture/versions/(title|cover|body)/([^/]+)/restore", parsed.path)
+                if restore_match:
+                    kind, version_id = restore_match.groups()
+                    article = cls.fixture["article"]
+                    cls.fixture["article_version_restores"].append({"kind": kind, "id": version_id, "body": body})
+                    if cls.fixture["article_restore_conflict_once"]:
+                        cls.fixture["article_restore_conflict_once"] = False
+                        article["revision"] += 1
+                        self._json(409, {"detail": {"article": json.loads(json.dumps(article, ensure_ascii=False)), "revision": article["revision"]}})
+                        return
+                    if int(body.get("expected_revision", -1)) != int(article["revision"]):
+                        self._json(409, {"detail": {"article": json.loads(json.dumps(article, ensure_ascii=False)), "revision": article["revision"]}})
+                        return
+                    _, details = article_versions_payload(article)
+                    detail = details.get(kind + ":" + version_id)
+                    if not detail:
+                        self._json(404, {"detail": "版本不存在"})
+                        return
+                    snapshot = detail["snapshot"]
+                    if kind == "title":
+                        title = snapshot["title"]
+                        article["title"] = title
+                        title_id = snapshot.get("title_variant_id")
+                        article["selected_title_variant_id"] = title_id
+                        digest = "source-title-" + version_id
+                        article["source_sha256"] = digest
+                        if title_id in article.get("title_variants", {}):
+                            article["title_variants"][title_id].update({"source_sha256": digest, "source_matches": True})
+                    elif kind == "cover":
+                        article["selected_cover_variant_id"] = snapshot.get("cover_variant_id")
+                    else:
+                        if body.get("body_view") != "preview":
+                            self._json(422, {"detail": "body_view 必须为 preview"})
+                            return
+                        available = [layout for layout in snapshot.get("layouts", []) if layout.get("available") is True and layout.get("body_html")]
+                        if not available:
+                            self._json(409, {"detail": "正文排版不可恢复"})
+                            return
+                        layout = available[0]
+                        theme_id = layout.get("theme_id")
+                        if not theme_id:
+                            self._json(409, {"detail": "正文排版不可恢复"})
+                            return
+                        existing = article.setdefault("variants", {}).get(theme_id, {})
+                        article["variants"][theme_id] = {**existing, "body_html": layout["body_html"],
+                            "html_sha256": layout.get("html_sha256", ""), "valid": True}
+                        article["selected_theme_id"] = theme_id
+                    article["revision"] += 1
+                    response_article = json.loads(json.dumps(article, ensure_ascii=False))
+                    restored={"kind": kind, "id": version_id}
+                    if kind == "body": restored["body_view"] = body.get("body_view", "preview")
+                    self._json(200, {"article": response_article, "restored": restored, "revision": article["revision"]})
                     return
                 if parsed.path == "/api/studio/articles/settings-canvas/reset":
                     canvas = cls.fixture["article_canvas"]
@@ -438,15 +589,19 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         type(self).fixture["projects"] = []
         type(self).fixture["article"] = article_payload()["article"]
         type(self).fixture["requests"] = []
+        type(self).fixture["article_restore_conflict_once"] = False
+        type(self).fixture["article_version_restores"] = []
         type(self).fixture["article_canvas"] = article_settings_canvas()
         type(self).fixture["article_canvas_bootstraps"] = 0
         type(self).fixture["article_canvas_gets"] = 0
+        type(self).fixture["article_canvas_get_gate"] = None
         type(self).fixture["article_canvas_puts"] = []
         type(self).fixture["article_canvas_resets"] = []
         type(self).fixture["article_model_option_requests"] = []
         type(self).fixture["article_put_conflict_once"] = False
         type(self).fixture["article_template_reads"] = 0
         type(self).fixture["fail_body_image"] = False
+        type(self).fixture["body_image_requests"] = []
         self.cdp("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False})
         self.download_dir = ROOT / "cache" / "studio-tests" / "tmp" / "article-downloads"
         self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -487,6 +642,211 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(base64.b64decode(encoded))
         return path
+
+    def save_validation_screenshot(self, name):
+        import base64
+        encoded = self.cdp("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False}).get("data", "")
+        path = ROOT / ".cache" / "validation" / "studio-tests" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(base64.b64decode(encoded))
+        return path
+
+    def test_article_workbench_keeps_body_visible_with_long_history_and_view_switches_are_read_only(self):
+        article = type(self).fixture["article"]
+        long_title = "隔离工作台长标题测试：查看正文时标题仍保持清楚并与右侧操作留出空间"
+        article["title_variants"]["short"]["title"] = long_title
+        article["cover_variants"] = [*article["cover_variants"], *[
+            {"id": f"cover-history-{index}", "asset_id": f"asset-cover-{index}", "result_id": f"result-cover-{index}",
+             "source_sha256": "source-older", "source_matches": False, "valid": True,
+             "url": "/fixture/cover.png", "name": f"历史封面 {index}", "mime": "image/png"}
+            for index in range(3, 25)
+        ]]
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 1200, "deviceScaleFactor": 1, "mobile": False})
+        self.navigate("/static/article.html?id=article-fixture")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey && document.querySelector('#articleStatus')===null && document.querySelector('[data-article-status]')?.hidden", "文章工作台未完成读取或成功状态未清除")
+        self.wait_for("document.querySelector('#articleManagementDrawer')?.open===true && document.querySelector('#articleThemeChoices [data-theme-id]')", "桌面管理栏/已有排版未就绪")
+        self.wait_for("document.querySelectorAll('#articleCoverHistory [data-version-kind=cover]').length===24", "长封面历史没有加载")
+        self.wait_for("document.querySelectorAll('#articleTitleHistory [data-version-kind=title]').length===3 && document.querySelectorAll('#articleBodyHistory [data-version-kind=body]').length===2", "标题/正文版本历史没有加载")
+        self.evaluate("document.querySelector('#articleTitleHistoryDetails').open=true;document.querySelector('#articleBodyHistoryDetails').open=true")
+        section_order = self.evaluate("(() => [...document.querySelector('.article-layout-rail').children].filter(node=>node.matches('.article-version-group,.article-cover-history-details,.article-layout-section')).map(node=>node.id||node.querySelector('h2')?.textContent||node.querySelector('.article-meta-summary-label')?.textContent))()")
+        self.assertEqual(section_order, ["标题", "封面", "articleCoverDetails", "正文", "主题"], section_order)
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.contentDocument?.querySelector('img')?.complete", "隔离正文中的图片没有结束加载")
+        preview_image = self.evaluate("(() => {const frame=document.querySelector('#articlePreviewFrame'),img=frame?.contentDocument?.querySelector('img');return {src:img?.getAttribute('src'),currentSrc:img?.currentSrc,complete:img?.complete,naturalWidth:img?.naturalWidth,naturalHeight:img?.naturalHeight,resourceNames:frame?.contentWindow?.performance?.getEntriesByType('resource')?.map(entry=>entry.name).filter(name=>name.includes('fixture-image'))||[],requests:window.__imageRequests||null};})()")
+        self.assertTrue(preview_image["naturalWidth"] > 0 and preview_image["currentSrc"].endswith("/api/results/result-fixture-image"), {**preview_image, "serverRequests": type(self).fixture["body_image_requests"]})
+
+        geometry = self.evaluate("(() => {const rail=document.querySelector('.article-layout-rail'),workspace=document.querySelector('.article-workspace'),preview=document.querySelector('.article-preview-region'),frame=document.querySelector('#articlePreviewFrame'),title=document.querySelector('#articleTitle'),current=document.querySelector('#articleSelectedTitle'),picker=document.querySelector('#articleTitleDetails'),actions=document.querySelector('.article-title-toolbar .article-body-actions'),cover=document.querySelector('#articleCurrentCoverPreview'),exportButton=document.querySelector('#articleExportButton'),t=current?.getBoundingClientRect(),a=actions?.getBoundingClientRect();return {viewport:{w:innerWidth,h:innerHeight,scrollH:document.documentElement.scrollHeight},title:title?.textContent,currentTitle:current?.textContent,titleDetails:picker?.open,coverDetails:document.querySelector('#articleCoverDetails')?.open,coverId:cover?.dataset.coverPreviewId,actions:a?.toJSON(),currentTitleBox:t?.toJSON(),titleOverlap:!!(t&&a&&t.left<a.right&&a.left<t.right&&t.top<a.bottom&&a.top<t.bottom),titleRows:getComputedStyle(current).webkitLineClamp,rail:{top:rail?.getBoundingClientRect().top,height:rail?.getBoundingClientRect().height,client:rail?.clientHeight,scroll:rail?.scrollHeight},workspace:workspace?.getBoundingClientRect().toJSON(),preview:preview?.getBoundingClientRect().toJSON(),frame:frame?.getBoundingClientRect().toJSON(),frameInner:frame?.contentDocument?.body?.getBoundingClientRect().toJSON(),exportDirect:!!exportButton?.parentElement?.matches('.article-body-actions')&&!exportButton.closest('details')};})()")
+        self.assertEqual(geometry["title"], "公众号文章", geometry)
+        self.assertEqual(geometry["currentTitle"], long_title, geometry)
+        self.assertEqual(geometry["titleRows"], "2", geometry)
+        self.assertFalse(geometry["titleOverlap"], geometry)
+        self.assertEqual(geometry["coverId"], "cover-a", geometry)
+        self.assertFalse(geometry["titleDetails"] or geometry["coverDetails"], geometry)
+        self.assertEqual(geometry["viewport"]["scrollH"], geometry["viewport"]["h"], geometry)
+        self.assertLess(geometry["preview"]["top"], 230, geometry)
+        self.assertGreater(geometry["preview"]["height"], 700, geometry)
+        self.assertTrue(geometry["exportDirect"], geometry)
+        self.evaluate("document.querySelector('#articleCoverDetails').open=true")
+        scrolled_rail = self.evaluate("(() => {const rail=document.querySelector('.article-layout-rail'),preview=document.querySelector('.article-preview-region');return {rail:{client:rail.clientHeight,scroll:rail.scrollHeight},preview:preview.getBoundingClientRect().toJSON()};})()")
+        self.assertGreater(scrolled_rail["rail"]["scroll"], scrolled_rail["rail"]["client"], scrolled_rail)
+        self.assertAlmostEqual(scrolled_rail["preview"]["top"], geometry["preview"]["top"], delta=1, msg=str(scrolled_rail))
+        self.assertAlmostEqual(scrolled_rail["preview"]["height"], geometry["preview"]["height"], delta=1, msg=str(scrolled_rail))
+        self.evaluate("document.querySelector('#articleCoverDetails').open=false")
+        light = self.save_validation_screenshot("article-four-version-desktop-light.png")
+
+        initial_viewport = geometry["viewport"]
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 1100, "height": initial_viewport["h"], "deviceScaleFactor": 1, "mobile": False})
+        self.wait_for("innerWidth===1100", "标题候选边界验证视口没有切换")
+        self.evaluate("document.querySelector('#articleTitleDetails').open=true")
+        self.wait_for("document.querySelector('#articleTitleDetails')?.open===true && document.querySelector('#articleTitleChoices .article-title-choice')", "标题候选菜单没有打开")
+        title_menu = self.evaluate("(() => {const body=document.querySelector('.article-body-section').getBoundingClientRect(),picker=document.querySelector('#articleTitleDetails').getBoundingClientRect(),panel=document.querySelector('.article-title-choice-panel').getBoundingClientRect();return {width:innerWidth,documentWidth:document.documentElement.scrollWidth,body:{left:body.left,right:body.right},picker:{left:picker.left,right:picker.right},panel:{left:panel.left,right:panel.right,width:panel.width}};})()")
+        self.assertGreaterEqual(title_menu["panel"]["left"], title_menu["body"]["left"] - 1, title_menu)
+        self.assertLessEqual(title_menu["panel"]["right"], title_menu["body"]["right"] + 1, title_menu)
+        self.assertLessEqual(title_menu["documentWidth"], title_menu["width"] + 1, title_menu)
+        self.save_validation_screenshot("article-four-version-title-menu-1100.png")
+        self.evaluate("document.querySelector('#articleTitleDetails').open=false")
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": initial_viewport["w"], "height": initial_viewport["h"], "deviceScaleFactor": 1, "mobile": False})
+        self.wait_for(f"innerWidth==={initial_viewport['w']}", "桌面截图视口没有恢复")
+
+        before_puts = len([item for item in type(self).fixture["requests"] if item["method"] == "PUT"])
+        before_revision = article["revision"]
+        self.assertTrue(self.evaluate("!document.querySelector('#articleSourceTab') && !document.querySelector('#articleSourceDetails')"), "Markdown 原文浏览不属于公众号文章可见工作区")
+        self.assertEqual(self.evaluate("[...document.querySelectorAll('#articleBodyViewTabs [role=tab]')].map(tab=>tab.id)"), ["articlePreviewTab", "articleCompareTab"])
+        self.evaluate("document.querySelector('#articleCompareTab').click()")
+        self.wait_for("document.querySelector('#articleComparePanel')?.hidden===false && document.querySelector('#articlePreviewPanel')?.hidden===true", "正文对比没有切换到同一工作区")
+        self.evaluate("document.querySelector('#articlePreviewTab').click()")
+        self.wait_for("document.querySelector('#articlePreviewPanel')?.hidden===false && document.querySelector('#articlePreviewTab')?.getAttribute('aria-selected')==='true'", "返回排版预览失败")
+        self.assertEqual(len([item for item in type(self).fixture["requests"] if item["method"] == "PUT"]), before_puts, "排版预览/正文对比切换不能保存选择")
+        self.assertEqual(type(self).fixture["article"]["revision"], before_revision)
+
+        self.evaluate("window.StudioTheme?.set?.('dark')")
+        self.wait_for("document.documentElement.dataset.studioAppearance==='dark'", "深色主题没有应用")
+        dark = self.save_validation_screenshot("article-four-version-desktop-dark.png")
+        self.assertTrue(light.is_file() and dark.is_file())
+
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True})
+        self.wait_for("document.querySelector('#articleManagementDrawer')?.open===false", "窄屏管理栏没有切换为折叠抽屉")
+        mobile = self.evaluate("(() => {const body=document.querySelector('.article-body-section'),preview=document.querySelector('.article-preview-region'),summary=document.querySelector('#articleManagementSummary');return {viewport:innerWidth,doc:document.documentElement.scrollWidth,body:document.body.scrollWidth,bodyTop:body?.getBoundingClientRect().top,preview:preview?.getBoundingClientRect().toJSON(),summary:summary?.getBoundingClientRect().toJSON()};})()")
+        self.assertLessEqual(mobile["doc"], mobile["viewport"] + 1, mobile)
+        self.assertLessEqual(mobile["body"], mobile["viewport"] + 1, mobile)
+        self.assertLess(mobile["bodyTop"], 130, mobile)
+        self.evaluate("window.StudioTheme?.set?.('light')")
+        self.wait_for("document.documentElement.dataset.studioAppearance==='light'", "浅色主题没有恢复")
+        narrow = self.save_validation_screenshot("article-four-version-390.png")
+        self.assertTrue(narrow.is_file() and narrow.stat().st_size > 1000, str(narrow))
+
+        self.evaluate("document.querySelector('#articleManagementSummary').click()")
+        self.assertTrue(self.evaluate("document.querySelector('#articleManagementDrawer')?.open===true"), "窄屏管理抽屉应能展开")
+        overlay = self.evaluate("(() => {const body=document.querySelector('.article-body-section'),rail=document.querySelector('.article-layout-rail'),r=rail.getBoundingClientRect(),hit=document.elementFromPoint(Math.min(r.right-12,r.left+22),Math.min(r.bottom-12,r.top+22));return {bodyTop:body.getBoundingClientRect().top,railBottom:r.bottom,railTop:r.top,hitInsideRail:!!hit?.closest('.article-layout-rail'),hit:hit?.className||hit?.id};})()")
+        self.assertLessEqual(overlay["railTop"], overlay["bodyTop"], overlay)
+        self.assertTrue(overlay["hitInsideRail"], overlay)
+        drawer_shot = self.save_validation_screenshot("article-four-version-390-drawer-open.png")
+        self.assertTrue(drawer_shot.is_file() and drawer_shot.stat().st_size > 1000, str(drawer_shot))
+        self.assertLess(overlay["bodyTop"], 130, overlay)
+
+    def test_body_history_is_html_only_and_restores_layout_without_markdown_ui(self):
+        original_source = type(self).fixture["article"]["source_markdown"]
+        original_layout = type(self).fixture["article"]["variants"]["moyu-green"]["body_html"]
+        self.navigate("/static/article.html?id=article-fixture")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey && document.querySelectorAll('#articleBodyHistory [data-version-kind=body]').length===2", "文章及正文排版历史没有加载")
+        self.wait_for("!['正在读取文章…','Loading article…'].includes(document.querySelector('[data-article-status]')?.textContent)", "文章读取状态没有完成")
+        self.assertTrue(self.evaluate("!document.querySelector('#articleSourceTab') && !document.querySelector('#articleSourceDetails')"), "页面不应显示 Markdown 原文标签或历史面板")
+        self.assertTrue(self.evaluate("!document.querySelector('#articleBodyVersionCurrentMeta')"), "内部文章 revision 不应混入正文版本摘要")
+        self.assertEqual(self.evaluate("[...document.querySelectorAll('#articleBodyViewTabs [role=tab]')].map(tab=>tab.id)"), ["articlePreviewTab", "articleCompareTab"])
+        self.evaluate("document.querySelector('#articleBodyHistoryDetails').open=true")
+        self.wait_for("document.querySelector('#articleBodyHistory [data-layout-preview-version=body-v1][data-preview-state=ready] iframe')?.contentDocument?.body?.innerText.includes('旧版本正文')", "正文历史必须展示真实 HTML 排版缩略图")
+        self.assertTrue(self.evaluate("[...document.querySelectorAll('#articleBodyHistory [data-version-kind=body]')].every(row=>row.querySelector('iframe[data-history-layout-frame]') && !row.querySelector('.article-history-source-excerpt'))"), "每条正文历史只提供排版预览，不提供源文摘要")
+        self.assertTrue(all(not any(key in detail.get("snapshot", {}) for key in ("source_markdown", "source_markdown_available")) for key, detail in type(self).fixture["article_version_details"].items() if key.startswith("body:")), "历史详情 fixture 不能向界面暴露 Markdown 快照")
+
+        v1 = "#articleBodyHistory button[data-version-id=body-v1]"
+        v2 = "#articleBodyHistory button[data-version-id=body-v2]"
+        self.assertEqual(self.evaluate(f"document.querySelector({json.dumps(v1)})?.getAttribute('aria-pressed')"), "false")
+        preview_revision = type(self).fixture["article"]["revision"]
+        writes_before = len(type(self).fixture["article_version_restores"])
+        self.click_element(v1)
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.contentDocument?.body?.innerText.includes('旧版本正文') && document.querySelector('#articleBodyHistory button[data-version-id=body-v1]')?.getAttribute('aria-current')==='true' && document.querySelector('#articleBodyVersionCurrent')?.textContent.includes('V1')", "点击 V1 排版卡片应直接恢复对应 HTML")
+        self.assertEqual(type(self).fixture["article"]["source_markdown"], original_source, "HTML 版本恢复不得恢复或改写内部 Markdown")
+        self.assertEqual(type(self).fixture["article"]["variants"]["moyu-green"]["body_html"], "<article><h1>隔离旧稿</h1><p>旧版本正文。</p></article>")
+        restore_v1 = type(self).fixture["article_version_restores"][-1]
+        self.assertEqual(restore_v1["body"], {"expected_revision": preview_revision, "body_view": "preview"})
+        self.assertEqual(len(type(self).fixture["article_version_restores"]), writes_before+1)
+
+        self.click_element(v2)
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.contentDocument?.body?.innerText.includes('正文第一段') && document.querySelector('#articleBodyHistory button[data-version-id=body-v2]')?.getAttribute('aria-current')==='true' && document.querySelector('#articleBodyVersionCurrent')?.textContent.includes('V2')", "点击 V2 应切回对应 HTML 版本")
+        self.assertEqual(type(self).fixture["article"]["source_markdown"], original_source)
+        self.assertEqual(type(self).fixture["article"]["variants"]["moyu-green"]["body_html"], original_layout)
+        self.assertEqual(type(self).fixture["article_version_restores"][-1]["body"]["body_view"], "preview")
+        self.assertEqual(self.evaluate("document.querySelector('#articlePreviewTab')?.getAttribute('aria-selected')"), "true", "历史恢复保持排版预览标签")
+
+        self.wait_for("document.querySelector('#articleBodyHistory [data-layout-preview-version=body-v1][data-preview-state=ready] iframe')?.contentDocument?.body?.innerText.includes('旧版本正文')", "恢复后的历史 HTML 缩略图没有加载")
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False})
+        self.evaluate("window.StudioTheme?.set?.('dark')")
+        self.wait_for("document.documentElement.dataset.studioAppearance==='dark'", "深色主题没有应用")
+        desktop_shot = self.save_validation_screenshot("article-history-html-only-desktop-dark.png")
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True})
+        self.wait_for("innerWidth===390 && document.querySelector('#articleManagementDrawer')?.open===false", "窄屏布局没有生效")
+        mobile_shot = self.save_validation_screenshot("article-history-html-only-390.png")
+        self.assertTrue(desktop_shot.is_file() and desktop_shot.stat().st_size > 1000, str(desktop_shot))
+        self.assertTrue(mobile_shot.is_file() and mobile_shot.stat().st_size > 1000, str(mobile_shot))
+
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False})
+        self.assertTrue(self.evaluate("document.querySelector('#articleBodyHistory button[data-version-id=body-v1]')?.disabled===false"), "非当前 HTML 历史必须可选")
+        writes_before_conflict = len(type(self).fixture["article_version_restores"])
+        type(self).fixture["article_restore_conflict_once"] = True
+        self.click_element(v1)
+        self.wait_for("document.querySelector('[data-article-status]')?.textContent.includes('文章已更新，未采用此历史版本')", "409 应提示重新核对，不得假装采用")
+        self.assertEqual(len(type(self).fixture["article_version_restores"]), writes_before_conflict+1, "409 不自动重试")
+        self.assertEqual(type(self).fixture["article"]["source_markdown"], original_source, "冲突恢复不得改写内部 Markdown")
+        self.assertTrue(self.evaluate("document.querySelector('#articlePreviewTab')?.getAttribute('aria-selected')==='true'"), "409 后保留当前排版预览")
+        self.assertTrue(self.evaluate("document.querySelector('#articleBodyHistory button[data-version-id=body-v2]')?.getAttribute('aria-current')==='true'"), "409 后不能把未采用版本标为当前")
+        self.assertEqual(self.evaluate("document.querySelector('#articleBodyHistory button[data-version-id=body-v1]')?.disabled"), False, "409 后仍可由用户明确重新选择")
+    def test_article_loading_status_clears_after_superseding_read_without_clearing_errors(self):
+        self.navigate("/static/article.html?id=article-fixture")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey && document.querySelector('#articleTitleVersionCurrent')?.textContent!=='—' && document.querySelector('[data-article-status]')?.hidden", "初始文章和版本目录没有完成读取")
+
+        self.evaluate("""(()=>{
+          const real=window.fetch.bind(window);window.__articleRealFetch=real;
+          let holdFirst=true;window.__staleReadSettled=false;
+          window.fetch=(url,options)=>{
+            if(holdFirst&&String(url)==='/api/studio/articles/article-fixture'){
+              holdFirst=false;
+              return new Promise(resolve=>{window.__releaseStaleArticleRead=()=>{
+                resolve(real(url,options).then(response=>{window.__staleReadSettled=true;return response;}));
+              };});
+            }
+            return real(url,options);
+          };
+          document.querySelector('#articleRefreshButton').click();
+        })()""")
+        self.wait_for("typeof window.__releaseStaleArticleRead==='function' && document.querySelector('[data-article-status]')?.classList.contains('is-loading')", "前台刷新没有进入可识别的读取状态")
+        current_revision=type(self).fixture["article"]["revision"]
+        type(self).fixture["article"]["revision"]=current_revision-1
+        self.evaluate("window.dispatchEvent(new Event('focus'))")
+        self.wait_for("document.querySelector('[data-article-status]')?.hidden===true", "被后台低 revision 响应拒绝后，读取状态应结束")
+        type(self).fixture["article"]["revision"]=current_revision
+        self.evaluate("window.__releaseStaleArticleRead()")
+        self.wait_for("window.__staleReadSettled===true && document.querySelector('[data-article-status]')?.hidden===true", "迟到的旧读取不能重新显示或遗留读取状态")
+
+        self.evaluate("""(()=>{
+          const real=window.__articleRealFetch;let fail=true;
+          window.fetch=(url,options)=>{
+            if(fail&&String(url)==='/api/studio/articles/article-fixture'){
+              fail=false;
+              return Promise.resolve(new Response(JSON.stringify({detail:'隔离读取失败'}),{status:503,headers:{'Content-Type':'application/json'}}));
+            }
+            return real(url,options);
+          };
+          document.querySelector('#articleRefreshButton').click();
+        })()""")
+        self.wait_for("document.querySelector('[data-article-status]')?.classList.contains('is-error') && document.querySelector('[data-article-status]')?.textContent.includes('隔离读取失败')", "读取失败应保留为可见错误")
+        self.evaluate("""(()=>{
+          const real=window.__articleRealFetch;window.__recoveryReadSettled=false;
+          window.fetch=(url,options)=>String(url)==='/api/studio/articles/article-fixture'
+            ?real(url,options).then(response=>{window.__recoveryReadSettled=true;return response;})
+            :real(url,options);
+          window.dispatchEvent(new Event('focus'));
+        })()""")
+        self.wait_for("window.__recoveryReadSettled===true", "后台成功读取没有完成")
+        self.assertTrue(self.evaluate("document.querySelector('[data-article-status]')?.classList.contains('is-error') && document.querySelector('[data-article-status]')?.textContent.includes('隔离读取失败')"), "后台成功刷新不能覆盖真实读取错误")
 
     def test_article_module_creates_a_card_then_opens_the_explicit_article_url(self):
         self.navigate("/static/index.html")
@@ -643,6 +1003,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         source = type(self).fixture["article"]["source_markdown"]
         self.navigate("/static/article.html?id=article-fixture")
         self.wait_for("document.querySelector('[data-title-variant-id=alternate]')", "同一 Markdown 的备选标题没有显示")
+        self.evaluate("document.querySelector('#articleTitleDetails').open=true")
         self.assertNotIn("历史标题", self.evaluate("document.querySelector('[data-title-variant-id=alternate]')?.textContent||''"),
                          "alternate title hash differs by title; its source_matches=true must prevent false historical labeling")
         self.evaluate("document.querySelector('[data-title-variant-id=alternate]').click()")
@@ -651,6 +1012,61 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
                          "服务端返回规范版本 ID 后，旧候选 ID 不应继续被显示为当前项")
         self.assertEqual(type(self).fixture["article"]["selected_title_variant_id"], "title-canonical-alternate")
         self.assertEqual(type(self).fixture["article"]["source_markdown"], source, "复用标题不应改写 Markdown")
+
+    def test_duplicate_titles_dedupe_by_trimmed_text_and_keep_export_direct_on_mobile(self):
+        article = type(self).fixture["article"]
+        digest = article["source_sha256"]
+        article["title_variants"].update({
+            "duplicate-first": {"title": " 同名候选 ", "source_sha256": "source-old-a", "source_matches": False, "valid": True},
+            "duplicate-current": {"title": "同名候选", "source_sha256": digest, "source_matches": True, "valid": True},
+            "duplicate-selected": {"title": "同名候选  ", "source_sha256": "source-old-b", "source_matches": False, "valid": True},
+            "different-punctuation": {"title": "同名候选。", "source_sha256": digest, "source_matches": True, "valid": True},
+            "invalid-one": {"valid": False},
+            "invalid-two": {"valid": False},
+        })
+        article["selected_title_variant_id"] = "duplicate-selected"
+        before_titles = json.loads(json.dumps(article["title_variants"], ensure_ascii=False))
+        self.navigate("/static/article.html?id=article-fixture")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey && document.querySelector('#articleExportButton')?.disabled===false", "文章页或导出按钮未就绪")
+        self.evaluate("document.querySelector('#articleTitleDetails').open=true")
+        choices = self.evaluate("(() => [...document.querySelectorAll('#articleTitleChoices [data-title-variant-id]')].map(node=>({id:node.dataset.titleVariantId,title:node.querySelector('span')?.textContent,selected:node.getAttribute('aria-pressed'),disabled:node.disabled})) )()")
+        duplicate_choices = [item for item in choices if item["title"] == "同名候选"]
+        self.assertEqual(len(duplicate_choices), 1, choices)
+        self.assertEqual(duplicate_choices[0]["id"], "duplicate-selected", "有效当前选中项优先作为同名标题的代表")
+        self.assertEqual(duplicate_choices[0]["selected"], "true", choices)
+        self.assertEqual(len([item for item in choices if item["title"] == "同名候选。"]), 1,
+                         "仅按 trim 后的完整文本合并，不忽略标点")
+        self.assertEqual(len([item for item in choices if item["id"].startswith("invalid-")]), 2,
+                         "无效历史记录仍逐条显示，不按本地化不可用文案合并")
+        self.assertEqual(self.evaluate("document.querySelector('#articleSelectedTitle')?.textContent"), "同名候选")
+        self.assertFalse(self.evaluate("document.querySelector('[data-title-variant-id=duplicate-selected]')?.disabled"),
+                         "有效的代表标题仍需保持可点击")
+        self.evaluate("document.querySelector('[data-title-variant-id=duplicate-selected]').click()")
+        self.assertEqual(self.evaluate("document.querySelector('#articleSelectedTitle')?.textContent"), "同名候选")
+        self.assertFalse(self.evaluate("document.querySelector('[data-title-variant-id=different-punctuation]')?.disabled"),
+                         "其他有效标题候选不能因去重而被禁用")
+        self.evaluate("document.querySelector('[data-title-variant-id=different-punctuation]').click()")
+        self.wait_for("document.querySelector('#articleSelectedTitle')?.textContent==='同名候选。' && document.querySelector('[data-title-variant-id=different-punctuation]')?.getAttribute('aria-pressed')==='true'",
+                      "选择独立标题后应更新当前标题与选中态")
+        self.evaluate("(()=>{window.__articleCopiedTitle='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.__articleCopiedTitle=value;}}});document.querySelector('#articleCopyTitleButton').click();})()")
+        self.wait_for("window.__articleCopiedTitle==='同名候选。'", "复制标题应与当前选中候选一致")
+        self.assertEqual(self.evaluate("document.querySelector('#articleExportButton')?.closest('details')===null && document.querySelector('#articleExportButton')?.parentElement?.matches('.article-body-actions')"), True,
+                         "导出应直接位于正文操作栏，不藏在折叠菜单中")
+        self.assertEqual(type(self).fixture["article"]["title_variants"], before_titles,
+                         "去重与复制不能删除、重写或合并服务端历史记录")
+        mutations = [item for item in type(self).fixture["requests"] if item["method"] in {"PUT", "POST"}]
+        self.assertEqual([item["method"] for item in mutations], ["PUT"],
+                         "只允许用户明确切换选择时写一次选中 ID，不得写入或删除标题历史")
+        self.assertEqual(mutations[0]["body"].get("selected_title_variant_id"), "different-punctuation")
+        self.assertNotIn("title_variants", mutations[0]["body"])
+
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 1, "mobile": True})
+        self.wait_for("innerWidth===390", "窄屏视口没有生效")
+        mobile = self.evaluate("(() => {const button=document.querySelector('#articleExportButton'),box=button.getBoundingClientRect();return {viewport:innerWidth,document:document.documentElement.scrollWidth,body:document.body.scrollWidth,left:box.left,right:box.right,visible:box.width>0&&getComputedStyle(button).visibility!=='hidden',label:button.innerText};})()")
+        self.assertLessEqual(mobile["document"], 391, mobile)
+        self.assertLessEqual(mobile["body"], 391, mobile)
+        self.assertTrue(mobile["visible"] and mobile["left"] >= 0 and mobile["right"] <= 391, mobile)
+        self.save_validation_screenshot("article-title-dedup-export-390.png")
 
     def test_real_html_digest_enables_copy_and_export_and_reports_download_start(self):
         self.navigate("/static/article.html?id=article-fixture")
@@ -738,6 +1154,8 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
     def test_article_change_during_image_fetch_aborts_prepared_copy(self):
         self.navigate("/static/article.html?id=article-fixture")
         self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey && !document.querySelector('#articleCopyButton')?.disabled", "文章复制操作未就绪")
+        original_layout = type(self).fixture["article"]["variants"]["moyu-green"]["body_html"]
+        original_key = self.evaluate("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey")
         self.evaluate("""(()=>{
           const original=window.fetch.bind(window);window.__releaseArticleImage=null;
           window.fetch=(url,options)=>String(url).includes('/api/results/result-fixture-image')?new Promise(resolve=>{window.__releaseArticleImage=()=>resolve(original(url,options));}):original(url,options);
@@ -746,10 +1164,17 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.wait_for("typeof window.__releaseArticleImage==='function'", "复制没有开始读取受管图片")
         article=type(self).fixture["article"]
         article["revision"]+=1
-        article["source_markdown"]+="\n\n并发修改。"
-        article["source_sha256"]="source-after-concurrent-edit"
+        changed_layout=original_layout.replace("正文第一段。","当前选中排版已替换。")
+        article["variants"]["moyu-green"].update({
+            "body_html":changed_layout,
+            "html_sha256":hashlib.sha256(changed_layout.encode("utf-8")).hexdigest(),
+            "valid":True,
+        })
         self.evaluate("document.querySelector('#articleRefreshButton').click()")
-        self.wait_for("document.querySelector('#articleSourceMarkdown')?.textContent.includes('并发修改。') && document.querySelector('#articleCopyButton')?.disabled", "异步复制期间没有读取到更新后的文章版本")
+        changed_key="moyu-green:"+article["variants"]["moyu-green"]["html_sha256"]
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset.previewKey==="+json.dumps(changed_key)+" && document.querySelector('#articlePreviewFrame')?.dataset.loadedPreviewKey==="+json.dumps(changed_key)+" && document.querySelector('#articlePreviewFrame')?.contentDocument?.body?.innerText.includes('当前选中排版已替换。') && document.querySelector('#articleCopyButton')?.disabled",
+                      "异步复制期间没有读取到新的已选排版 HTML")
+        self.assertNotEqual(original_key,changed_key,"负向场景必须真正改变当前 HTML 的 hash/key")
         self.evaluate("window.__releaseArticleImage()")
         self.wait_for("document.querySelector('#articleCopyFeedback')?.dataset.state==='error'", "文章版本变化后应停止复制")
         result=self.evaluate("({message:document.querySelector('#articleCopyFeedback').textContent,state:document.querySelector('#articleCopyFeedback').dataset.state})")
@@ -759,6 +1184,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
     def test_copy_failures_and_download_start_are_reported_near_their_buttons(self):
         self.navigate("/static/article.html?id=article-fixture")
         self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey && !document.querySelector('#articleCopyButton')?.disabled", "文章复制操作未就绪")
+        self.evaluate("document.querySelector('#articleTitleDetails').open=true;document.querySelector('#articleCoverDetails').open=true")
         self.evaluate("""(()=>{Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{throw new Error('denied');},write:async()=>{throw new Error('denied');}}});document.execCommand=()=>false;document.querySelector('#articleCopyTitleButton').click();})()""")
         self.wait_for("document.querySelector('#articleTitleFeedback')?.dataset.state==='error'", "标题剪贴板拒绝后应显示就近失败状态")
         title_failure = self.evaluate("({message:document.querySelector('#articleTitleFeedback').textContent,selected:document.getSelection()?.toString()})")
@@ -807,9 +1233,16 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
 
         self.evaluate("document.querySelector('[data-theme-id=red-white]').click()")
         self.wait_for("document.querySelector('#articlePreviewFrame')?.contentDocument?.querySelector('#articlePreviewContent section table')", "切换主题没有切换到另一种真实排版结构")
-        self.wait_for("document.querySelector('[data-article-status]')?.textContent.includes('排版选择已保存') || document.querySelector('[data-article-status]')?.textContent.includes('Layout selection saved')", "版式结构更新后没有完成持久化")
+        self.wait_for("document.querySelector('[data-theme-id=red-white]')?.getAttribute('aria-pressed')==='true' && document.querySelector('[data-article-status]')?.hidden===true", "版式选择后应显示选中态，不显示全宽成功提示")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and type(self).fixture["article"]["selected_theme_id"] != "red-white":
+            time.sleep(0.02)
         self.assertTrue(any(item["method"] == "PUT" and item["body"].get("selected_theme_id") == "red-white" for item in type(self).fixture["requests"]))
+        self.assertEqual(type(self).fixture["article"]["selected_theme_id"], "red-white")
         self.assertEqual(type(self).fixture["article"]["source_markdown"], original_source, "主题切换只能更改选择，不能覆盖 Markdown 原文")
+        graphite_choice=self.evaluate("document.querySelector('[data-theme-id=graphite-minimal]')?.textContent||''")
+        self.assertIn("已保存排版",graphite_choice,"非选中但已保存且完整性有效的主题仍以普通保存状态展示")
+        self.assertNotIn("基于其他原文",graphite_choice,"仅标题/正文来源指纹不同不应误报为排版异常")
 
         captured = self.evaluate("""(async()=>{
           const original=window.ClipboardItem;
@@ -832,52 +1265,158 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
 
         self.evaluate("document.querySelector('[data-theme-id=graphite-minimal]').click()")
         self.wait_for("document.querySelector('#articlePreviewFrame')?.contentDocument?.body?.innerText.includes('过期内容不应显示')", "已保存的历史排版应允许作为历史预览")
-        stale = self.evaluate("(() => ({body:document.querySelector('#articlePreviewFrame')?.contentDocument?.body?.innerText,history:document.querySelector('#articlePreviewBadge')?.textContent,notice:document.querySelector('#articlePreviewHistoryNote')?.hidden,copyDisabled:document.querySelector('#articleCopyButton')?.disabled,exportDisabled:document.querySelector('#articleExportButton')?.disabled}))()")
+        stale = self.evaluate("(() => ({body:document.querySelector('#articlePreviewFrame')?.contentDocument?.body?.innerText,badge:document.querySelector('#articlePreviewBadge')?.textContent,notice:document.querySelector('#articlePreviewHistoryNote')?.hidden,copyDisabled:document.querySelector('#articleCopyButton')?.disabled,exportDisabled:document.querySelector('#articleExportButton')?.disabled,ready:document.querySelector('[data-theme-id=graphite-minimal]')?.dataset.ready}))()")
         self.assertIn("过期内容不应显示", stale["body"])
-        self.assertIn("历史排版", stale["history"])
-        self.assertFalse(stale["notice"], stale)
-        self.assertTrue(stale["copyDisabled"] and stale["exportDisabled"], stale)
+        self.assertIn("当前排版", stale["badge"])
+        self.assertTrue(stale["notice"], stale)
+        self.assertFalse(stale["copyDisabled"] or stale["exportDisabled"], stale)
+        self.assertEqual(stale["ready"], "true", stale)
+
+    def test_title_restore_during_portable_copy_keeps_selected_html_bytes_and_no_success_banner(self):
+        article = type(self).fixture["article"]
+        saved_html = article["variants"]["moyu-green"]["body_html"]
+        self.navigate("/static/article.html?id=article-fixture")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey && !document.querySelector('#articleCopyButton')?.disabled", "初始排版未就绪")
+        self.evaluate("""(()=>{
+          window.__articleBodyCopies=[];
+          Object.defineProperty(navigator,'clipboard',{configurable:true,value:{write:async items=>{
+            const item=items[0],payload={};
+            for(const type of item.types)payload[type]=await item.getType(type).then(blob=>blob.text());
+            window.__articleBodyCopies.push(payload);
+          }}});
+        })()""")
+        self.click_element("#articleCopyButton")
+        self.wait_for("window.__articleBodyCopies.length===1 && document.querySelector('#articleCopyFeedback')?.dataset.state==='success'", "基准排版复制没有完成")
+        baseline = self.evaluate("window.__articleBodyCopies[0]['text/html']")
+        self.assertIn("data:image/png;base64,", baseline, "测试须覆盖受管图片准备过程")
+
+        self.evaluate("""(()=>{
+          window.__articleOriginalFetch=window.fetch.bind(window);
+          window.__holdArticleImage=true;window.__releaseArticleImage=null;
+          window.fetch=(url,options)=>{
+            if(window.__holdArticleImage&&String(url).includes('/api/results/result-fixture-image'))
+              return new Promise(resolve=>{window.__releaseArticleImage=()=>{window.__holdArticleImage=false;resolve(window.__articleOriginalFetch(url,options));};});
+            return window.__articleOriginalFetch(url,options);
+          };
+        })()""")
+        self.click_element("#articleCopyButton")
+        self.wait_for("typeof window.__releaseArticleImage==='function'", "第二次复制没有进入受管图片读取")
+        self.evaluate("document.querySelector('#articleTitleHistoryDetails').open=true")
+        self.wait_for("document.querySelector('#articleTitleHistory button[data-version-id=title-v1]') && !document.querySelector('#articleTitleHistory button[data-version-id=title-v1]').disabled", "标题历史未就绪")
+        self.click_element("#articleTitleHistory button[data-version-id=title-v1]")
+        self.wait_for("document.querySelector('#articleSelectedTitle')?.textContent==='隔离历史标题' && document.querySelector('#articleTitleHistory button[data-version-id=title-v1]')?.getAttribute('aria-pressed')==='true' && document.querySelector('[data-article-status]')?.hidden===true", "采用标题历史后应只更新标题选择，不显示全宽成功提示")
+        preview_state = self.evaluate("(()=>{const frame=document.querySelector('#articlePreviewFrame');return {key:frame?.dataset.previewKey,loaded:frame?.dataset.loadedPreviewKey,copyDisabled:document.querySelector('#articleCopyButton')?.disabled};})()")
+        self.assertEqual(preview_state["key"], preview_state["loaded"], preview_state)
+        self.assertTrue(preview_state["copyDisabled"], "复制操作进行中时仅由忙碌状态禁用按钮")
+        self.assertEqual(article["variants"]["moyu-green"]["body_html"], saved_html, "选择标题不能改写已保存排版 HTML")
+        self.assertEqual(article["source_markdown"], article_payload()["article"]["source_markdown"], "选择标题不能改写 Markdown")
+
+        self.evaluate("window.__releaseArticleImage()")
+        self.wait_for("window.__articleBodyCopies.length===2 && document.querySelector('#articleCopyFeedback')?.dataset.state==='success'", "标题恢复不应中止已经开始的正文复制")
+        copied = self.evaluate("window.__articleBodyCopies[1]['text/html']")
+        self.assertEqual(copied, baseline, "标题或文章 revision 变化不能改变同一排版的可复制 HTML 字节")
+        self.assertTrue(self.evaluate("document.querySelector('#articleCopyButton')?.disabled===false"), "当前已选安全排版在标题变化后仍应可复制")
+
+        original_body_key=self.evaluate("document.querySelector('#articlePreviewFrame')?.dataset?.loadedPreviewKey")
+        self.evaluate("window.__holdArticleImage=true;window.__releaseArticleImage=null")
+        self.click_element("#articleCopyButton")
+        self.wait_for("typeof window.__releaseArticleImage==='function'", "Markdown 正向并发场景没有开始准备受管图片")
+        article["revision"]+=1
+        article["source_markdown"]+="\n\n并发更新的 Markdown。"
+        article["source_sha256"]="source-markdown-concurrently-edited"
+        self.evaluate("document.querySelector('#articleRefreshButton').click()")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset.loadedPreviewKey===document.querySelector('#articlePreviewFrame')?.dataset.previewKey && document.querySelector('#articleCopyButton')?.disabled",
+                      "内部源文变化后应刷新文章，同时保留同一有效排版与进行中的复制")
+        self.assertIn("并发更新的 Markdown。", article["source_markdown"], "源文仍保存在文章数据中")
+        self.assertEqual(self.evaluate("document.querySelector('#articlePreviewFrame')?.dataset.loadedPreviewKey"),original_body_key,
+                         "源文变化不得重绑或重新加载未变化的排版 HTML")
+        self.evaluate("window.__releaseArticleImage()")
+        self.wait_for("window.__articleBodyCopies.length===3 && document.querySelector('#articleCopyFeedback')?.dataset.state==='success'", "Markdown 变化不应中止仍指向相同 HTML 的正文复制")
+        self.assertEqual(self.evaluate("window.__articleBodyCopies[2]['text/html']"),baseline,"Markdown 来源变化不能改写相同已选 HTML 的便携复制字节")
 
     def test_title_and_cover_history_selection_copy_download_and_mobile_layout(self):
+        type(self).fixture["article"]["title_variants"]["alternate"]["title"] = " 隔离短标题 "
+        type(self).fixture["article"]["selected_title_variant_id"] = "alternate"
         self.navigate("/static/article.html?id=article-fixture")
-        self.wait_for("document.querySelector('#articleSelectedTitle')?.textContent==='隔离短标题' && document.querySelector('[data-cover-variant-id=cover-a]')", "文章历史标题/封面未从 GET 初始化")
-        self.wait_for("document.querySelector('[data-cover-preview-id=cover-a] img')?.complete && document.querySelector('[data-cover-preview-id=cover-a] img')?.naturalWidth===640", "可见宽幅封面 fixture 没有加载")
-        image_geometry = self.evaluate("(()=>{const image=document.querySelector('[data-cover-preview-id=cover-a] img');return {loaded:image?.complete,width:image?.naturalWidth,height:image?.naturalHeight,displayWidth:image?.getBoundingClientRect().width,displayHeight:image?.getBoundingClientRect().height,fit:getComputedStyle(image).objectFit};})()")
+        self.evaluate("document.querySelector('#articleCoverDetails').open=true")
+        self.wait_for("document.querySelector('#articleSelectedTitle')?.textContent==='隔离短标题' && document.querySelector('[data-restore-kind=cover][data-version-id=cover-v-cover-a]')", "文章标题与封面版本未从 GET 初始化")
+        self.wait_for("document.querySelectorAll('#articleTitleHistory [data-version-kind=title]').length===2 && document.querySelector('#articleTitleHistory button[data-version-id=title-v3]')?.getAttribute('aria-pressed')==='true'", "同名标题历史应去重并优先保留当前版本 ID")
+        self.assertFalse(self.evaluate("!!document.querySelector('#articleTitleHistory [data-version-id=title-v2]')"), "同名历史不得重复显示")
+        self.assertTrue(self.evaluate("!document.querySelector('[data-view-kind]') && !document.querySelector('#articleVersionPreviewBanner') && !document.querySelector('#articleHistoryLayoutChoices')"), "历史详情不能出现第二层查看/选择控件")
+        self.evaluate("document.querySelector('.article-current-title-summary').click()")
+        self.wait_for("document.querySelector('#articleTitleDetails')?.open===true && document.querySelector('[data-title-variant-id=long]')", "标题候选没有从标题旁展开")
+        self.wait_for("document.querySelector('#articleCoverSummaryImage')?.complete && document.querySelector('#articleCoverSummaryImage')?.naturalWidth===640", "当前封面 fixture 没有加载")
+        image_geometry = self.evaluate("(()=>{const image=document.querySelector('#articleCoverSummaryImage');return {loaded:image?.complete,width:image?.naturalWidth,height:image?.naturalHeight,displayWidth:image?.getBoundingClientRect().width,displayHeight:image?.getBoundingClientRect().height,fit:getComputedStyle(image).objectFit};})()")
         self.assertEqual((image_geometry["width"], image_geometry["height"]), (640, 274), image_geometry)
         self.assertEqual(image_geometry["fit"], "contain", image_geometry)
-        self.assertGreater(image_geometry["displayWidth"], 220, image_geometry)
-        self.assertGreater(image_geometry["displayHeight"], 100, image_geometry)
+        self.assertGreater(image_geometry["displayWidth"], 150, image_geometry)
+        self.assertGreater(image_geometry["displayHeight"], 65, image_geometry)
         self.assertTrue(self.evaluate("document.querySelector('[data-title-variant-id=long]')?.disabled===false"), "来源不同的历史标题仍应允许用户主动复用")
-        self.assertTrue(self.evaluate("document.querySelector('[data-cover-variant-id=cover-b]')?.closest('.article-cover-choice')?.textContent.includes('历史封面')"), "来源不同的历史封面应可见并标成历史项")
-        self.assertTrue(self.evaluate("document.querySelector('[data-cover-variant-id=cover-b]')?.closest('.article-cover-choice')?.textContent.includes('封面 2')"), "无意义 UUID 文件名不应成为封面卡片主标签")
+        self.assertTrue(self.evaluate("document.querySelector('[data-restore-kind=cover][data-version-id=cover-v-cover-b]')?.closest('.article-version-row')?.textContent.includes('V2')"), "封面历史应显示版本号而非文件名")
+        self.assertFalse(self.evaluate("document.querySelector('#articleCoverHistory')?.textContent.includes('5e87fba7')"), "封面版本列表不能泄露无意义文件名")
         self.save_screenshot("article-three-sections-desktop.png")
 
         self.evaluate("document.querySelector('[data-title-variant-id=long]').click()")
-        self.wait_for("document.querySelector('#articleSelectedTitle')?.textContent==='隔离历史标题' && document.querySelector('[data-title-variant-id=long]')?.getAttribute('aria-pressed')==='true'", "切换历史标题没有更新正文标题区域")
-        self.wait_for("document.querySelector('[data-article-status]')?.textContent.includes('标题版本已保存')", "标题选择没有保存")
+        self.wait_for("document.querySelector('#articleSelectedTitle')?.textContent==='隔离历史标题' && document.querySelector('[data-title-variant-id=long]')?.getAttribute('aria-pressed')==='true' && document.querySelector('#articleTitleDetails')?.open===false", "切换标题没有立即更新并收起正文标题区域")
+        self.wait_for("document.querySelector('[data-article-status]')?.hidden===true", "标题选择后不应显示全宽成功提示")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and type(self).fixture["article"]["selected_title_variant_id"] != "long":
+            time.sleep(0.02)
         self.assertEqual(type(self).fixture["article"]["selected_title_variant_id"], "long")
         copied_title = self.evaluate("(async()=>{let value='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{value=text;window.__articleTitleCopy=text;}}});document.querySelector('#articleCopyTitleButton').click();for(let i=0;i<80&&!value;i++)await new Promise(r=>setTimeout(r,20));return value;})()")
         self.assertEqual(copied_title, "隔离历史标题")
         self.wait_for("document.querySelector('#articleTitleFeedback')?.textContent==='标题已复制。'", "标题复制成功后应在按钮旁反馈")
         self.assertTrue(any(item["method"] == "PUT" and item["body"].get("selected_title_variant_id") == "long" for item in type(self).fixture["requests"]))
 
-        before_preview_requests = len(type(self).fixture["requests"])
-        revision_before_preview = type(self).fixture["article"]["revision"]
-        self.evaluate("document.querySelector('[data-cover-preview-id=cover-b]').click()")
-        self.wait_for("document.querySelector('#articleCoverLightbox')?.open && document.querySelector('#articleCoverLightboxImage')?.naturalWidth===640", "点击封面没有打开原比例完整预览")
-        self.assertEqual(type(self).fixture["article"]["selected_cover_variant_id"], "cover-a", "放大预览不能隐式更改封面选择")
-        self.assertEqual(type(self).fixture["article"]["revision"], revision_before_preview, "放大预览不能新增文章修订")
-        self.assertEqual(len([item for item in type(self).fixture["requests"][before_preview_requests:] if item["method"] == "PUT"]), 0)
-        self.assertEqual(self.evaluate("getComputedStyle(document.querySelector('#articleCoverLightboxImage')).objectFit"), "contain")
-        self.cdp("Input.dispatchKeyEvent", {"type": "rawKeyDown", "key": "Escape", "windowsVirtualKeyCode": 27})
-        self.cdp("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "windowsVirtualKeyCode": 27})
-        self.assertFalse(self.evaluate("document.querySelector('#articleCoverLightbox')?.open"), "Esc 应关闭封面预览")
-        self.wait_for("document.activeElement?.dataset?.coverPreviewId==='cover-b'", "关闭预览后焦点应回到打开它的封面")
+        self.evaluate("document.querySelector('#articleTitleHistoryDetails').open=true")
+        self.wait_for("document.querySelector('#articleTitleHistory button[data-version-id=title-v1]')?.getAttribute('aria-pressed')==='true' && document.querySelectorAll('#articleTitleHistory [data-version-kind=title]').length===2", "保存新标题后标题历史活动态/trim 去重未更新")
+        self.wait_for("document.querySelector('#articleTitleHistory button[data-version-id=title-v2]')", "同名短标题版本没有留下唯一整卡")
+        title_restore_revision=type(self).fixture["article"]["revision"]
+        title_restore_count=len(type(self).fixture["article_version_restores"])
+        restore_button_state=self.evaluate("(()=>{const button=document.querySelector('#articleTitleHistory button[data-version-id=title-v2]');return {buttons:[...document.querySelectorAll('#articleTitleHistory button[data-version-id]')].map(item=>({id:item.dataset.versionId,disabled:item.disabled,pressed:item.getAttribute('aria-pressed')})),disabled:button?button.disabled:null,pressed:button?.getAttribute('aria-pressed'),current:button?.getAttribute('aria-current'),text:button?.parentElement?.textContent,status:document.querySelector('[data-article-status]')?.textContent};})()")
+        self.assertIsNotNone(restore_button_state["disabled"],restore_button_state)
+        self.assertFalse(restore_button_state["disabled"],restore_button_state)
+        self.click_element("#articleTitleHistory button[data-version-id=title-v2]")
+        self.wait_for("document.querySelector('#articleSelectedTitle')?.textContent==='隔离短标题' && document.querySelector('#articleTitleHistory button[data-version-id=title-v2]')?.getAttribute('aria-pressed')==='true' && document.querySelector('[data-article-status]')?.hidden===true", "标题历史整卡点击没有直接恢复并更新当前标题，或仍显示全宽成功提示")
+        self.assertEqual(type(self).fixture["article"]["revision"],title_restore_revision+1)
+        self.assertEqual(len(type(self).fixture["article_version_restores"]),title_restore_count+1)
+        self.assertEqual(type(self).fixture["article_version_restores"][-1]["kind"],"title")
+        copied_restored_title = self.evaluate("(async()=>{let value='';Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{value=text;}}});document.querySelector('#articleCopyTitleButton').click();for(let i=0;i<80&&!value;i++)await new Promise(r=>setTimeout(r,20));return value;})()")
+        self.assertEqual(copied_restored_title,"隔离短标题","恢复后的当前标题复制内容应同步")
 
-        self.evaluate("document.querySelector('[data-cover-variant-id=cover-b]').click()")
-        self.wait_for("document.querySelector('[data-cover-variant-id=cover-b]')?.getAttribute('aria-pressed')==='true' && document.querySelector('#articleCopyCoverButton')?.disabled===false", "历史封面不能切换为当前选择")
-        self.wait_for("document.querySelector('[data-article-status]')?.textContent.includes('封面选择已保存')", "封面选择没有保存")
+        self.wait_for("document.querySelector('#articleCoverHistory [data-version-id=cover-v-cover-b] .article-history-cover-thumb')?.complete && document.querySelector('#articleCoverHistory [data-version-id=cover-v-cover-b] .article-history-cover-thumb')?.naturalWidth===640", "封面历史卡片未加载公开缩略图")
+        before_cover_card = len(type(self).fixture["requests"])
+        revision_before_restore=type(self).fixture["article"]["revision"]
+        before_restore_count=len(type(self).fixture["article_version_restores"])
+        self.click_element("#articleCoverHistory [data-version-id=cover-v-cover-b] .article-history-cover-thumb")
+        self.wait_for("document.querySelector('#articleCurrentCoverPreview')?.dataset.coverPreviewId==='cover-b' && document.querySelector('#articleCopyCoverButton')?.disabled===false && document.querySelector('[data-article-status]')?.hidden===true", "历史封面没有作为当前封面恢复，或仍显示全宽成功提示")
+        self.assertFalse(self.evaluate("document.querySelector('#articleCoverLightbox')?.open"), "历史封面缩略图点击应直接恢复，不能打开原图放大")
+        self.assertEqual(len(type(self).fixture["article_version_restores"]),before_restore_count+1,"真实坐标点击历史封面缩略图只执行一次直接恢复")
+        self.assertFalse(any(item["method"]=="GET" and item["path"].endswith("/versions/cover/cover-v-cover-b") for item in type(self).fixture["requests"][before_cover_card:]),"列表缩略图应直接使用公开 media，不额外读取详情")
         self.assertEqual(type(self).fixture["article"]["selected_cover_variant_id"], "cover-b")
+        self.assertEqual(type(self).fixture["article"]["revision"], revision_before_restore+1)
+        self.assertTrue(any(item["method"]=="POST" and item["path"].endswith("/versions/cover/cover-v-cover-b/restore") and item["body"].get("expected_revision")==revision_before_restore for item in type(self).fixture["requests"]))
+        self.assertFalse(any(item["method"]=="PUT" and "selected_cover_variant_id" in item.get("body",{}) for item in type(self).fixture["requests"]))
+        selected_cover_view = self.evaluate("(() => {const button=document.querySelector('#articleCurrentCoverPreview'),image=document.querySelector('#articleCoverSummaryImage');return {id:button?.dataset.coverPreviewId,src:image?.getAttribute('src'),selected:document.querySelector('#articleCoverHistory [data-restore-kind=cover][data-version-id=cover-v-cover-b]')?.getAttribute('aria-pressed')};})()")
+        self.assertEqual(selected_cover_view["id"], "cover-b", selected_cover_view)
+        self.assertTrue(selected_cover_view["src"].endswith("/fixture/cover.png"), selected_cover_view)
+        self.assertEqual(selected_cover_view["selected"], "true", selected_cover_view)
+        self.evaluate("document.querySelector('#articleBodyHistoryDetails').open=true;document.querySelector('#articleCoverDetails').open=true")
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False})
+        self.wait_for("document.querySelector('[data-article-status]')?.hidden===true", "封面恢复提示没有结束，避免将短暂反馈误当页面内容截图")
+        self.evaluate("window.StudioTheme?.set?.('dark')")
+        self.wait_for("document.documentElement.dataset.studioAppearance==='dark'", "深色主题没有应用")
+        desktop_path=self.save_validation_screenshot("article-history-cards-cover-desktop-dark.png")
+        self.evaluate("window.StudioTheme?.set?.('light')")
+        self.wait_for("document.documentElement.dataset.studioAppearance==='light'", "浅色主题没有恢复")
+        light_path=self.save_validation_screenshot("article-history-cards-cover-desktop-light.png")
+        before_current_zoom_puts = len([item for item in type(self).fixture["requests"] if item["method"] == "PUT"])
+        revision_before_current_zoom = type(self).fixture["article"]["revision"]
+        self.evaluate("document.querySelector('#articleCurrentCoverPreview').click()")
+        self.wait_for("document.querySelector('#articleCoverLightbox')?.open && document.querySelector('#articleCoverLightboxImage')?.naturalWidth===640", "当前封面图片没有打开完整预览")
+        self.assertEqual(type(self).fixture["article"]["revision"], revision_before_current_zoom, "点击当前封面放大不能保存")
+        self.assertEqual(len([item for item in type(self).fixture["requests"] if item["method"] == "PUT"]), before_current_zoom_puts)
+        self.evaluate("document.querySelector('#articleCoverLightboxClose').click()")
         copied_cover = self.evaluate("(async()=>{let payload=null;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{write:async items=>{const item=items[0],type=item.types[0],blob=await item.getType(type);payload={type,size:blob.size};window.__articleCoverClipboard=payload;}}});document.querySelector('#articleCopyCoverButton').click();for(let i=0;i<100&&!payload;i++)await new Promise(r=>setTimeout(r,20));return payload;})()")
         self.assertEqual(copied_cover["type"], "image/png", copied_cover)
         self.assertGreater(copied_cover["size"], 0, copied_cover)
@@ -891,7 +1430,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
             time.sleep(0.025)
         self.assertTrue(cover_download.is_file(), f"Chromium did not preserve the original cover filename: {cover_download}")
         self.assertTrue(cover_download.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
-        self.assertTrue(any(item["method"] == "PUT" and item["body"].get("selected_cover_variant_id") == "cover-b" for item in type(self).fixture["requests"]))
+        self.assertTrue(any(item["method"] == "POST" and item["path"].endswith("/versions/cover/cover-v-cover-b/restore") for item in type(self).fixture["requests"]))
 
         self.evaluate("document.querySelector('#articleFullPreviewButton').click()")
         self.assertTrue(self.evaluate("document.querySelector('.article-preview-region')?.classList.contains('is-full-preview')"))
@@ -905,7 +1444,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.assertLessEqual(mobile["documentWidth"], 320, mobile)
         self.assertLessEqual(mobile["bodyWidth"], 320, mobile)
         self.assertTrue(all(item["left"] >= 0 and item["right"] <= 320 for item in mobile["buttons"]), mobile)
-        self.evaluate("document.querySelector('[data-cover-preview-id=cover-a]').click()")
+        self.evaluate("document.querySelector('#articleCurrentCoverPreview').click()")
         self.wait_for("document.querySelector('#articleCoverLightbox')?.open", "窄屏下无法打开封面预览")
         mobile_lightbox = self.evaluate("(() => {const d=document.querySelector('#articleCoverLightbox'),i=document.querySelector('#articleCoverLightboxImage');return {width:innerWidth,documentWidth:document.documentElement.scrollWidth,dialog:d.getBoundingClientRect().toJSON(),image:i.getBoundingClientRect().toJSON(),fit:getComputedStyle(i).objectFit,close:document.querySelector('#articleCoverLightboxClose').getBoundingClientRect().toJSON()};})()")
         self.assertLessEqual(mobile_lightbox["documentWidth"], 320, mobile_lightbox)
@@ -915,8 +1454,11 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.assertLessEqual(mobile_lightbox["close"]["right"], 320, mobile_lightbox)
         self.evaluate("document.querySelector('#articleCoverLightboxClose').click()")
         self.assertFalse(self.evaluate("document.querySelector('#articleCoverLightbox')?.open"))
-        mobile_path = self.save_screenshot("article-three-sections-320.png")
+        self.evaluate("document.querySelector('#articleManagementDrawer').open=true;document.querySelector('#articleBodyHistoryDetails').open=true;document.querySelector('#articleCoverDetails').open=true")
+        self.evaluate("document.querySelector('.article-layout-rail').scrollTop=document.querySelector('.article-layout-rail').scrollHeight")
+        mobile_path = self.save_validation_screenshot("article-history-cards-320.png")
         self.assertTrue(mobile_path.is_file() and mobile_path.stat().st_size > 1000, str(mobile_path))
+        self.assertTrue(desktop_path.is_file() and desktop_path.stat().st_size>1000 and light_path.is_file() and light_path.stat().st_size>1000)
 
     def test_article_selection_conflict_reloads_latest_content_without_marking_draft_saved(self):
         self.navigate("/static/article.html?id=article-fixture")
@@ -931,8 +1473,15 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.assertTrue(any(item["method"] == "GET" and item["path"] == "/api/studio/articles/article-fixture" for item in type(self).fixture["requests"]))
 
     def test_article_settings_embeds_the_shared_canvas_and_resets_atomically(self):
+        # Hold the canvas snapshot response until the iframe is listening for
+        # canvas-ready. Counting the GET alone is too early: loadCanvas still
+        # installs the response into the graph after the request has started.
+        canvas_get_gate = threading.Event()
+        type(self).fixture["article_canvas_get_gate"] = canvas_get_gate
+        self.addCleanup(canvas_get_gate.set)
         self.navigate("/static/api-settings.html")
         self.wait_for("document.querySelector('#articleSettingsNav')", "API 设置没有公众号文章配置入口")
+        self.wait_for("(()=>{const root=document.querySelector('#settingsContent');return root&&root.getAttribute('aria-busy')==='false'&&(!root.dataset.apiStartup||root.dataset.apiStartup==='empty');})()", "API 设置初始化没有结束")
         self.evaluate("document.querySelector('#articleSettingsNav').click()")
         self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentWindow?.location?.search.includes('id=article-settings')", "文章配置没有挂载专用共享画布")
         self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.documentElement?.dataset?.canvasMode==='article-settings'", "画布没有识别文章配置模式")
@@ -940,12 +1489,17 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and type(self).fixture["article_canvas_gets"] == 0:
             time.sleep(0.025)
+        self.assertEqual(type(self).fixture["article_canvas_gets"], 1, "共享画布快照 GET 尚未开始")
+        self.evaluate("(()=>{const frame=document.querySelector('#articleSettingsCanvasFrame');const child=frame.contentWindow;child.addEventListener('canvas-ready',()=>{child.document.documentElement.dataset.testCanvasReady='true';},{once:true});return true;})()")
+        canvas_get_gate.set()
+        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.documentElement?.dataset?.testCanvasReady==='true'", "共享画布尚未应用快照并完成首次渲染")
         self.assertEqual(type(self).fixture["article_canvas_bootstraps"], 1)
         self.assertEqual(type(self).fixture["article_canvas_gets"], 1, self.evaluate("JSON.stringify({title:document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('#smartTitle')?.textContent,body:document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.body?.innerText?.slice(0,120)})"))
 
         self.evaluate("document.querySelector('#articleSettingsCanvasFrame').contentDocument.querySelector('#hypitOutputDrawerToggle').click()")
+        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('#hypitOutputDrawerToggle')?.getAttribute('aria-expanded')==='true' && !document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('#hypitOutputDrawer')?.hidden", "文章配置输出端口菜单没有展开")
         self.evaluate("document.querySelector('#articleSettingsCanvasFrame').contentDocument.querySelector('#hypitOutputDrawer [data-hypit-slot=image]').click()")
-        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('.hypit-output-node[data-hypit-slot=image')", "文章配置画布未创建共享图片输出端口")
+        self.wait_for("document.querySelector('#articleSettingsCanvasFrame')?.contentDocument?.querySelector('.hypit-output-node[data-hypit-slot=\"image\"]')", "文章配置画布未创建共享图片输出端口")
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline and not type(self).fixture["article_canvas_puts"]:
             time.sleep(0.025)
@@ -1015,6 +1569,95 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.assertEqual(len(type(self).fixture["article_canvas_puts"]), puts_before_reset, "重置不应另外 PUT 空画布")
         self.assertGreaterEqual(type(self).fixture["article_canvas_gets"], 1, "重置后仍应只读取共享画布数据源")
         self.assertEqual([item["path"] for item in type(self).fixture["requests"] if item["method"] == "POST"], ["/api/studio/articles/settings-canvas/reset"])
+
+    def test_article_body_compare_reads_immutable_layouts_into_independent_panes(self):
+        self.navigate("/static/article.html?id=article-fixture")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.dataset.loadedPreviewKey && document.querySelector('#articleBodyHistoryDetails')", "文章正文没有准备好")
+        self.evaluate("document.querySelector('#articleBodyHistoryDetails').open=true")
+        self.wait_for("document.querySelector('#articleBodyHistory [data-layout-preview-version=body-v1][data-preview-state=ready] iframe')?.contentDocument?.body?.innerText.includes('旧版本正文')", "历史正文预览卡片没有准备好")
+        revision_before = type(self).fixture["article"]["revision"]
+        selected_before = type(self).fixture["article"]["selected_theme_id"]
+        mutations_before = len([item for item in type(self).fixture["requests"] if item["method"] in {"POST", "PUT"}])
+        restores_before = len(type(self).fixture["article_version_restores"])
+
+        self.click_element("#articleCompareTab")
+        self.wait_for("document.querySelector('#articleCompareTab')?.getAttribute('aria-selected')==='true' && document.querySelector('#articleComparePanel')?.hidden===false", "正文对比标签没有打开")
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentDocument?.body?.innerText.includes('正文第一段') && document.querySelector('#articleCompareRightFrame')?.hidden===true", "进入对比时左栏应显示当前安全排版，右栏保持空提示")
+        self.assertEqual(self.evaluate("document.querySelector('[data-compare-select=left]')?.getAttribute('aria-pressed')"), "true")
+        self.assertTrue(self.evaluate("document.querySelector('#articleCopyButton')?.hidden && document.querySelector('#articleExportButton')?.hidden && document.querySelector('#articleFullPreviewButton')?.hidden && !document.querySelector('#articleCopyTitleButton')?.hidden && document.querySelector('#articleCompareActionHint')?.classList.contains('article-visually-hidden')"), "对比视图应隐藏单篇正文操作，保留标题复制并提供屏幕阅读器说明")
+
+        self.evaluate("(()=>{window.__compareOriginalFetch=window.fetch.bind(window);window.__compareHoldId='body-v1';window.__compareHoldUsed=false;window.fetch=(url,options)=>{const match=String(url).match(/\\/versions\\/body\\/([^/?]+)/);if(match&&match[1]===window.__compareHoldId&&!window.__compareHoldUsed){window.__compareHoldUsed=true;return new Promise((resolve,reject)=>{window.__releaseCompareRequest=()=>window.__compareOriginalFetch(url,options).then(resolve,reject);});}return window.__compareOriginalFetch(url,options);};})()")
+        self.click_element("#articleBodyHistory [data-layout-preview-version=body-v1] iframe")
+        self.wait_for("typeof window.__releaseCompareRequest==='function'", "点击正文历史卡片后应只发起版本详情 GET")
+        self.click_element("[data-compare-select=right]")
+        self.assertEqual(self.evaluate("document.querySelector('[data-compare-select=right]')?.getAttribute('aria-pressed')"), "true")
+        self.assertIn("右栏", self.evaluate("document.querySelector('#articleBodyHistory button[data-version-id=body-v1]')?.getAttribute('aria-label')"))
+        self.click_element("#articleBodyHistory [data-layout-preview-version=body-v2] iframe")
+        self.wait_for("document.querySelector('#articleCompareRightFrame')?.contentDocument?.body?.innerText.includes('正文第一段') && document.querySelector('[data-compare-lane=right] [data-compare-version-label]')?.textContent.includes('V2')", "V2 应载入右栏而不改当前文章")
+        self.evaluate("window.__releaseCompareRequest();window.__compareHoldId=''")
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentDocument?.body?.innerText.includes('旧版本正文') && document.querySelector('#articleCompareRightFrame')?.contentDocument?.body?.innerText.includes('正文第一段')", "较慢的左栏 V1 响应不能覆盖右栏 V2")
+
+        self.evaluate("window.__compareHoldId='body-v2';window.__compareHoldUsed=false;window.__releaseCompareRequest=null")
+        self.click_element("[data-compare-select=left]")
+        self.click_element("#articleBodyHistory [data-layout-preview-version=body-v2] iframe")
+        self.wait_for("typeof window.__releaseCompareRequest==='function'", "同栏竞态测试未拦截 V2 读取")
+        self.click_element("#articleBodyHistory [data-layout-preview-version=body-v1] iframe")
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentDocument?.body?.innerText.includes('旧版本正文')", "同栏新选择 V1 应先完成")
+        self.evaluate("window.__releaseCompareRequest();window.__compareHoldId=''")
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentDocument?.body?.innerText.includes('旧版本正文') && document.querySelector('[data-compare-lane=left] [data-compare-version-label]')?.textContent.includes('V1')", "同栏较慢旧响应不得覆盖较新的 V1")
+
+        self.click_element("[data-compare-select=right]")
+        self.click_element("#articleCompareLeftFrame")
+        self.wait_for("document.querySelector('[data-compare-select=left]')?.getAttribute('aria-pressed')==='true'", "点击左栏预览正文内部应选中左栏目标")
+        self.click_element("#articleBodyHistory [data-layout-preview-version=body-v2] iframe")
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentDocument?.body?.innerText.includes('正文第一段') && document.querySelector('#articleCompareRightFrame')?.contentDocument?.body?.innerText.includes('正文第一段')", "预览正文内部选中左栏后，点击 V2 应只更新左栏")
+
+        geometry = self.evaluate("(()=>{const left=document.querySelector('#articleCompareLeftFrame'),right=document.querySelector('#articleCompareRightFrame'),scroll=document.querySelector('.article-compare-scroll');for(const f of [left,right])f.contentDocument.body.style.minHeight='1800px';left.contentWindow.scrollTo(0,140);right.contentWindow.scrollTo(0,360);return {left:{y:left.contentWindow.scrollY,height:left.getBoundingClientRect().height,body:left.contentDocument.documentElement.scrollHeight},right:{y:right.contentWindow.scrollY,height:right.getBoundingClientRect().height,body:right.contentDocument.documentElement.scrollHeight},host:scroll.getBoundingClientRect().toJSON()};})()")
+        self.assertGreater(geometry["left"]["height"], 200, geometry)
+        self.assertGreater(geometry["right"]["height"], 200, geometry)
+        self.assertNotEqual(geometry["left"]["y"], geometry["right"]["y"], "左右 iframe 的滚动位置必须独立")
+
+        self.evaluate("(()=>{for(const id of ['articleCompareLeftFrame','articleCompareRightFrame'])document.querySelector('#'+id).contentWindow.scrollTo(0,0)})()")
+        wheel_point=self.evaluate("(()=>{const r=document.querySelector('#articleCompareLeftFrame').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()")
+        self.cdp("Input.dispatchMouseEvent", {"type":"mouseWheel","x":wheel_point["x"],"y":wheel_point["y"],"deltaX":0,"deltaY":320})
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentWindow?.scrollY>0", "鼠标滚轮应只滚动指针所在的左栏预览")
+        self.assertEqual(self.evaluate("document.querySelector('#articleCompareRightFrame')?.contentWindow?.scrollY"), 0, "左栏滚动不得同步右栏位置")
+
+        self.assertTrue(self.evaluate("!document.querySelector('#articleSourceTab') && !document.querySelector('#articleSourceDetails')"), "对比视图不应提供 Markdown 原文标签")
+        self.evaluate("document.querySelector('#articlePreviewTab').click()")
+        self.wait_for("document.querySelector('#articlePreviewFrame')?.contentDocument?.body?.innerText.includes('正文第一段') && document.querySelector('#articlePreviewTab')?.getAttribute('aria-selected')==='true'", "切回单篇预览应仍显示当前正文")
+        self.assertEqual(type(self).fixture["article"]["revision"], revision_before, "比较历史不得改变文章 revision")
+        self.assertEqual(type(self).fixture["article"]["selected_theme_id"], selected_before, "比较历史不得改变当前主题")
+        self.assertEqual(len(type(self).fixture["article_version_restores"]), restores_before, "比较历史不得 POST restore")
+        self.assertEqual(len([item for item in type(self).fixture["requests"] if item["method"] in {"POST", "PUT"}]), mutations_before, "对比过程不得 POST/PUT")
+        self.assertTrue(any(item["method"]=="GET" and item["path"].endswith("/versions/body/body-v1") for item in type(self).fixture["requests"]))
+        self.assertTrue(any(item["method"]=="GET" and item["path"].endswith("/versions/body/body-v2") for item in type(self).fixture["requests"]))
+        self.assertEqual(self.evaluate("document.querySelector('#articleCopyButton')?.disabled"), False, "离开对比后正文复制应恢复")
+        self.assertTrue(self.evaluate("!document.querySelector('#articleCopyButton')?.hidden && !document.querySelector('#articleExportButton')?.hidden && !document.querySelector('#articleFullPreviewButton')?.hidden"), "离开对比后单篇正文操作应恢复可见")
+
+        self.evaluate("document.querySelector('#articleCompareTab').click();document.querySelector('#articleBodyHistoryDetails').open=true")
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentDocument?.body?.innerText.includes('正文第一段')", "重新进入对比后应保留本页已有的比较对象")
+        self.click_element("[data-compare-select=left]")
+        self.click_element("#articleBodyHistory [data-layout-preview-version=body-v1] iframe")
+        self.wait_for("document.querySelector('#articleCompareLeftFrame')?.contentDocument?.body?.innerText.includes('旧版本正文') && document.querySelector('#articleCompareRightFrame')?.contentDocument?.body?.innerText.includes('正文第一段') && document.querySelector('[data-compare-lane=left] [data-compare-version-label]')?.textContent.includes('V1') && document.querySelector('[data-compare-lane=right] [data-compare-version-label]')?.textContent.includes('V2')", "截图应显示左栏V1与右栏V2两个不同历史版本")
+        self.evaluate("(()=>{for(const id of ['articleCompareLeftFrame','articleCompareRightFrame'])document.querySelector('#'+id).contentWindow.scrollTo(0,0)})()")
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": False})
+        self.evaluate("window.StudioTheme?.set?.('dark')")
+        self.wait_for("document.documentElement.dataset.studioAppearance==='dark'", "对比截图未能应用深色主题")
+        desktop_path=self.save_validation_screenshot("article-body-compare-desktop-dark.png")
+        self.cdp("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 740, "deviceScaleFactor": 1, "mobile": True})
+        self.wait_for("innerWidth===390", "对比窄屏视口未生效")
+        self.evaluate("document.querySelector('#articleManagementDrawer').open=false;window.StudioTheme?.set?.('light')")
+        self.wait_for("document.documentElement.dataset.studioAppearance==='light'", "对比窄屏截图未能应用浅色主题")
+        mobile_geometry=self.evaluate("(()=>{const scroll=document.querySelector('.article-compare-scroll'),grid=document.querySelector('.article-compare-grid'),left=document.querySelector('#articleCompareLeftFrame'),right=document.querySelector('#articleCompareRightFrame');return {viewport:innerWidth,document:document.documentElement.scrollWidth,host:scroll.getBoundingClientRect().toJSON(),scrollWidth:scroll.scrollWidth,clientWidth:scroll.clientWidth,grid:grid.getBoundingClientRect().toJSON(),columns:getComputedStyle(grid).gridTemplateColumns,left:left.getBoundingClientRect().toJSON(),right:right.getBoundingClientRect().toJSON()};})()")
+        self.assertEqual(mobile_geometry["viewport"],390,mobile_geometry)
+        self.assertLessEqual(mobile_geometry["document"],390,mobile_geometry)
+        self.assertGreater(mobile_geometry["scrollWidth"],mobile_geometry["clientWidth"],mobile_geometry)
+        self.assertGreater(mobile_geometry["left"]["height"],200,mobile_geometry)
+        self.assertGreater(mobile_geometry["right"]["height"],200,mobile_geometry)
+        mobile_path=self.save_validation_screenshot("article-body-compare-390.png")
+        self.assertTrue(desktop_path.is_file() and desktop_path.stat().st_size>1000,str(desktop_path))
+        self.assertTrue(mobile_path.is_file() and mobile_path.stat().st_size>1000,str(mobile_path))
 
 
 if __name__ == "__main__":

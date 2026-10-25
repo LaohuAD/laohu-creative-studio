@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-studio-scale="off">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <link rel="icon" href="/static/images/logo.png" type="image/png">
+    <title>小说创作</title>
+    <script>
+        (function(){try{var key='studio_theme_preference_v1',ids=['studio-violet','sunlit','vermilion','forest','classic'];var raw=localStorage.getItem(key),pref=null;try{pref=raw?JSON.parse(raw):null;}catch(e){}if(!pref||pref.version!==1||!['light','dark','system'].includes(pref.appearance)){var old=localStorage.getItem('studio_theme'),legacy=localStorage.getItem('canvas_theme');pref={version:1,themeId:'studio-violet',appearance:old==='dark'||old==='light'?old:legacy==='dark'||legacy==='light'?legacy:'light'};if(raw===null)localStorage.setItem(key,JSON.stringify(pref));}var theme=ids.includes(pref.themeId)?pref.themeId:'studio-violet';var mode=['light','dark','system'].includes(pref.appearance)?pref.appearance:'light';var appearance=mode==='system'&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':mode==='system'?'light':mode;document.documentElement.dataset.studioTheme=theme;document.documentElement.dataset.studioAppearance=appearance;document.documentElement.dataset.studioAppearanceMode=mode;document.documentElement.style.colorScheme=appearance;document.documentElement.classList.toggle('studio-theme-dark',appearance==='dark');document.documentElement.classList.toggle('theme-dark',appearance==='dark');}catch(e){}})();
+    </script>
+    <script src="/static/vendor/js/lucide.js"></script>
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/i18n.js"></script>
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link rel="stylesheet" href="/static/css/studio-ui-polish.css">
+    <link rel="stylesheet" href="/static/css/studio-theme-palettes.css">
+    <link rel="stylesheet" href="/static/css/studio-manuscripts.css">
+</head>
+<body data-manuscript-module="novel">
+    <div class="sm-app">
+        <header class="sm-toolbar">
+            <div class="sm-toolbar-leading">
+                <button class="sm-icon-button sm-directory-toggle" id="smDirectoryToggle" type="button" aria-controls="smDirectoryPanel" aria-expanded="true" title="打开目录" aria-label="打开目录"><i data-lucide="panel-left" aria-hidden="true"></i></button>
+                <div class="sm-project-heading"><span class="sm-kicker" id="smModuleKicker">小说创作</span><h1 id="smProjectName">正在读取作品…</h1></div>
+            </div>
+            <div class="sm-toolbar-actions">
+                <button id="smRefreshButton" class="sm-icon-button" type="button" title="重新读取" aria-label="重新读取"><i data-lucide="refresh-cw" aria-hidden="true"></i></button>
+                <button id="smLanguageButton" class="sm-icon-button sm-language-button" type="button" title="切换语言" aria-label="切换语言">中</button>
+                <button id="smThemeButton" class="sm-icon-button" type="button" title="切换明暗模式" aria-label="切换明暗模式"><i data-lucide="sun-moon" aria-hidden="true"></i></button>
+            </div>
+        </header>
+        <nav id="smNovelTabs" class="sm-tabs" role="tablist" aria-label="作品内容">
+            <button class="sm-tab active" id="smTabText" type="button" role="tab" aria-selected="true" aria-controls="smMainContent" tabindex="0" data-sm-tab="text"><i data-lucide="book-open-text" aria-hidden="true"></i><span>正文</span></button>
+            <button class="sm-tab" id="smTabSettings" type="button" role="tab" aria-selected="false" aria-controls="smMainContent" tabindex="-1" data-sm-tab="settings"><i data-lucide="library-big" aria-hidden="true"></i><span>设定库</span></button>
+        </nav>
+        <div class="sm-workspace" id="smWorkspace">
+            <button id="smDrawerScrim" class="sm-drawer-scrim" type="button" tabindex="-1" aria-label="关闭目录" hidden></button>
+            <aside class="sm-directory" id="smDirectoryPanel" aria-label="小说目录">
+                <div class="sm-directory-heading"><div class="sm-directory-title-actions"><h2 id="smDirectoryTitle">小说目录</h2><button id="smOutlineRootAdd" class="sm-outline-root-add" type="button" data-outline-root-add><i data-lucide="plus" aria-hidden="true"></i><span>新增卷</span></button></div><button id="smDirectoryClose" class="sm-icon-button sm-directory-close" type="button" title="关闭目录" aria-label="关闭目录"><i data-lucide="x" aria-hidden="true"></i></button></div>
+                <label class="sm-search-field" for="smDirectorySearch"><i data-lucide="search" aria-hidden="true"></i><input id="smDirectorySearch" type="search" autocomplete="off" placeholder="搜索目录标题" aria-label="搜索目录标题"></label>
+                <nav id="smDirectory" class="sm-directory-tree" aria-label="小说目录"></nav>
+                <div id="smDirectoryFooter" class="sm-directory-footer"></div>
+            </aside>
+            <div id="smOutlineDialog" class="sm-outline-dialog-backdrop" hidden>
+                <form id="smOutlineDialogForm" class="sm-outline-dialog" role="dialog" aria-modal="true" aria-labelledby="smOutlineDialogTitle" aria-describedby="smOutlineDialogError">
+                    <div class="sm-outline-dialog-heading"><h2 id="smOutlineDialogTitle">新建目录项</h2><button type="button" class="sm-icon-button" data-outline-dialog-close title="关闭" aria-label="关闭"><i data-lucide="x" aria-hidden="true"></i></button></div>
+                    <label id="smOutlineDialogLabel" for="smOutlineDialogInput">名称</label>
+                    <input id="smOutlineDialogInput" type="text" maxlength="120" autocomplete="off">
+                    <p id="smOutlineDialogMessage" class="sm-outline-dialog-message" aria-live="polite" hidden></p>
+                    <p id="smOutlineDialogError" class="sm-outline-dialog-error" role="alert" hidden></p>
+                    <div class="sm-outline-dialog-actions"><button type="button" class="sm-action-button" data-outline-dialog-close data-outline-dialog-cancel>取消</button><button id="smOutlineDialogSubmit" type="submit" class="sm-save-button"><i data-lucide="check" aria-hidden="true"></i><span>保存</span></button></div>
+                </form>
+            </div>
+            <main class="sm-main" id="smMainContent" role="tabpanel" aria-labelledby="smTabText" tabindex="0">
+                <section id="smStatus" class="sm-status" role="status" aria-live="polite" hidden></section>
+                <div class="sm-content-shell">
+                    <div class="sm-reading-toolbar">
+                        <div class="sm-breadcrumb" id="smBreadcrumb" aria-label="当前位置"></div>
+                        <div class="sm-reading-actions">
+                            <span class="sm-revision-label" id="smRevisionLabel"></span>
+                            <button id="smEditButton" class="sm-action-button" type="button" hidden><i data-lucide="pencil" aria-hidden="true"></i><span>编辑正文</span></button>
+                            <button id="smCopyButton" class="sm-action-button" type="button" hidden><i data-lucide="copy" aria-hidden="true"></i><span>复制正文</span></button>
+                            <span id="smCopyFeedback" class="sm-copy-feedback" role="status" aria-live="polite" hidden></span>
+                        </div>
+                    </div>
+                    <header class="sm-content-heading" id="smContentHeading"><h2 id="smScopeTitle">—</h2><p id="smScopeHint"></p></header>
+                    <p id="smCharacterCount" class="sm-character-count" title="统计正文中的文字和数字，不含标点与空白。" hidden>字符数：暂不可用</p>
+                    <nav id="smDocumentTabs" class="sm-document-tabs" role="tablist" aria-label="正文与章纲" hidden>
+                        <button class="sm-document-tab active" id="smDocumentTabBody" type="button" role="tab" aria-selected="true" aria-controls="smReader" tabindex="0" data-document-pane="body"><span>正文</span></button>
+                        <button class="sm-document-tab" id="smDocumentTabOutline" type="button" role="tab" aria-selected="false" aria-controls="smReader" tabindex="-1" data-document-pane="outline"><span>章纲</span></button>
+                    </nav>
+                    <section id="smVersionTools" class="sm-version-tools" hidden>
+                        <label for="smVersionSelect" id="smVersionLabel">故事阶段版本</label>
+                        <select id="smVersionSelect" aria-label="故事阶段版本"></select>
+                        <span id="smVersionGuidance"></span>
+                        <button id="smRevisionHistoryButton" class="sm-action-button" type="button" hidden><i data-lucide="history" aria-hidden="true"></i><span>文字修订</span></button>
+                    </section>
+                    <div id="smReader" class="sm-reader" role="tabpanel" aria-labelledby="smDocumentTabBody" tabindex="-1"></div>
+                    <button id="smLoadMoreButton" class="sm-load-more" type="button" hidden>继续加载</button>
+                    <section id="smEditor" class="sm-editor" hidden aria-labelledby="smEditorTitle">
+                        <div class="sm-editor-heading"><div><h3 id="smEditorTitle">编辑 Markdown 正文</h3><p id="smEditorHint">修改会在短暂停顿后自动保存。</p></div><span id="smSaveState" class="sm-save-state" role="status" aria-live="polite">已保存</span></div>
+                        <label class="sm-sr-only" for="smMarkdownInput" id="smMarkdownLabel">Markdown 正文</label>
+                        <textarea id="smMarkdownInput" class="sm-markdown-input" spellcheck="false" autocapitalize="off"></textarea>
+                        <div id="smEditorError" class="sm-editor-error" role="alert" hidden></div>
+                        <div class="sm-editor-actions"><button id="smCopyDraftButton" class="sm-action-button" type="button" hidden>复制草稿</button><button id="smReloadConflictButton" class="sm-action-button" type="button" hidden>放弃草稿并重新读取</button><button id="smCancelEditButton" class="sm-action-button" type="button">完成</button><button id="smRetrySaveButton" class="sm-save-button" type="button" hidden><i data-lucide="rotate-cw" aria-hidden="true"></i><span>重试保存</span></button></div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script src="/static/js/studio-manuscripts.js"></script>
+</body>
+</html>

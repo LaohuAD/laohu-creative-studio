@@ -6616,20 +6616,36 @@ html[lang^="en"] .api-settings-boot-zh,
 html:not([lang^="en"]) .api-settings-boot-en { display:none !important; }
 .layout.hypit-settings-mode #settingsContent > #apiSettingsBootState,
 .layout.article-settings-mode #settingsContent > #apiSettingsBootState,
-.layout.music-settings-mode #settingsContent > #apiSettingsBootState { display:none !important; }
+.layout.music-settings-mode #settingsContent > #apiSettingsBootState,
+.layout.script-settings-mode #settingsContent > #apiSettingsBootState,
+.layout.novel-settings-mode #settingsContent > #apiSettingsBootState { display:none !important; }
 .layout.hypit-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
 .layout.hypit-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView,
 .layout.article-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
 .layout.article-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView,
 .layout.music-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
-.layout.music-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView { display:block !important; }
+.layout.music-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView,
+.layout.script-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
+.layout.script-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView,
+.layout.novel-settings-mode #settingsContent[data-api-startup="loading"] > #providerSettingsView,
+.layout.novel-settings-mode #settingsContent[data-api-startup="error"] > #providerSettingsView { display:block !important; }
 .layout.hypit-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView,
 .layout.article-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView,
 .layout.music-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView { display:block !important; }
+.layout.script-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView,
+.layout.novel-settings-mode #settingsContent[data-api-startup="empty"] > #providerSettingsView { display:block !important; }
 .layout.music-settings-mode #providerSettingsView > :not(#musicSettingsBlock) { display:none !important; }
 .layout.music-settings-mode .content-head { display:none !important; }
 .layout.music-settings-mode #musicSettingsBlock { display:flex !important; }
 .layout.music-settings-mode #canvasModelSettingsBlock { display:none !important; }
+.layout.script-settings-mode #providerSettingsView > :not(#scriptSettingsBlock),
+.layout.novel-settings-mode #providerSettingsView > :not(#novelSettingsBlock) { display:none !important; }
+.layout.script-settings-mode .content-head,
+.layout.novel-settings-mode .content-head { display:none !important; }
+.layout.script-settings-mode #scriptSettingsBlock,
+.layout.novel-settings-mode #novelSettingsBlock { display:flex !important; }
+.layout.script-settings-mode #canvasModelSettingsBlock,
+.layout.novel-settings-mode #canvasModelSettingsBlock { display:none !important; }
 @keyframes api-settings-boot-spin { to { transform:rotate(360deg); } }
 @media (max-width:560px) {
     #apiSettingsBootState { grid-template-columns:auto minmax(0,1fr); gap:10px; padding:14px; }

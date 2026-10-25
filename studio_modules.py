@@ -25,10 +25,15 @@ class StudioModuleIdentity:
     settings_canvas_title_zh: str
     settings_canvas_title_en: str
     settings_canvas_kind: str
+    settings_canvas_slots: tuple[str, ...] = ()
 
     @property
     def label(self) -> dict[str, str]:
         return {"zh": self.label_zh, "en": self.label_en}
+
+    @property
+    def settings_canvas_mode(self) -> str:
+        return self.settings_canvas_id
 
 
 _MODULES = {
@@ -59,6 +64,7 @@ _MODULES = {
         settings_canvas_title_zh="Hypit 生成配置",
         settings_canvas_title_en="Hypit generation settings",
         settings_canvas_kind="module-generation",
+        settings_canvas_slots=("text", "image", "video", "audio", "music", "voice"),
     ),
     "article": StudioModuleIdentity(
         module_id="article",
@@ -73,6 +79,7 @@ _MODULES = {
         settings_canvas_title_zh="文章生成配置",
         settings_canvas_title_en="Article generation settings",
         settings_canvas_kind="module-generation",
+        settings_canvas_slots=("text", "image", "video", "audio", "music", "voice"),
     ),
     "music": StudioModuleIdentity(
         module_id="music",
@@ -87,6 +94,37 @@ _MODULES = {
         settings_canvas_title_zh="音乐生成配置",
         settings_canvas_title_en="Music generation settings",
         settings_canvas_kind="module-generation",
+        settings_canvas_slots=("music", "image"),
+    ),
+    "script": StudioModuleIdentity(
+        module_id="script",
+        label_zh="剧本创作",
+        label_en="Script Writing",
+        project_module=True,
+        connection_document=True,
+        preparation_document=True,
+        settings_canvas_id="script-settings",
+        settings_project_id="__script_settings__",
+        settings_canvas_url="/static/smart-canvas.html?id=script-settings&mode=script-settings",
+        settings_canvas_title_zh="剧本文本设置",
+        settings_canvas_title_en="Script text settings",
+        settings_canvas_kind="module-generation",
+        settings_canvas_slots=("text",),
+    ),
+    "novel": StudioModuleIdentity(
+        module_id="novel",
+        label_zh="小说创作",
+        label_en="Novel Writing",
+        project_module=True,
+        connection_document=True,
+        preparation_document=True,
+        settings_canvas_id="novel-settings",
+        settings_project_id="__novel_settings__",
+        settings_canvas_url="/static/smart-canvas.html?id=novel-settings&mode=novel-settings",
+        settings_canvas_title_zh="小说文本设置",
+        settings_canvas_title_en="Novel text settings",
+        settings_canvas_kind="module-generation",
+        settings_canvas_slots=("text",),
     ),
 }
 
@@ -98,7 +136,7 @@ CONNECTION_MODULE_IDS = frozenset(
 PREPARATION_MODULE_IDS = frozenset(
     module_id for module_id, item in _MODULES.items() if item.preparation_document
 )
-RESERVED_SETTINGS_CANVAS_IDS = frozenset(item.settings_canvas_id for item in _MODULES.values())
+RESERVED_SETTINGS_CANVAS_IDS = frozenset(item.settings_canvas_id for item in _MODULES.values() if item.settings_canvas_id)
 MODULE_SETTINGS_CANVAS_MODULES = MappingProxyType({
     item.settings_canvas_id: module_id
     for module_id, item in _MODULES.items()

@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 import main
 from project_storage import ProjectStorage
+from studio_projects import StudioProjectStore
 
 
 def make_request(host, origin="", referer="", scheme="http", client_host="127.0.0.1"):
@@ -70,6 +71,7 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.storage = ProjectStorage(self.root)
         self.storage.ensure_layout()
         self.asset_library_path = self.root / "data" / "asset_library.json"
+        self.prompt_library_path = self.root / "data" / "prompt_libraries.json"
         self.canvas_dir = self.root / "data" / "canvases"
         self.canvas_dir.mkdir(parents=True, exist_ok=True)
         self.patches = [
@@ -79,6 +81,7 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
             patch.object(main, "OUTPUT_OUTPUT_DIR", str(self.storage.results_dir)),
             patch.object(main, "RESULTS_DIR", str(self.storage.results_dir)),
             patch.object(main, "ASSET_LIBRARY_PATH", str(self.asset_library_path)),
+            patch.object(main, "PROMPT_LIBRARY_PATH", str(self.prompt_library_path)),
         ]
         for active_patch in self.patches:
             active_patch.start()
@@ -87,6 +90,121 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for active_patch in reversed(self.patches):
             active_patch.stop()
         self.temp.cleanup()
+
+    def make_article_project_store(self):
+        adapter = {
+            "list": lambda: [],
+            "get": lambda project_id: None,
+            "create": lambda name: None,
+            "rename": lambda project_id, name, expected_revision=None: None,
+            "delete": lambda project_id, expected_revision=None: None,
+        }
+        return StudioProjectStore(self.root, adapter)
+
+    async def test_asset_library_and_category_reorder_preserve_fixed_siblings_and_content(self):
+        library = main.default_asset_library()
+        library["libraries"].extend([
+            {"id": "asset-a", "name": "A", "type": "asset", "categories": [
+                {"id": "image-a", "name": "图片甲", "type": "image", "items": [{"id": "keep", "name": "保留素材"}]},
+                {"id": "flow-fixed", "name": "工作流固定", "type": "workflow", "items": []},
+                {"id": "image-b", "name": "图片乙", "type": "image", "items": []},
+            ]},
+            {"id": "asset-b", "name": "B", "type": "asset", "categories": []},
+        ])
+        main.save_asset_library(library)
+        client = TestClient(main.app, base_url="http://127.0.0.1:3000")
+        headers = {"Origin": "http://127.0.0.1:3000"}
+        current = client.get("/api/asset-library").json()["library"]
+
+        reordered_libraries = client.post("/api/asset-library/reorder", headers=headers, json={
+            "collection": "libraries", "ids": ["asset-b", "asset-a"],
+            "expected_updated_at": current["updated_at"],
+        })
+        self.assertEqual(reordered_libraries.status_code, 200, reordered_libraries.text)
+        current = reordered_libraries.json()["library"]
+        self.assertEqual([item["id"] for item in current["libraries"]], ["default", "asset-b", "asset-a"])
+        self.assertEqual(current["active_library_id"], library["active_library_id"])
+
+        reordered_categories = client.post("/api/asset-library/reorder", headers=headers, json={
+            "collection": "categories", "library_id": "asset-a", "category_type": "image",
+            "ids": ["image-b", "image-a"], "expected_updated_at": current["updated_at"],
+        })
+        self.assertEqual(reordered_categories.status_code, 200, reordered_categories.text)
+        saved = reordered_categories.json()["library"]["libraries"][2]["categories"]
+        self.assertEqual([item["id"] for item in saved], ["image-b", "flow-fixed", "image-a"])
+        self.assertEqual(saved[2]["items"][0]["name"], "保留素材")
+
+        fixed_or_cross_type = client.post("/api/asset-library/reorder", headers=headers, json={
+            "collection": "categories", "library_id": "asset-a", "category_type": "image",
+            "ids": ["image-a", "flow-fixed", "image-b"],
+            "expected_updated_at": reordered_categories.json()["library"]["updated_at"],
+        })
+        self.assertEqual(fixed_or_cross_type.status_code, 409)
+
+        stale = client.post("/api/asset-library/reorder", headers=headers, json={
+            "collection": "categories", "library_id": "asset-a", "category_type": "image",
+            "ids": ["image-a", "image-b"], "expected_updated_at": current["updated_at"],
+        })
+        self.assertEqual(stale.status_code, 409)
+        unchanged = client.get("/api/asset-library").json()["library"]["libraries"][2]["categories"]
+        self.assertEqual([item["id"] for item in unchanged], ["image-b", "flow-fixed", "image-a"])
+
+    async def test_prompt_reorder_keeps_system_and_builtin_entries_fixed_and_rejects_stale_revision(self):
+        library = main.default_prompt_libraries()
+        library["libraries"][0]["categories"] = [
+            {"id": "view", "name": "视角"},
+            {"id": "pcat_a", "name": "自建甲"},
+            {"id": "storyboard", "name": "分镜"},
+            {"id": "uncategorized", "name": "未分类"},
+            {"id": "pcat_b", "name": "自建乙"},
+            {"id": "character", "name": "角色"},
+            {"id": "product", "name": "产品"},
+            {"id": "lighting", "name": "光影"},
+            {"id": "custom", "name": "我的"},
+        ]
+        library["libraries"].extend([
+            {"id": "prompt-a", "name": "提示甲", "categories": [
+                {"id": "uncategorized", "name": "未分类"},
+            ], "items": []},
+            {"id": "prompt-b", "name": "提示乙", "categories": [
+                {"id": "uncategorized", "name": "未分类"},
+            ], "items": []},
+        ])
+        main.save_prompt_libraries(library)
+        client = TestClient(main.app, base_url="http://127.0.0.1:3000")
+        headers = {"Origin": "http://127.0.0.1:3000"}
+        current = client.get("/api/prompt-libraries").json()["library"]
+
+        reordered_libraries = client.post("/api/prompt-libraries/reorder", headers=headers, json={
+            "collection": "libraries", "ids": ["prompt-b", "prompt-a"],
+            "expected_updated_at": current["updated_at"],
+        })
+        self.assertEqual(reordered_libraries.status_code, 200, reordered_libraries.text)
+        current = reordered_libraries.json()["library"]
+        self.assertEqual([item["id"] for item in current["libraries"]], ["system", "prompt-b", "prompt-a"])
+
+        reordered_categories = client.post("/api/prompt-libraries/reorder", headers=headers, json={
+            "collection": "categories", "library_id": "system",
+            "ids": ["pcat_b", "pcat_a"], "expected_updated_at": current["updated_at"],
+        })
+        self.assertEqual(reordered_categories.status_code, 200, reordered_categories.text)
+        saved = reordered_categories.json()["library"]["libraries"][0]["categories"]
+        self.assertEqual([item["id"] for item in saved], ["view", "pcat_b", "storyboard", "uncategorized", "pcat_a", "character", "product", "lighting", "custom"])
+
+        fixed_builtin = client.post("/api/prompt-libraries/reorder", headers=headers, json={
+            "collection": "categories", "library_id": "system",
+            "ids": ["pcat_a", "view", "pcat_b"],
+            "expected_updated_at": reordered_categories.json()["library"]["updated_at"],
+        })
+        self.assertEqual(fixed_builtin.status_code, 409)
+
+        stale = client.post("/api/prompt-libraries/reorder", headers=headers, json={
+            "collection": "categories", "library_id": "system",
+            "ids": ["pcat_a", "pcat_b"], "expected_updated_at": current["updated_at"],
+        })
+        self.assertEqual(stale.status_code, 409)
+        reloaded = client.get("/api/prompt-libraries").json()["library"]["libraries"][0]["categories"]
+        self.assertEqual([item["id"] for item in reloaded], ["view", "pcat_b", "storyboard", "uncategorized", "pcat_a", "character", "product", "lighting", "custom"])
 
     async def test_creation_recipe_round_trip_reuses_file_and_keeps_distinct_origins(self):
         source = self.root / 'fixture.png'
@@ -182,20 +300,36 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_result_delete_preflights_article_references_for_the_entire_batch(self):
         referenced_file = self.root / "article-html.png"
+        current_file = self.root / "article-html-current.png"
         unrelated_file = self.root / "unrelated.png"
         referenced_file.write_bytes(b"article-referenced-result")
+        current_file.write_bytes(b"article-current-theme-result")
         unrelated_file.write_bytes(b"unrelated-result")
         referenced = self.storage.store_result_file(referenced_file, "article-html.png", move=True)
+        current = self.storage.store_result_file(current_file, "article-html-current.png", move=True)
         unrelated = self.storage.store_result_file(unrelated_file, "unrelated.png", move=True)
         article = {
             "project_id": "article-fixture",
             "title": "引用保护测试文章",
             "cover_variants": [],
             "media_refs": [],
-            "variants": {"moyu-green": {"result_id": referenced["id"]}},
+            # Current same-theme output points at a newer result; the previous
+            # immutable HTML remains reachable through its body-history snapshot.
+            "variants": {"moyu-green": {"result_id": current["id"]}},
+            "version_history": {"schema_version": 1, "streams": {
+                "title": [], "cover": [], "body": [{
+                    "id": "body_v1", "number": 1, "created_at": None,
+                    "source_revision": None, "origin": "legacy",
+                    "snapshot": {"layouts": [{"theme_id": "moyu-green", "result_id": referenced["id"]}]},
+                }],
+            }},
         }
-        projects = SimpleNamespace(list=lambda module=None: [{"id": "article-fixture"}] if module == "article" else [])
-        articles = SimpleNamespace(get=lambda project_id: article if project_id == "article-fixture" else None)
+        public_article = {key: value for key, value in article.items() if key != "version_history"}
+        projects = SimpleNamespace(
+            list=lambda module=None: [{"id": "article-fixture"}] if module == "article" else [],
+            read_article_record=lambda project_id: {"article": article} if project_id == "article-fixture" else None,
+        )
+        articles = SimpleNamespace(get=lambda project_id: public_article if project_id == "article-fixture" else None)
         client = TestClient(main.app, base_url="http://127.0.0.1:3000")
 
         with patch.object(main, "STUDIO_PROJECTS", projects), patch.object(main, "STUDIO_ARTICLES", articles):
@@ -208,9 +342,80 @@ class StorageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertIn("引用保护测试文章", response.json()["detail"])
         self.assertIsNotNone(self.storage.get_result(referenced["id"]))
+        self.assertIsNotNone(self.storage.get_result(current["id"]))
         self.assertIsNotNone(self.storage.get_result(unrelated["id"]))
         self.assertTrue(self.storage.result_path(referenced["id"]).is_file())
         self.assertTrue(self.storage.result_path(unrelated["id"]).is_file())
+
+    async def test_archived_article_history_keeps_old_html_result_protected(self):
+        source_file = self.root / "archived-article-layout.html"
+        source_file.write_text("<html>archived fixture</html>", encoding="utf-8")
+        result = self.storage.store_result_file(source_file, "archived-article-layout.html", move=True)
+        store = self.make_article_project_store()
+        project = store.create("article", "归档排版引用文章")
+        raw = store.read_article_record(project["id"])
+        raw["article"]["version_history"] = {
+            "schema_version": 1,
+            "streams": {
+                "title": [],
+                "cover": [],
+                "body": [{
+                    "id": "body_v1",
+                    "number": 1,
+                    "created_at": None,
+                    "source_revision": None,
+                    "origin": "legacy",
+                    "snapshot": {"layouts": [{"theme_id": "moyu-green", "result_id": result["id"]}]},
+                }],
+            },
+        }
+        store.write_article_record(raw)
+        store.delete(project["id"], "article", expected_revision=raw["revision"])
+        self.assertEqual(len(store.list_recoverable_article_records()), 1)
+
+        client = TestClient(main.app, base_url="http://127.0.0.1:3000")
+        with patch.object(main, "STUDIO_PROJECTS", store):
+            response = client.post(
+                "/api/results/delete",
+                json={"ids": [result["id"]]},
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("归档排版引用文章", response.json()["detail"])
+        self.assertNotIn(str(self.root), response.text)
+        self.assertIsNotNone(self.storage.get_result(result["id"]))
+        self.assertTrue(self.storage.result_path(result["id"]).is_file())
+
+    async def test_archived_article_cover_keeps_shared_asset_protected(self):
+        cover = self.storage.store_material_bytes(b"archived-article-cover", "cover.png", scope="asset")
+        store = self.make_article_project_store()
+        project = store.create("article", "归档封面引用文章")
+        raw = store.read_article_record(project["id"])
+        raw["article"]["version_history"] = {
+            "schema_version": 1,
+            "streams": {
+                "title": [],
+                "cover": [{"id": "cover_v1", "number": 1, "snapshot": {"asset_id": cover["id"]}}],
+                "body": [],
+            },
+        }
+        store.write_article_record(raw)
+        store.delete(project["id"], "article", expected_revision=raw["revision"])
+
+        client = TestClient(main.app, base_url="http://127.0.0.1:3000")
+        with patch.object(main, "STUDIO_PROJECTS", store):
+            response = client.post(
+                "/api/local-assets/delete",
+                json={"names": [cover["id"]]},
+                headers={"Origin": "http://127.0.0.1:3000"},
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("归档封面引用文章", response.json()["detail"])
+        self.assertNotIn(str(self.root), response.text)
+        self.assertIsNotNone(self.storage.get_material(cover["id"]))
+        self.assertTrue(self.storage.material_path(cover["id"]).is_file())
 
     async def test_article_asset_references_block_asset_batch_and_temporary_scope_removal(self):
         referenced_asset = self.storage.store_material_bytes(b"article-cover-asset", "cover.png", scope="asset")

@@ -102,6 +102,8 @@ let assetTreeEdit = null;
 let workflowTreeEdit = null;
 let promptTreeEdit = null;
 let pendingTreeDelete = '';
+let treeSortDrag = null;
+let treeSortSaving = false;
 let marqueeState = null;
 let sharedFolders = [];
 let activeSharedFolderId = '';
@@ -1553,7 +1555,7 @@ function renderWorkflowManager(){
             <div class="panel-head">
                 <div class="panel-title"><strong>工作流层级</strong><span>独立管理工作流分组</span></div>
                 <div class="panel-actions compact-actions">
-                    ${workflowTreeEdit?.placement === 'head' ? '' : '<button class="asset-icon-btn" type="button" data-workflow-cat-new title="新建工作流分组"><i data-lucide="folder-plus"></i></button>'}
+                    ${workflowTreeEdit?.placement === 'head' ? '' : '<button class="asset-icon-btn" type="button" data-workflow-cat-new title="新建工作流分组"><i data-lucide="plus"></i></button>'}
                     ${renderHeadTreeInlineEdit(workflowTreeEdit, 'workflowTreeEditInput', 'data-workflow-tree-edit-save', 'data-workflow-tree-edit-cancel')}
                 </div>
             </div>
@@ -1568,12 +1570,14 @@ function renderWorkflowManager(){
                         <div class="tree-children">
                             ${cats.length ? cats.map(c => {
                                 const active = c.id === activeWorkflowCategoryId && c.__libraryId === activeWorkflowLibraryId;
-                                return `<button class="tree-row tree-child ${active ? 'active' : ''}" type="button" data-workflow-cat="${escapeAttr(c.id)}" data-workflow-cat-lib="${escapeAttr(c.__libraryId || '')}">
+                                const row = `<button class="tree-row tree-child ${active ? 'active' : ''}" type="button" data-workflow-cat="${escapeAttr(c.id)}" data-workflow-cat-lib="${escapeAttr(c.__libraryId || '')}">
                                 <span class="tree-elbow"></span>
                                 <span class="tree-row-icon"><i data-lucide="workflow"></i></span>
                                 <span class="tree-row-name">${escapeHtml(c.name || '工作流')}</span>
                                 <span class="tree-row-count">${(c.items || []).length}</span>
-                            </button>${active ? renderWorkflowTreeActionBar() : ''}`;
+                            </button>`;
+                                const group = `asset-categories:${c.__libraryId || ''}:workflow`;
+                                return `${renderSortableTreeRow(row, {kind:'asset-category', collection:'categories', id:c.id, group, libraryId:c.__libraryId || '', categoryType:'workflow'})}${active ? renderWorkflowTreeActionBar() : ''}`;
                             }).join('') : '<div class="tree-empty">暂无工作流分组</div>'}
                         </div>
                     </div>
@@ -1620,6 +1624,75 @@ function renderWorkflowUploadCard(cat){
             <small>支持 JSON / ZIP</small>
         </span>
     </button>`;
+}
+function renderSortableTreeRow(rowHtml, {kind, collection, id, group, libraryId='', categoryType=''}={}){
+    const attrs = `data-tree-sort-item data-sort-kind="${escapeAttr(kind || '')}" data-sort-collection="${escapeAttr(collection || '')}" data-sort-id="${escapeAttr(id || '')}" data-sort-group="${escapeAttr(group || '')}" data-sort-library-id="${escapeAttr(libraryId)}" data-sort-category-type="${escapeAttr(categoryType)}"`;
+    const hint = escapeAttr(i18nText('asset.reorderHint', '拖动或使用方向键调整同级顺序'));
+    return `<div class="tree-sort-item" ${attrs}><div class="tree-sort-line">${rowHtml}<button class="tree-sort-handle" type="button" draggable="true" data-tree-sort-handle aria-label="${hint}" title="${hint}" ${treeSortSaving ? 'disabled' : ''}><i data-lucide="grip-vertical"></i></button></div></div>`;
+}
+function treeSortGroupItems(group){
+    return [...root.querySelectorAll('[data-tree-sort-item]')].filter(item => item.dataset.sortGroup === group);
+}
+function focusTreeSortHandle(group, id){
+    requestAnimationFrame(() => treeSortGroupItems(group).find(item => item.dataset.sortId === id)?.querySelector('[data-tree-sort-handle]')?.focus());
+}
+async function persistTreeSort(group, ids, focusId=''){
+    if(treeSortSaving || !ids.length) return;
+    const item = treeSortGroupItems(group)[0];
+    if(!item) return;
+    const {sortKind:kind, sortCollection:collection, sortLibraryId:libraryId, sortCategoryType:categoryType} = item.dataset;
+    const assetKind = kind === 'asset-library' || kind === 'asset-category';
+    const endpoint = assetKind ? '/api/asset-library/reorder' : '/api/prompt-libraries/reorder';
+    const currentRevision = assetKind ? Number(assetLibrary.updated_at || 0) : Number(promptLibrary.updated_at || 0);
+    const payload = {collection, ids, expected_updated_at:currentRevision};
+    if(collection === 'categories' && libraryId) payload.library_id = libraryId;
+    if(categoryType) payload.category_type = categoryType;
+    treeSortSaving = true;
+    root.querySelectorAll('[data-tree-sort-handle]').forEach(handle => { handle.disabled = true; });
+    try {
+        const data = await apiJson(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        if(assetKind) assetLibrary = data.library || assetLibrary;
+        else { promptLibrary = data.library || promptLibrary; notifyPromptLibraryUpdated(); }
+        render();
+        if(focusId) focusTreeSortHandle(group, focusId);
+        setStatus(i18nText('asset.sortSaved', '排序已保存'));
+    } catch(error) {
+        try {
+            const data = await apiJson(assetKind ? '/api/asset-library' : '/api/prompt-libraries');
+            if(assetKind) assetLibrary = data.library || assetLibrary;
+            else { promptLibrary = data.library || promptLibrary; notifyPromptLibraryUpdated(); }
+            render();
+        } catch(_) {}
+        setStatus(error?.message || i18nText('asset.sortFailed', '排序未保存，请刷新后重试'));
+    } finally {
+        treeSortSaving = false;
+        root.querySelectorAll('[data-tree-sort-handle]').forEach(handle => { handle.disabled = false; });
+        if(focusId) focusTreeSortHandle(group, focusId);
+    }
+}
+function reorderTreeSortIds(group, fromId, toId, after=false){
+    const ids = treeSortGroupItems(group).map(item => item.dataset.sortId).filter(Boolean);
+    const fromIndex = ids.indexOf(fromId);
+    const toIndex = ids.indexOf(toId);
+    if(fromIndex < 0 || toIndex < 0 || fromId === toId) return;
+    const [moved] = ids.splice(fromIndex, 1);
+    let targetIndex = toIndex + (after ? 1 : 0);
+    if(fromIndex < targetIndex) targetIndex -= 1;
+    ids.splice(targetIndex, 0, moved);
+    if(ids.some((id, index) => id !== treeSortGroupItems(group)[index]?.dataset.sortId)){
+        persistTreeSort(group, ids, moved).catch(error => setStatus(error.message || '排序失败'));
+    }
+}
+function moveTreeSortHandle(handle, offset){
+    const item = handle?.closest?.('[data-tree-sort-item]');
+    if(!item) return;
+    const siblings = treeSortGroupItems(item.dataset.sortGroup);
+    const index = siblings.indexOf(item);
+    const nextIndex = index + offset;
+    if(index < 0 || nextIndex < 0 || nextIndex >= siblings.length) return;
+    const ids = siblings.map(entry => entry.dataset.sortId);
+    [ids[index], ids[nextIndex]] = [ids[nextIndex], ids[index]];
+    persistTreeSort(item.dataset.sortGroup, ids, item.dataset.sortId).catch(error => setStatus(error.message || '排序失败'));
 }
 function renderWorkflowTreeActionBar(){
     const editHtml = renderWorkflowTreeInlineEdit();
@@ -1702,20 +1775,28 @@ function renderAssetTreeBranch(lib){
     const isActiveLib = lib.id === activeAssetLibraryId;
     const cats = (lib.categories || []).filter(cat => (cat.type || 'image') === 'image');
     const showLibActions = isActiveLib && assetTreeFocus === 'library';
-    return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
-        <button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-asset-lib="${escapeAttr(lib.id)}">
+    const libraryRow = `<button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-asset-lib="${escapeAttr(lib.id)}">
             <span class="tree-row-icon"><i data-lucide="${isActiveLib ? 'folder-open' : 'folder'}"></i></span>
             <span class="tree-row-name">${escapeHtml(lib.name || '资产库')}</span>
             <span class="tree-row-count">${assetCountForLibrary(lib)}</span>
-        </button>
+        </button>`;
+    const renderedLibraryRow = lib.id === 'default' ? libraryRow : renderSortableTreeRow(libraryRow, {
+        kind:'asset-library', collection:'libraries', id:lib.id, group:'asset-libraries',
+    });
+    return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
+        ${renderedLibraryRow}
         ${showLibActions ? renderAssetTreeActionBar('library') : ''}
         <div class="tree-children">
-            ${cats.length ? cats.map(cat => `<button class="tree-row tree-child ${isActiveLib && cat.id === activeAssetCategoryId && assetTreeFocus === 'category' ? 'active' : ''}" type="button" data-asset-cat="${escapeAttr(cat.id)}" data-asset-cat-lib="${escapeAttr(lib.id)}">
+            ${cats.length ? cats.map(cat => {
+                const row = `<button class="tree-row tree-child ${isActiveLib && cat.id === activeAssetCategoryId && assetTreeFocus === 'category' ? 'active' : ''}" type="button" data-asset-cat="${escapeAttr(cat.id)}" data-asset-cat-lib="${escapeAttr(lib.id)}">
                 <span class="tree-elbow"></span>
                 <span class="tree-row-icon"><i data-lucide="image"></i></span>
                 <span class="tree-row-name">${escapeHtml(cat.name || '分组')}</span>
                 <span class="tree-row-count">${(cat.items || []).length}</span>
-            </button>${isActiveLib && cat.id === activeAssetCategoryId && assetTreeFocus === 'category' ? renderAssetTreeActionBar('category') : ''}`).join('') : '<div class="tree-empty">暂无分组</div>'}
+                </button>`;
+                const group = `asset-categories:${lib.id}:image`;
+                return `${renderSortableTreeRow(row, {kind:'asset-category', collection:'categories', id:cat.id, group, libraryId:lib.id, categoryType:'image'})}${isActiveLib && cat.id === activeAssetCategoryId && assetTreeFocus === 'category' ? renderAssetTreeActionBar('category') : ''}`;
+            }).join('') : '<div class="tree-empty">暂无分组</div>'}
 
         </div>
     </div>`;
@@ -1727,7 +1808,7 @@ function renderAssetTreeActionBar(kind){
     if(kind === 'library'){
         const isDefaultLibrary = activeAssetLibraryId === 'default';
         return `<div class="tree-action-bar library-actions">
-            <button type="button" data-asset-cat-new><i data-lucide="folder-plus"></i><span data-i18n="asset.newGroup">新分组</span></button>
+            <button type="button" data-asset-cat-new><i data-lucide="plus"></i><span data-i18n="asset.newGroup">新分组</span></button>
             <button type="button" data-asset-lib-rename><i data-lucide="pencil"></i><span data-i18n="asset.rename">重命名</span></button>
             ${isDefaultLibrary ? '' : `<button type="button" class="danger ${pendingTreeDelete === deleteKey ? 'detail-confirm' : ''}" data-asset-lib-delete><i data-lucide="trash-2"></i><span>${pendingTreeDelete === deleteKey ? '确认删除' : '删除库'}</span></button>`}
         </div>`;
@@ -1890,13 +1971,18 @@ function renderPromptTreeBranch(lib){
     const cats = promptCategoriesFor(lib);
     const libId = escapeAttr(lib.id);
     const readonly = Boolean(lib.readonly);
+    const isSystem = isSystemPromptLibrary(lib);
     const showLibActions = isActiveLib && promptTreeFocus === 'library';
-    return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
-        <button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-prompt-lib="${libId}">
+    const libraryRow = `<button class="tree-row tree-parent ${isActiveLib ? 'contains-active' : ''} ${showLibActions ? 'active' : ''}" type="button" data-prompt-lib="${libId}">
             <span class="tree-row-icon"><i data-lucide="${lib.id === 'system' ? 'sparkles' : 'book-open'}"></i></span>
             <span class="tree-row-name">${escapeHtml(lib.name || '提示词库')}</span>
             <span class="tree-row-count">${(lib.items || []).length}</span>
-        </button>
+        </button>`;
+    const renderedLibraryRow = isSystem ? libraryRow : renderSortableTreeRow(libraryRow, {
+        kind:'prompt-library', collection:'libraries', id:lib.id, group:'prompt-libraries',
+    });
+    return `<div class="tree-branch ${isActiveLib ? 'expanded' : ''}">
+        ${renderedLibraryRow}
         ${showLibActions ? renderPromptTreeActionBar('library') : ''}
         <div class="tree-children">
             <button class="tree-row tree-child ${isActiveLib && activePromptCategory === 'all' && promptTreeFocus === 'category' ? 'active' : ''}" type="button" data-prompt-cat="all" data-prompt-cat-lib="${libId}">
@@ -1908,12 +1994,18 @@ function renderPromptTreeBranch(lib){
             ${cats.map(cat => {
                 const active = isActiveLib && cat.id === activePromptCategory && promptTreeFocus === 'category';
                 const protectedCategory = cat.id === PROMPT_UNCATEGORIZED_CATEGORY_ID;
-                return `<button class="tree-row tree-child ${active ? 'active' : ''}" type="button" data-prompt-cat="${escapeAttr(cat.id)}" data-prompt-cat-lib="${libId}">
+                const row = `<button class="tree-row tree-child ${active ? 'active' : ''}" type="button" data-prompt-cat="${escapeAttr(cat.id)}" data-prompt-cat-lib="${libId}">
                 <span class="tree-elbow"></span>
                 <span class="tree-row-icon"><i data-lucide="${protectedCategory ? 'lock' : 'tag'}"></i></span>
                 <span class="tree-row-name">${escapeHtml(cat.name || promptCategoryLabel(cat.id))}</span>
                 <span class="tree-row-count">${promptCountForCategory(cat.id, lib)}</span>
-            </button>${active ? renderPromptTreeActionBar('category') : ''}`;
+            </button>`;
+                const reorderable = !PROMPT_BUILTIN_CATEGORY_IDS.has(cat.id) && !protectedCategory;
+                const group = `prompt-categories:${lib.id}`;
+                const rendered = reorderable
+                    ? renderSortableTreeRow(row, {kind:'prompt-category', collection:'categories', id:cat.id, group, libraryId:lib.id})
+                    : row;
+                return `${rendered}${active ? renderPromptTreeActionBar('category') : ''}`;
             }).join('')}
         </div>
     </div>`;
@@ -1926,7 +2018,7 @@ function renderPromptTreeActionBar(kind){
         const isSystem = isSystemPromptLibrary(lib);
         const deleteKey = `prompt-lib:${lib?.id || ''}`;
         return `<div class="tree-action-bar library-actions">
-            <button type="button" data-prompt-cat-new><i data-lucide="folder-plus"></i><span data-i18n="asset.newGroup">新分组</span></button>
+            <button type="button" data-prompt-cat-new><i data-lucide="plus"></i><span data-i18n="asset.newGroup">新分组</span></button>
             <button type="button" data-prompt-lib-rename><i data-lucide="pencil"></i><span data-i18n="asset.rename">重命名</span></button>
             ${isSystem ? '' : `<button type="button" class="danger" data-prompt-lib-delete><i data-lucide="trash-2"></i><span>删除库</span></button>`}
         </div>`;
@@ -4140,6 +4232,12 @@ document.addEventListener('click', event => {
     if(event.target.closest?.('.asset-lightbox') && !event.target.closest?.('.asset-lightbox-image,.asset-lightbox-video,.asset-lightbox-audio,.asset-lightbox-text')) closeDetailPreview();
 });
 document.addEventListener('keydown', event => {
+    const sortHandle = event.target?.closest?.('[data-tree-sort-handle]');
+    if(sortHandle && (event.key === 'ArrowUp' || event.key === 'ArrowDown')){
+        event.preventDefault();
+        moveTreeSortHandle(sortHandle, event.key === 'ArrowUp' ? -1 : 1);
+        return;
+    }
     if(event.key === 'Escape'){
         closeDetailPreview();
         closeTextContentEditor();
@@ -4245,6 +4343,16 @@ root.addEventListener('change', event => {
     }
 });
 root.addEventListener('dragover', event => {
+    if(treeSortDrag){
+        const targetItem = event.target.closest?.('[data-tree-sort-item]');
+        if(!targetItem || targetItem.dataset.sortGroup !== treeSortDrag.group) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        root.querySelectorAll('.tree-sort-item.drop-before,.tree-sort-item.drop-after').forEach(item => item.classList.remove('drop-before','drop-after'));
+        const rect = targetItem.getBoundingClientRect();
+        targetItem.classList.add(event.clientY < rect.top + rect.height / 2 ? 'drop-before' : 'drop-after');
+        return;
+    }
     const drop = event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop');
     if(!drop) return;
     event.preventDefault();
@@ -4254,6 +4362,17 @@ root.addEventListener('dragleave', event => {
     event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop')?.classList.remove('drag-over');
 });
 root.addEventListener('drop', event => {
+    if(treeSortDrag){
+        const targetItem = event.target.closest?.('[data-tree-sort-item]');
+        const drag = treeSortDrag;
+        root.querySelectorAll('.tree-sort-item.is-dragging,.tree-sort-item.drop-before,.tree-sort-item.drop-after').forEach(item => item.classList.remove('is-dragging','drop-before','drop-after'));
+        treeSortDrag = null;
+        if(!targetItem || targetItem.dataset.sortGroup !== drag.group){ event.preventDefault(); return; }
+        event.preventDefault();
+        const rect = targetItem.getBoundingClientRect();
+        reorderTreeSortIds(drag.group, drag.id, targetItem.dataset.sortId || '', event.clientY >= rect.top + rect.height / 2);
+        return;
+    }
     const drop = event.target.closest?.('#assetDrop, #localUploadDrop, #workflowDrop');
     if(!drop) return;
     event.preventDefault();
@@ -4261,6 +4380,20 @@ root.addEventListener('drop', event => {
     if(drop.id === 'localUploadDrop') uploadLocalAssets(event.dataTransfer.files);
     else if(drop.id === 'workflowDrop') uploadWorkflowFiles(event.dataTransfer.files).catch(err => setStatus(err.message || '上传失败'));
     else uploadFiles(event.dataTransfer.files).catch(err => setStatus(err.message || '上传失败'));
+});
+root.addEventListener('dragstart', event => {
+    const handle = event.target.closest?.('[data-tree-sort-handle]');
+    if(!handle || treeSortSaving){ if(handle) event.preventDefault(); return; }
+    const item = handle.closest('[data-tree-sort-item]');
+    if(!item) return;
+    treeSortDrag = {group:item.dataset.sortGroup || '', id:item.dataset.sortId || ''};
+    item.classList.add('is-dragging');
+    if(event.dataTransfer){ event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', treeSortDrag.id); }
+});
+root.addEventListener('dragend', event => {
+    if(!event.target.closest?.('[data-tree-sort-handle]')) return;
+    root.querySelectorAll('.tree-sort-item.is-dragging,.tree-sort-item.drop-before,.tree-sort-item.drop-after').forEach(item => item.classList.remove('is-dragging','drop-before','drop-after'));
+    treeSortDrag = null;
 });
 uploadInput?.addEventListener('change', event => {
     const files = event.target.files;

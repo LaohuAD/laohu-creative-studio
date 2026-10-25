@@ -63,6 +63,18 @@ const musicSettingsStatus = document.getElementById('musicSettingsStatus');
 const musicSettingsFrame = document.getElementById('musicSettingsCanvasFrame');
 const musicSettingsResetButton = document.getElementById('musicSettingsReset');
 const musicSettingsNewTabButton = document.getElementById('musicSettingsNewTab');
+const scriptSettingsBlock = document.getElementById('scriptSettingsBlock');
+const scriptSettingsNav = document.getElementById('scriptSettingsNav');
+const scriptSettingsStatus = document.getElementById('scriptSettingsStatus');
+const scriptSettingsFrame = document.getElementById('scriptSettingsCanvasFrame');
+const scriptSettingsResetButton = document.getElementById('scriptSettingsReset');
+const scriptSettingsNewTabButton = document.getElementById('scriptSettingsNewTab');
+const novelSettingsBlock = document.getElementById('novelSettingsBlock');
+const novelSettingsNav = document.getElementById('novelSettingsNav');
+const novelSettingsStatus = document.getElementById('novelSettingsStatus');
+const novelSettingsFrame = document.getElementById('novelSettingsCanvasFrame');
+const novelSettingsResetButton = document.getElementById('novelSettingsReset');
+const novelSettingsNewTabButton = document.getElementById('novelSettingsNewTab');
 const canvasSettingsStatus = document.getElementById('canvasSettingsStatus');
 const canvasSettingsFrame = document.getElementById('canvasSettingsCanvasFrame');
 const canvasSettingsResetButton = document.getElementById('canvasSettingsReset');
@@ -179,11 +191,17 @@ let apiNavigationCaptureInProgress = false;
 let apiClosingHypitSettings = false;
 const ARTICLE_SETTINGS_CANVAS_ID = 'article-settings';
 const MUSIC_SETTINGS_CANVAS_ID = 'music-settings';
+const SCRIPT_SETTINGS_CANVAS_ID = 'script-settings';
+const NOVEL_SETTINGS_CANVAS_ID = 'novel-settings';
 const CANVAS_SETTINGS_CANVAS_ID = 'canvas-settings';
 let articleSettingsResetting = false;
 let articleSettingsStatusState = null;
 let musicSettingsResetting = false;
 let musicSettingsStatusState = null;
+const textOptimizationSettingsState = {
+    script: {resetting:false,status:null},
+    novel: {resetting:false,status:null},
+};
 let canvasSettingsResetting = false;
 let canvasSettingsStatusState = null;
 
@@ -213,6 +231,32 @@ const musicSettingsCanvasController = window.StudioSettingsCanvasController.crea
     onReady: () => setMusicSettingsStatus(''),
     onError: error => setMusicSettingsStatus(() => musicSettingsText('canvasLoadError', {message:error?.message || error}), 'error', true),
 });
+const scriptSettingsCanvasController = window.StudioSettingsCanvasController.create({
+    id: SCRIPT_SETTINGS_CANVAS_ID,
+    mode: 'script-settings',
+    endpoint: '/api/studio/scripts/settings-canvas',
+    frame: scriptSettingsFrame,
+    invalidUrlMessage: () => textOptimizationSettingsText('script','canvasRetry'),
+    invalidPayloadMessage: () => textOptimizationSettingsText('script','canvasRetry'),
+    timeoutMessage: () => textOptimizationSettingsText('script','canvasFrameTimeout'),
+    frameErrorMessage: () => textOptimizationSettingsText('script','canvasFrameError'),
+    onLoading: () => setTextOptimizationSettingsStatus('script', () => textOptimizationSettingsText('script','canvasLoading')),
+    onReady: () => setTextOptimizationSettingsStatus('script',''),
+    onError: error => setTextOptimizationSettingsStatus('script', () => textOptimizationSettingsText('script','canvasLoadError',{message:error?.message||error}), 'error', true),
+});
+const novelSettingsCanvasController = window.StudioSettingsCanvasController.create({
+    id: NOVEL_SETTINGS_CANVAS_ID,
+    mode: 'novel-settings',
+    endpoint: '/api/studio/novels/settings-canvas',
+    frame: novelSettingsFrame,
+    invalidUrlMessage: () => textOptimizationSettingsText('novel','canvasRetry'),
+    invalidPayloadMessage: () => textOptimizationSettingsText('novel','canvasRetry'),
+    timeoutMessage: () => textOptimizationSettingsText('novel','canvasFrameTimeout'),
+    frameErrorMessage: () => textOptimizationSettingsText('novel','canvasFrameError'),
+    onLoading: () => setTextOptimizationSettingsStatus('novel', () => textOptimizationSettingsText('novel','canvasLoading')),
+    onReady: () => setTextOptimizationSettingsStatus('novel',''),
+    onError: error => setTextOptimizationSettingsStatus('novel', () => textOptimizationSettingsText('novel','canvasLoadError',{message:error?.message||error}), 'error', true),
+});
 const canvasSettingsCanvasController = window.StudioSettingsCanvasController.create({
     id: CANVAS_SETTINGS_CANVAS_ID,
     mode: 'canvas-settings',
@@ -228,7 +272,7 @@ const canvasSettingsCanvasController = window.StudioSettingsCanvasController.cre
 });
 
 function deactivateSettingsCanvasControllers(except = null) {
-    [articleSettingsCanvasController, musicSettingsCanvasController, canvasSettingsCanvasController]
+    [articleSettingsCanvasController, musicSettingsCanvasController, scriptSettingsCanvasController, novelSettingsCanvasController, canvasSettingsCanvasController]
         .filter(controller => controller !== except)
         .forEach(controller => controller.deactivate());
     if (except !== 'hypit') window.deactivateHypitSettingsCanvasController?.();
@@ -243,6 +287,12 @@ function closeHypitSettingsForApiNavigation(){
     }
     if(layout?.classList?.contains('music-settings-mode')) {
         window.closeMusicSettings?.({deferEditor:true});
+    }
+    if(layout?.classList?.contains('script-settings-mode')) {
+        window.closeScriptSettings?.({deferEditor:true});
+    }
+    if(layout?.classList?.contains('novel-settings-mode')) {
+        window.closeNovelSettings?.({deferEditor:true});
     }
     if(!layout?.classList?.contains('hypit-settings-mode')) return;
     if(typeof window.closeHypitSettings !== 'function') return;
@@ -641,6 +691,97 @@ window.openMusicSettings=openMusicSettings;window.closeMusicSettings=closeMusicS
 musicSettingsResetButton?.addEventListener('click',()=>{void resetMusicSettingsCanvas();});musicSettingsNewTabButton?.addEventListener('click',openMusicSettingsCanvasEditor);musicSettingsFrame?.addEventListener('load',syncMusicSettingsCanvasContext);
 musicSettingsStatus?.addEventListener('click',event=>{if(event.target.closest('#musicSettingsRetry'))void loadMusicSettingsCanvas({force:true});});
 window.addEventListener('studio-lang-change',()=>{if(musicSettingsBlock&&!musicSettingsBlock.hidden){renderMusicSettingsStatus();syncMusicSettingsCanvasContext();}});
+function textOptimizationSettingsText(module,key,values={}){
+    let text=tr(`${module}Settings.${key}`);
+    Object.entries(values).forEach(([name,value])=>{text=text.replace(`{${name}}`,String(value));});
+    return text;
+}
+function setTextOptimizationSettingsStatus(module,message,kind='',retry=false){
+    const state=textOptimizationSettingsState[module];
+    const node=module==='script'?scriptSettingsStatus:novelSettingsStatus;
+    if(!state||!node)return;
+    state.status=message?{message,kind,retry}:null;
+    node.replaceChildren();node.dataset.state=kind;
+    const current=state.status;
+    const label=typeof current?.message==='function'?current.message():current?.message||'';
+    if(label){const span=document.createElement('span');span.textContent=label;node.appendChild(span);}
+    if(current?.retry){const button=document.createElement('button');button.type='button';button.id=`${module}SettingsRetry`;button.className='inline-action-btn';button.textContent=textOptimizationSettingsText(module,'canvasRetry');node.appendChild(button);}
+    node.hidden=!label;
+}
+function rerenderTextOptimizationSettingsStatus(module){
+    const current=textOptimizationSettingsState[module]?.status;
+    if(!current){setTextOptimizationSettingsStatus(module,'');return;}
+    setTextOptimizationSettingsStatus(module,current.message,current.kind,current.retry);
+}
+const TEXT_OPTIMIZATION_SETTINGS_MODULES={
+    script:{endpoint:'/api/studio/scripts/settings-canvas',resetEndpoint:'/api/studio/scripts/settings-canvas/reset',id:SCRIPT_SETTINGS_CANVAS_ID,controller:scriptSettingsCanvasController,block:scriptSettingsBlock,nav:scriptSettingsNav,frame:scriptSettingsFrame,reset:scriptSettingsResetButton,newTab:scriptSettingsNewTabButton},
+    novel:{endpoint:'/api/studio/novels/settings-canvas',resetEndpoint:'/api/studio/novels/settings-canvas/reset',id:NOVEL_SETTINGS_CANVAS_ID,controller:novelSettingsCanvasController,block:novelSettingsBlock,nav:novelSettingsNav,frame:novelSettingsFrame,reset:novelSettingsResetButton,newTab:novelSettingsNewTabButton},
+};
+function loadTextOptimizationSettingsCanvas(module,options={}){
+    const config=TEXT_OPTIMIZATION_SETTINGS_MODULES[module];
+    if(!config)return Promise.resolve(false);
+    config.controller.activate();
+    return config.controller.load(options);
+}
+function syncTextOptimizationSettingsContext(module){TEXT_OPTIMIZATION_SETTINGS_MODULES[module]?.controller.syncContext();}
+function openTextOptimizationSettingsEditor(module){
+    const config=TEXT_OPTIMIZATION_SETTINGS_MODULES[module];if(!config)return false;
+    return config.controller.openInNewTab({
+        onBlocked:()=>setTextOptimizationSettingsStatus(module,()=>textOptimizationSettingsText(module,'canvasLoadError',{message:window.StudioI18n?.lang?.()==='en'?'the browser blocked the new tab':'浏览器阻止了新标签'}),'error'),
+        onError:error=>setTextOptimizationSettingsStatus(module,()=>textOptimizationSettingsText(module,'canvasLoadError',{message:error?.message||error}),'error',true),
+    });
+}
+async function resetTextOptimizationSettingsCanvas(module){
+    const config=TEXT_OPTIMIZATION_SETTINGS_MODULES[module],state=textOptimizationSettingsState[module];
+    if(!config||!state||state.resetting)return false;
+    if(!window.StudioDialog?.confirm){setTextOptimizationSettingsStatus(module,()=>textOptimizationSettingsText(module,'canvasResetError',{message:textOptimizationSettingsText(module,'canvasRetry')}),'error');return false;}
+    if(!await window.StudioDialog.confirm(textOptimizationSettingsText(module,'canvasResetConfirm'),{title:textOptimizationSettingsText(module,'canvasReset'),type:'danger'}))return false;
+    state.resetting=true;config.reset?.setAttribute('disabled','disabled');config.frame?.classList.add('is-resetting');
+    try{
+        if(!await loadTextOptimizationSettingsCanvas(module))throw new Error(textOptimizationSettingsText(module,'canvasRetry'));
+        const bridge=config.frame?.contentWindow?.SettingsCanvasBridge;
+        if(!bridge?.prepareReset||!bridge?.applyReset)throw new Error(textOptimizationSettingsText(module,'canvasRetry'));
+        const revision=await bridge.prepareReset();
+        const response=await fetch(config.resetEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base_revision:revision,client_id:`${module}_settings_${Date.now().toString(36)}`})});
+        const payload=await response.json().catch(()=>({}));
+        if(!response.ok||payload?.reset!==true||payload?.id!==config.id||payload?.canvas?.id!==config.id)throw new Error(payload?.detail?.message||payload?.detail||`HTTP ${response.status}`);
+        if(await bridge.applyReset(payload.canvas)!==true)throw new Error(textOptimizationSettingsText(module,'canvasRetry'));
+        setTextOptimizationSettingsStatus(module,()=>textOptimizationSettingsText(module,'canvasResetDone'),'success');return true;
+    }catch(error){
+        config.frame?.contentWindow?.SettingsCanvasBridge?.cancelReset?.();
+        setTextOptimizationSettingsStatus(module,()=>textOptimizationSettingsText(module,'canvasResetError',{message:error?.message||error}),'error');return false;
+    }finally{state.resetting=false;config.reset?.removeAttribute('disabled');config.frame?.classList.remove('is-resetting');}
+}
+function openTextOptimizationSettings(module){
+    const config=TEXT_OPTIMIZATION_SETTINGS_MODULES[module];if(!config)return;
+    deactivateSettingsCanvasControllers();void captureApiObjectBeforeNavigation({immediate:true});closeHypitSettingsForApiNavigation();if(comfyuiSettingsMode)closeComfyUiSettings();
+    if(settingsContent?.dataset.apiStartup==='empty')setApiSettingsStartupState('ready');
+    apiSettingsSection='connections';comfyuiSettingsMode=false;providerSettingsView?.classList.remove('comfyui-embedded-mode');syncApiSettingsView();
+    document.querySelector('.layout')?.classList.add(`${module}-settings-mode`);config.block?.removeAttribute('hidden');config.nav?.classList.add('active');config.nav?.setAttribute('aria-current','page');
+    document.querySelector('.api-page-delete-btn')?.setAttribute('hidden','hidden');document.querySelector('.api-page-save-btn')?.setAttribute('hidden','hidden');
+    config.controller.activate();void loadTextOptimizationSettingsCanvas(module);refreshIcons();
+}
+function closeTextOptimizationSettings(module){
+    const config=TEXT_OPTIMIZATION_SETTINGS_MODULES[module];if(!config)return;
+    config.controller.deactivate();document.querySelector('.layout')?.classList.remove(`${module}-settings-mode`);config.block?.setAttribute('hidden','hidden');config.nav?.classList.remove('active');config.nav?.setAttribute('aria-current','false');
+    document.querySelector('.api-page-delete-btn')?.removeAttribute('hidden');document.querySelector('.api-page-save-btn')?.removeAttribute('hidden');
+}
+window.openScriptSettings=()=>openTextOptimizationSettings('script');window.closeScriptSettings=()=>closeTextOptimizationSettings('script');
+window.openNovelSettings=()=>openTextOptimizationSettings('novel');window.closeNovelSettings=()=>closeTextOptimizationSettings('novel');
+window.openScriptSettingsCanvasEditor=()=>openTextOptimizationSettingsEditor('script');window.openNovelSettingsCanvasEditor=()=>openTextOptimizationSettingsEditor('novel');
+window.resetScriptSettingsCanvas=()=>resetTextOptimizationSettingsCanvas('script');window.resetNovelSettingsCanvas=()=>resetTextOptimizationSettingsCanvas('novel');
+scriptSettingsResetButton?.addEventListener('click',()=>{void resetTextOptimizationSettingsCanvas('script');});
+novelSettingsResetButton?.addEventListener('click',()=>{void resetTextOptimizationSettingsCanvas('novel');});
+scriptSettingsNewTabButton?.addEventListener('click',()=>openTextOptimizationSettingsEditor('script'));
+novelSettingsNewTabButton?.addEventListener('click',()=>openTextOptimizationSettingsEditor('novel'));
+scriptSettingsFrame?.addEventListener('load',()=>syncTextOptimizationSettingsContext('script'));
+novelSettingsFrame?.addEventListener('load',()=>syncTextOptimizationSettingsContext('novel'));
+scriptSettingsStatus?.addEventListener('click',event=>{if(event.target.closest('#scriptSettingsRetry'))void loadTextOptimizationSettingsCanvas('script',{force:true});});
+novelSettingsStatus?.addEventListener('click',event=>{if(event.target.closest('#novelSettingsRetry'))void loadTextOptimizationSettingsCanvas('novel',{force:true});});
+window.addEventListener('studio-lang-change',()=>{
+    if(scriptSettingsBlock&&!scriptSettingsBlock.hidden){rerenderTextOptimizationSettingsStatus('script');syncTextOptimizationSettingsContext('script');}
+    if(novelSettingsBlock&&!novelSettingsBlock.hidden){rerenderTextOptimizationSettingsStatus('novel');syncTextOptimizationSettingsContext('novel');}
+});
 function canvasSettingsText(key, values={}){
     const english=window.StudioI18n?.lang?.()==='en';
     const messages={
@@ -5854,12 +5995,16 @@ window.addEventListener('studio-lang-change', () => {
     if(recommendInlineOpen) renderRecommendApi();
     else renderEditor();
 });
-window.onload = () => {
+let apiSettingsStarted = false;
+let apiSettingsStartupPromise = null;
+function startApiSettings(){
+    if(apiSettingsStarted) return apiSettingsStartupPromise || Promise.resolve();
+    apiSettingsStarted = true;
     if(window.StudioTheme) window.StudioTheme.applyPreference(window.StudioTheme.getPreference());
     if(window.StudioI18n) window.StudioI18n.apply();
     document.title = tr('api.title');
     syncRecommendView();
-    loadProviders();
+    apiSettingsStartupPromise = loadProviders();
     // 平台名输入时实时预览生成的 ID
     if(nameInput) nameInput.addEventListener('input', () => {
         updateIdPreview();
@@ -5906,4 +6051,10 @@ window.onload = () => {
     [volcAkInput, volcSkInput, volcProjectInput, volcRegionInput].forEach(input => {
         if(input) input.addEventListener('input', () => void scheduleCurrentProviderAutosave(false));
     });
-};
+    return apiSettingsStartupPromise;
+}
+if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded',()=>{void startApiSettings();},{once:true});
+}else{
+    queueMicrotask(()=>{void startApiSettings();});
+}

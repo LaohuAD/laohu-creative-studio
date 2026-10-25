@@ -533,6 +533,745 @@ class StudioArticleTests(unittest.TestCase):
                 self.assertFalse(unavailable_article["cover_variants"][0]["valid"])
                 self.assertTrue(unavailable_article["cover_variants"][0]["error"])
 
+    def test_three_article_version_streams_restore_cas_and_preserve_same_theme_layouts(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            with client_for(Path(temporary)) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "版本恢复",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                initial = client.get(path).json()["article"]
+                initial_versions = client.get(f"{path}/versions")
+                self.assertEqual(initial_versions.status_code, 200, initial_versions.text)
+                self.assertEqual([item["kind"] for item in initial_versions.json()["streams"]], ["title", "cover", "body"])
+                self.assertTrue(all(not item["versions"] for item in initial_versions.json()["streams"]))
+                openapi = client.get("/openapi.json").json()
+                self.assertIn("/api/studio/articles/{project_id}/versions", openapi["paths"])
+                restore_schema = openapi["components"]["schemas"]["ArticleVersionRestoreRequest"]
+                self.assertEqual(restore_schema["required"], ["expected_revision"])
+                self.assertFalse(restore_schema["additionalProperties"])
+                self.assertIn("body_view", restore_schema["properties"])
+                self.assertIn("兼容能力", restore_schema["properties"]["body_view"]["description"])
+                self.assertIn(
+                    {"type": "string", "enum": ["source", "preview"]},
+                    restore_schema["properties"]["body_view"]["anyOf"],
+                )
+                put_schema = openapi["components"]["schemas"]["ArticlePutRequest"]
+                self.assertIn("不单独形成", put_schema["properties"]["source_markdown"]["description"])
+                self.assertIn("仅新的 HTML 内容", put_schema["properties"]["variants"]["description"])
+                variant_schema = openapi["components"]["schemas"]["VariantInput"]
+                self.assertIn("中间排版草稿不得提交", variant_schema["properties"]["body_html"]["description"])
+
+                first = client.put(path, json={
+                    "expected_revision": initial["revision"],
+                    "title": "标题甲",
+                    "source_markdown": "第一版正文\n保留空白",
+                    "variants": {"moyu-green": {"body_html": GOOD_HTML}},
+                })
+                self.assertEqual(first.status_code, 200, first.text)
+                first_article = first.json()["article"]
+                first_revision = first_article["revision"]
+                first_versions = client.get(f"{path}/versions").json()
+                self.assertEqual(len(first_versions["streams"][0]["versions"]), 1)
+                self.assertEqual(len(first_versions["streams"][2]["versions"]), 1)
+                self.assertEqual({item["kind"] for item in first_versions["streams"]}, {"title", "cover", "body"})
+                first_body = client.get(f"{path}/versions/body/body_v1")
+                self.assertEqual(first_body.status_code, 200, first_body.text)
+                first_snapshot = first_body.json()["snapshot"]
+                self.assertNotIn("source_markdown", first_snapshot)
+                self.assertNotIn("source_markdown_sha256", first_snapshot)
+                self.assertEqual(first_snapshot["layouts"][0]["body_html"], GOOD_HTML)
+                self.assertTrue(first_snapshot["layouts"][0]["valid_for_current"])
+                self.assertNotIn("path", first_snapshot["layouts"][0])
+
+                second = client.put(path, json={
+                    "expected_revision": first_revision,
+                    "source_markdown": "第二版正文",
+                    "variants": {"moyu-green": {"body_html": SECOND_GOOD_HTML}},
+                })
+                self.assertEqual(second.status_code, 200, second.text)
+                second_article = second.json()["article"]
+                self.assertEqual(second_article["title"], "标题甲")
+                second_versions = client.get(f"{path}/versions").json()
+                # A body-only edit creates no duplicate title-history event.
+                self.assertEqual(len(second_versions["streams"][0]["versions"]), 1)
+                self.assertEqual(len(second_versions["streams"][2]["versions"]), 2)
+                second_body = client.get(f"{path}/versions/body/body_v2").json()["snapshot"]
+                self.assertNotIn("source_markdown", second_body)
+                self.assertEqual(second_body["layouts"][0]["body_html"], SECOND_GOOD_HTML)
+                historical_body = client.get(f"{path}/versions/body/body_v1").json()["snapshot"]["layouts"][0]
+                self.assertTrue(historical_body["available"])
+                self.assertFalse(historical_body["valid_for_current"])
+                self.assertFalse(historical_body["source_matches"])
+                self.assertTrue(historical_body["catalog_matches"])
+                self.assertEqual(historical_body["body_html"], GOOD_HTML)
+
+                no_op = client.put(path, json={
+                    "expected_revision": second_article["revision"],
+                    "source_markdown": "第二版正文",
+                    "variants": {"moyu-green": {"body_html": SECOND_GOOD_HTML}},
+                })
+                self.assertEqual(no_op.status_code, 200, no_op.text)
+                self.assertEqual(len(client.get(f"{path}/versions").json()["streams"][2]["versions"]), 2)
+
+                restored = client.post(f"{path}/versions/body/body_v1/restore", json={
+                    "expected_revision": no_op.json()["article"]["revision"],
+                })
+                self.assertEqual(restored.status_code, 200, restored.text)
+                restored_article = restored.json()["article"]
+                self.assertEqual(restored_article["source_markdown"], "第一版正文\n保留空白")
+                self.assertEqual(restored_article["title"], "标题甲")
+                self.assertEqual(restored_article["variants"]["moyu-green"]["body_html"], GOOD_HTML)
+                self.assertEqual(restored_article["revision"], no_op.json()["article"]["revision"] + 1)
+                restored_versions = client.get(f"{path}/versions").json()
+                self.assertEqual(len(restored_versions["streams"][2]["versions"]), 2)
+                self.assertTrue(restored_versions["streams"][2]["versions"][0]["active"])
+                self.assertFalse(restored_versions["streams"][2]["versions"][1]["active"])
+
+                repeated = client.post(f"{path}/versions/body/body_v1/restore", json={
+                    "expected_revision": restored_article["revision"],
+                })
+                self.assertEqual(repeated.status_code, 200, repeated.text)
+                self.assertEqual(repeated.json()["revision"], restored_article["revision"])
+                self.assertEqual(client.get(f"{path}/versions").json()["streams"][2]["versions"],
+                                 restored_versions["streams"][2]["versions"])
+                stale = client.post(f"{path}/versions/body/body_v2/restore", json={
+                    "expected_revision": second_article["revision"],
+                })
+                self.assertEqual(stale.status_code, 409, stale.text)
+                rejected_history = client.put(path, json={
+                    "expected_revision": restored_article["revision"],
+                    "version_history": {"schema_version": 1, "streams": {}},
+                })
+                self.assertEqual(rejected_history.status_code, 422, rejected_history.text)
+
+    def test_body_source_and_preview_restore_are_independent_and_preserve_other_themes(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            with client_for(Path(temporary)) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "正文分域恢复",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                theme_ids = [item["id"] for item in client.get("/api/studio/articles/templates").json()["templates"]]
+                self.assertGreaterEqual(len(theme_ids), 2)
+                theme_a, theme_b = theme_ids[:2]
+                current = client.get(path).json()["article"]
+                first = client.put(path, json={
+                    "expected_revision": current["revision"],
+                    "title": "保持标题",
+                    "source_markdown": "旧 Markdown",
+                    "selected_theme_id": theme_a,
+                    "cover_variants": [{"asset_id": "mat_cover"}],
+                    "variants": {theme_a: {"body_html": GOOD_HTML}},
+                })
+                self.assertEqual(first.status_code, 200, first.text)
+                first_article = first.json()["article"]
+                first_cover = first_article["selected_cover_variant_id"]
+
+                second = client.put(path, json={
+                    "expected_revision": first_article["revision"],
+                    "source_markdown": "新 Markdown",
+                    "variants": {
+                        theme_a: {"body_html": SECOND_GOOD_HTML},
+                        theme_b: {"body_html": GOOD_HTML},
+                    },
+                })
+                self.assertEqual(second.status_code, 200, second.text)
+                second_article = second.json()["article"]
+                second_versions = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertTrue(second_versions[-1]["layout_active"])
+                self.assertTrue(all("source_active" not in item for item in second_versions))
+                layout_pointer_before = next(item["id"] for item in second_versions if item["layout_active"])
+
+                source_restore = client.post(f"{path}/versions/body/body_v1/restore", json={
+                    "expected_revision": second_article["revision"],
+                    "body_view": "source",
+                })
+                self.assertEqual(source_restore.status_code, 200, source_restore.text)
+                source_article = source_restore.json()["article"]
+                self.assertEqual(source_article["source_markdown"], "旧 Markdown")
+                self.assertEqual(source_article["variants"][theme_a]["body_html"], SECOND_GOOD_HTML)
+                self.assertEqual(source_article["variants"][theme_b]["body_html"], GOOD_HTML)
+                self.assertEqual(source_article["title"], "保持标题")
+                self.assertEqual(source_article["selected_cover_variant_id"], first_cover)
+                self.assertEqual(source_article["selected_theme_id"], theme_a)
+                source_versions = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual(next(item["id"] for item in source_versions if item["layout_active"]), layout_pointer_before)
+                self.assertTrue(all("source_active" not in item for item in source_versions))
+
+                later = client.put(path, json={
+                    "expected_revision": source_article["revision"],
+                    "source_markdown": "最新 Markdown",
+                })
+                self.assertEqual(later.status_code, 200, later.text)
+                later_article = later.json()["article"]
+                latest_versions = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual(len(latest_versions), 2)
+                layout_pointer_before_preview = next(item["id"] for item in latest_versions if item["layout_active"])
+
+                preview_restore = client.post(f"{path}/versions/body/body_v1/restore", json={
+                    "expected_revision": later_article["revision"],
+                    "body_view": "preview",
+                })
+                self.assertEqual(preview_restore.status_code, 200, preview_restore.text)
+                preview_article = preview_restore.json()["article"]
+                self.assertEqual(preview_article["source_markdown"], "最新 Markdown")
+                self.assertEqual(preview_article["variants"][theme_a]["body_html"], GOOD_HTML)
+                self.assertEqual(preview_article["variants"][theme_b]["body_html"], GOOD_HTML)
+                self.assertEqual(preview_article["title"], "保持标题")
+                self.assertEqual(preview_article["selected_cover_variant_id"], first_cover)
+                self.assertEqual(preview_article["selected_theme_id"], theme_a)
+                preview_versions = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual(next(item["id"] for item in preview_versions if item["layout_active"]), "body_v1")
+                self.assertNotEqual(layout_pointer_before_preview, "body_v1")
+                self.assertEqual(sum(bool(item["layout_active"]) for item in preview_versions), 1)
+
+                detail = client.get(f"{path}/versions/body/body_v1").json()
+                self.assertNotIn("source_available", detail)
+                self.assertTrue(detail["layout_available"])
+                self.assertTrue(detail["layout_active"])
+                self.assertNotIn("source_markdown", detail["snapshot"])
+                self.assertTrue(detail["snapshot"]["layouts"][0]["body_html"])
+
+    def test_html_history_ignores_source_only_changes_and_survives_corrupt_source_snapshot(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            root = Path(temporary)
+            with client_for(root) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "HTML 正文版本身份",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                initial = client.get(path).json()["article"]
+                saved = client.put(path, json={
+                    "expected_revision": initial["revision"],
+                    "title": "标题保持独立",
+                    "source_markdown": "原始 Markdown",
+                    "variants": {"moyu-green": {"body_html": GOOD_HTML}},
+                })
+                self.assertEqual(saved.status_code, 200, saved.text)
+                first_revision = saved.json()["article"]["revision"]
+                manifest_before = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual([(item["id"], item["number"]) for item in manifest_before], [("body_v1", 1)])
+
+                source_only = client.put(path, json={
+                    "expected_revision": first_revision,
+                    "source_markdown": "只改内部源稿",
+                })
+                self.assertEqual(source_only.status_code, 200, source_only.text)
+                manifest_after = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual([(item["id"], item["number"]) for item in manifest_after], [("body_v1", 1)])
+                self.assertTrue(manifest_after[0]["layout_active"])
+                self.assertNotIn("source_active", manifest_after[0])
+                self.assertNotIn("source_available", manifest_after[0])
+
+                same_html_new_source = client.put(path, json={
+                    "expected_revision": source_only.json()["article"]["revision"],
+                    "source_markdown": "同一 HTML 配新源稿",
+                    "variants": {"moyu-green": {"body_html": GOOD_HTML}},
+                })
+                self.assertEqual(same_html_new_source.status_code, 200, same_html_new_source.text)
+                same_html_manifest = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual([(item["id"], item["number"]) for item in same_html_manifest], [("body_v1", 1)])
+
+                cross_theme = client.put(path, json={
+                    "expected_revision": same_html_new_source.json()["article"]["revision"],
+                    "selected_theme_id": "red-white",
+                    "variants": {"red-white": {"body_html": GOOD_HTML}},
+                })
+                self.assertEqual(cross_theme.status_code, 200, cross_theme.text)
+                cross_theme_manifest = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual([(item["id"], item["number"]) for item in cross_theme_manifest], [("body_v1", 1)])
+
+                record_path = root / "data" / "studio_projects" / f"{project['id']}.json"
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                raw_body = record["article"]["version_history"]["streams"]["body"]
+                self.assertEqual(len(raw_body), 1)
+                # The internal immutable source snapshot remains intact even
+                # though the public version is now HTML-only.
+                self.assertEqual(raw_body[0]["snapshot"]["source_markdown"], "原始 Markdown")
+
+                raw_body[0]["snapshot"]["source_markdown"] = "损坏的内部源稿"
+                record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                detail_response = client.get(f"{path}/versions/body/body_v1")
+                self.assertEqual(detail_response.status_code, 200, detail_response.text)
+                detail = detail_response.json()
+                self.assertTrue(detail["layout_available"])
+                self.assertTrue(detail["snapshot"]["layouts"][0]["available"])
+                self.assertFalse(detail["snapshot"]["layouts"][0]["valid_for_current"])
+                self.assertFalse(detail["snapshot"]["layouts"][0]["source_matches"])
+                self.assertEqual(detail["snapshot"]["layouts"][0]["body_html"], GOOD_HTML)
+                self.assertNotIn("source_markdown", detail["snapshot"])
+                self.assertNotIn("source_markdown_sha256", detail["snapshot"])
+                self.assertNotIn("损坏的内部源稿", detail_response.text)
+                after_read = json.loads(record_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    after_read["article"]["version_history"]["streams"]["body"][0]["snapshot"]["source_markdown"],
+                    "损坏的内部源稿",
+                )
+
+                # Older installations may already contain source-only events
+                # or repeated HTML snapshots. Keep those immutable records,
+                # but project only the first occurrence of each HTML digest.
+                body_stream = after_read["article"]["version_history"]["streams"]["body"]
+                first_snapshot = body_stream[0]["snapshot"]
+                duplicate_source = "另一份仅用于历史的源稿"
+                module = importlib.import_module("studio_articles")
+                duplicate_source_hash = module.article_source_sha256("标题保持独立", duplicate_source)
+                duplicate_snapshot = {
+                    "title_at_save": "标题保持独立",
+                    "source_markdown": duplicate_source,
+                    "source_markdown_available": True,
+                    "source_markdown_sha256": hashlib.sha256(duplicate_source.encode("utf-8")).hexdigest(),
+                    "source_sha256_at_save": duplicate_source_hash,
+                    "layouts": [{**first_snapshot["layouts"][0], "source_sha256": duplicate_source_hash}],
+                }
+                empty_source = ""
+                empty_source_hash = module.article_source_sha256("标题保持独立", empty_source)
+                after_read["article"]["version_history"]["streams"]["body"].extend([
+                    {
+                        "id": "body_v2", "number": 2, "created_at": 2,
+                        "source_revision": 2, "origin": "legacy", "snapshot": duplicate_snapshot,
+                    },
+                    {
+                        "id": "body_v3", "number": 3, "created_at": 3,
+                        "source_revision": 3, "origin": "legacy",
+                        "snapshot": {
+                            "title_at_save": "标题保持独立",
+                            "source_markdown": empty_source,
+                            "source_markdown_available": True,
+                            "source_markdown_sha256": hashlib.sha256(empty_source.encode("utf-8")).hexdigest(),
+                            "source_sha256_at_save": empty_source_hash,
+                            "layouts": [],
+                        },
+                    },
+                ])
+                record_path.write_text(json.dumps(after_read, ensure_ascii=False), encoding="utf-8")
+                before_read = record_path.read_bytes()
+                projected = client.get(f"{path}/versions")
+                self.assertEqual(projected.status_code, 200, projected.text)
+                projected_body = projected.json()["streams"][2]["versions"]
+                self.assertEqual([(item["id"], item["number"]) for item in projected_body], [("body_v1", 1)])
+                self.assertEqual(record_path.read_bytes(), before_read)
+
+                restored = client.post(f"{path}/versions/body/body_v1/restore", json={
+                    "expected_revision": cross_theme.json()["article"]["revision"],
+                    "body_view": "preview",
+                })
+                self.assertEqual(restored.status_code, 200, restored.text)
+                self.assertEqual(restored.json()["article"]["source_markdown"], "同一 HTML 配新源稿")
+                self.assertEqual(restored.json()["article"]["selected_theme_id"], "moyu-green")
+                self.assertEqual(restored.json()["article"]["variants"]["moyu-green"]["body_html"], GOOD_HTML)
+
+    def test_multi_layout_body_snapshot_projects_stable_unique_html_ids_and_restores_one(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            with client_for(Path(temporary)) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "一个事件多个 HTML",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                initial = client.get(path).json()["article"]
+                saved = client.put(path, json={
+                    "expected_revision": initial["revision"],
+                    "title": "当前标题",
+                    "source_markdown": "内部正文",
+                    "selected_theme_id": "red-white",
+                    "variants": {
+                        "red-white": {"body_html": GOOD_HTML},
+                        "graphite-minimal": {"body_html": SECOND_GOOD_HTML},
+                    },
+                })
+                self.assertEqual(saved.status_code, 200, saved.text)
+                article = saved.json()["article"]
+                versions = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual(
+                    [(item["id"], item["number"]) for item in versions],
+                    [("body_v1__red-white", 1), ("body_v1__graphite-minimal", 2)],
+                )
+                red = client.get(f"{path}/versions/body/body_v1__red-white")
+                graphite = client.get(f"{path}/versions/body/body_v1__graphite-minimal")
+                self.assertEqual(red.status_code, 200, red.text)
+                self.assertEqual(graphite.status_code, 200, graphite.text)
+                red_detail = red.json()
+                graphite_detail = graphite.json()
+                self.assertEqual(len(red_detail["snapshot"]["layouts"]), 1)
+                self.assertEqual(len(graphite_detail["snapshot"]["layouts"]), 1)
+                self.assertEqual(red_detail["snapshot"]["layouts"][0]["body_html"], GOOD_HTML)
+                self.assertEqual(graphite_detail["snapshot"]["layouts"][0]["body_html"], SECOND_GOOD_HTML)
+                self.assertNotIn("source_markdown", graphite_detail["snapshot"])
+                self.assertEqual(client.get(f"{path}/versions/body/body_v1__madeup").status_code, 404)
+
+                invalid_restore = client.post(f"{path}/versions/body/body_v1__madeup/restore", json={
+                    "expected_revision": article["revision"], "body_view": "preview",
+                })
+                self.assertEqual(invalid_restore.status_code, 404, invalid_restore.text)
+                restored = client.post(f"{path}/versions/body/body_v1__graphite-minimal/restore", json={
+                    "expected_revision": article["revision"], "body_view": "preview",
+                })
+                self.assertEqual(restored.status_code, 200, restored.text)
+                restored_article = restored.json()["article"]
+                self.assertEqual(restored_article["selected_theme_id"], "graphite-minimal")
+                self.assertEqual(restored_article["variants"]["graphite-minimal"]["body_html"], SECOND_GOOD_HTML)
+                self.assertEqual(restored_article["variants"]["red-white"]["body_html"], GOOD_HTML)
+                self.assertEqual(restored_article["source_markdown"], "内部正文")
+                self.assertEqual(restored_article["title"], "当前标题")
+                after = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual(sum(bool(item["layout_active"]) for item in after), 1)
+                self.assertTrue(next(item for item in after if item["id"] == "body_v1__graphite-minimal")["layout_active"])
+
+    def test_body_restore_can_select_an_existing_same_source_version_without_duplicate_history(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            with client_for(Path(temporary)) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "正文同源版本选择",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                initial = client.get(path).json()["article"]
+                first = client.put(path, json={
+                    "expected_revision": initial["revision"],
+                    "title": "同一标题",
+                    "source_markdown": "相同 Markdown",
+                    "variants": {"moyu-green": {"body_html": GOOD_HTML}},
+                })
+                self.assertEqual(first.status_code, 200, first.text)
+                second = client.put(path, json={
+                    "expected_revision": first.json()["article"]["revision"],
+                    "variants": {"moyu-green": {"body_html": SECOND_GOOD_HTML}},
+                })
+                self.assertEqual(second.status_code, 200, second.text)
+                second_article = second.json()["article"]
+                versions_before = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual(len(versions_before), 2)
+                self.assertEqual(next(item["id"] for item in versions_before if item["layout_active"]), "body_v2")
+
+                selected = client.post(f"{path}/versions/body/body_v2/restore", json={
+                    "expected_revision": second_article["revision"],
+                    "body_view": "source",
+                })
+                self.assertEqual(selected.status_code, 200, selected.text)
+                selected_article = selected.json()["article"]
+                self.assertEqual(selected_article["revision"], second_article["revision"] + 1)
+                self.assertEqual(selected_article["source_markdown"], "相同 Markdown")
+                self.assertEqual(selected_article["variants"]["moyu-green"]["body_html"], SECOND_GOOD_HTML)
+                versions_after = client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                self.assertEqual(len(versions_after), 2)
+                self.assertEqual(next(item["id"] for item in versions_after if item["layout_active"]), "body_v2")
+
+                repeated = client.post(f"{path}/versions/body/body_v2/restore", json={
+                    "expected_revision": selected_article["revision"],
+                    "body_view": "source",
+                })
+                self.assertEqual(repeated.status_code, 200, repeated.text)
+                self.assertEqual(repeated.json()["revision"], selected_article["revision"])
+
+    def test_title_and_cover_restore_keep_other_fields_and_reuse_existing_versions(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            with client_for(Path(temporary)) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "标题与封面恢复",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                initial = client.get(path).json()["article"]
+                first = client.put(path, json={
+                    "expected_revision": initial["revision"],
+                    "title": "标题甲",
+                    "source_markdown": "正文不变",
+                    "cover_variants": [{"asset_id": "mat_cover"}],
+                })
+                self.assertEqual(first.status_code, 200, first.text)
+                first_article = first.json()["article"]
+                first_cover_id = first_article["cover_variants"][0]["id"]
+                second = client.put(path, json={
+                    "expected_revision": first_article["revision"],
+                    "title": "标题乙",
+                    "cover_variants": [{"result_id": "res_cover"}],
+                })
+                self.assertEqual(second.status_code, 200, second.text)
+                second_article = second.json()["article"]
+                second_cover_id = next(item["id"] for item in second_article["cover_variants"]
+                                       if item.get("result_id") == "res_cover")
+                selected_second = client.put(path, json={
+                    "expected_revision": second_article["revision"],
+                    "selected_cover_variant_id": second_cover_id,
+                })
+                self.assertEqual(selected_second.status_code, 200, selected_second.text)
+                selected_article = selected_second.json()["article"]
+
+                title_restore = client.post(f"{path}/versions/title/title_v1/restore", json={
+                    "expected_revision": selected_article["revision"],
+                })
+                self.assertEqual(title_restore.status_code, 200, title_restore.text)
+                after_title = title_restore.json()["article"]
+                self.assertEqual(after_title["title"], "标题甲")
+                self.assertEqual(after_title["source_markdown"], "正文不变")
+                self.assertEqual(after_title["selected_cover_variant_id"], second_cover_id)
+                title_versions = client.get(f"{path}/versions").json()["streams"][0]["versions"]
+                self.assertEqual(len(title_versions), 2)
+                self.assertTrue(title_versions[0]["active"])
+
+                cover_restore = client.post(f"{path}/versions/cover/cover_v1/restore", json={
+                    "expected_revision": after_title["revision"],
+                })
+                self.assertEqual(cover_restore.status_code, 200, cover_restore.text)
+                after_cover = cover_restore.json()["article"]
+                self.assertEqual(after_cover["title"], "标题甲")
+                self.assertEqual(after_cover["source_markdown"], "正文不变")
+                self.assertEqual(after_cover["selected_cover_variant_id"], first_cover_id)
+                cover_versions = client.get(f"{path}/versions").json()["streams"][1]["versions"]
+                self.assertEqual(len(cover_versions), 2)
+                self.assertTrue(cover_versions[0]["active"])
+
+    def test_legacy_article_history_is_derived_read_only_then_backfilled_on_first_write(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            root = Path(temporary)
+            with client_for(root) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "旧记录迁移",
+                }).json()["project"]
+                record_path = root / "data" / "studio_projects" / f"{project['id']}.json"
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                article = record["article"]
+                article["title"] = "当前标题"
+                article["source_markdown"] = "旧正文"
+                article["source_sha256"] = importlib.import_module("studio_articles").article_source_sha256(
+                    "当前标题", "旧正文",
+                )
+                article["title_variants"] = {
+                    "legacy_candidate": {
+                        "title": "旧候选标题",
+                        "source_sha256": importlib.import_module("studio_articles").article_source_sha256(
+                            "旧候选标题", "旧正文",
+                        ),
+                    },
+                }
+                article["selected_title_variant_id"] = "legacy_candidate"
+                record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+
+                path = f"/api/studio/articles/{project['id']}"
+                derived = client.get(f"{path}/versions")
+                self.assertEqual(derived.status_code, 200, derived.text)
+                titles = derived.json()["streams"][0]["versions"]
+                self.assertEqual([item["origin"] for item in titles], ["legacy", "legacy"])
+                self.assertTrue(all(item["created_at"] is None for item in titles))
+                untouched = json.loads(record_path.read_text(encoding="utf-8"))
+                self.assertNotIn("version_history", untouched["article"])
+
+                saved = client.put(path, json={
+                    "expected_revision": record["revision"],
+                    "source_markdown": "新正文",
+                })
+                self.assertEqual(saved.status_code, 200, saved.text)
+                persisted = json.loads(record_path.read_text(encoding="utf-8"))["article"]["version_history"]
+                self.assertEqual(persisted["schema_version"], 1)
+                self.assertEqual(len(persisted["streams"]["title"]), 2)
+                self.assertEqual(len(persisted["streams"]["body"]), 1)
+                self.assertEqual(persisted["streams"]["body"][0]["origin"], "legacy")
+                # Editing only the internal source does not create a visible
+                # HTML body version or a second raw history event.
+                self.assertEqual(client.get(f"{path}/versions").json()["streams"][2]["versions"], [])
+
+    def test_title_history_reuses_trimmed_title_across_source_and_candidate_ids(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            root = Path(temporary)
+            with client_for(root) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "标题版本去重",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                article = client.get(path).json()["article"]
+                first = client.put(path, json={
+                    "expected_revision": article["revision"],
+                    "title": "同名标题",
+                    "source_markdown": "稿件一",
+                })
+                self.assertEqual(first.status_code, 200, first.text)
+                first_article = first.json()["article"]
+                record_path = root / "data" / "studio_projects" / f"{project['id']}.json"
+                first_history = json.loads(record_path.read_text(encoding="utf-8"))["article"]["version_history"]
+                original_source_hash = first_history["streams"]["title"][0]["snapshot"]["source_sha256"]
+                self.assertEqual(original_source_hash, importlib.import_module("studio_articles").article_source_sha256(
+                    "同名标题", "稿件一",
+                ))
+
+                second = client.put(path, json={
+                    "expected_revision": first_article["revision"],
+                    "title": " 同名标题 ",
+                    "source_markdown": "稿件二",
+                    "title_variants": {"title_candidate_second": {"title": "同名标题"}},
+                })
+                self.assertEqual(second.status_code, 200, second.text)
+                listed = client.get(f"{path}/versions").json()["streams"][0]["versions"]
+                self.assertEqual(len(listed), 1)
+                self.assertEqual(listed[0]["id"], "title_v1")
+                self.assertTrue(listed[0]["active"])
+                persisted = json.loads(record_path.read_text(encoding="utf-8"))["article"]["version_history"]
+                self.assertEqual(len(persisted["streams"]["title"]), 1)
+                self.assertEqual(persisted["streams"]["title"][0]["snapshot"]["source_sha256"], original_source_hash)
+
+                third = client.put(path, json={
+                    "expected_revision": second.json()["article"]["revision"],
+                    "title": "同名标题！",
+                })
+                self.assertEqual(third.status_code, 200, third.text)
+                before_restore = client.get(f"{path}/versions").json()["streams"][0]["versions"]
+                self.assertEqual([item["id"] for item in before_restore], ["title_v1", "title_v2"])
+                self.assertEqual([item["label"] for item in before_restore], ["同名标题", "同名标题！"])
+                restored = client.post(f"{path}/versions/title/title_v1/restore", json={
+                    "expected_revision": third.json()["article"]["revision"],
+                })
+                self.assertEqual(restored.status_code, 200, restored.text)
+                after_restore = client.get(f"{path}/versions").json()["streams"][0]["versions"]
+                self.assertEqual([item["id"] for item in after_restore], ["title_v1", "title_v2"])
+                self.assertTrue(after_restore[0]["active"])
+                persisted_after_restore = json.loads(record_path.read_text(encoding="utf-8"))["article"]["version_history"]
+                self.assertEqual(persisted_after_restore["streams"]["title"][0]["snapshot"]["source_sha256"], original_source_hash)
+
+    def test_version_manifest_has_safe_public_media_and_short_layout_previews(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            root = Path(temporary)
+            with client_for(root) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "历史预览摘要",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                article = client.get(path).json()["article"]
+                source = "正文内容，" * 30
+                long_layout_text = "布局字" * 100
+                long_layout_html = f'<section><p><span leaf="">{long_layout_text}</span></p></section>'
+                saved = client.put(path, json={
+                    "expected_revision": article["revision"],
+                    "title": "预览摘要",
+                    "source_markdown": source,
+                    "selected_theme_id": "red-white",
+                    "cover_variants": [{"asset_id": "mat_cover"}],
+                    "variants": {
+                        "moyu-green": {"body_html": GOOD_HTML},
+                        "red-white": {"body_html": SECOND_GOOD_HTML},
+                        "olive-journal": {"body_html": long_layout_html},
+                    },
+                })
+                self.assertEqual(saved.status_code, 200, saved.text)
+                versions_response = client.get(f"{path}/versions")
+                self.assertEqual(versions_response.status_code, 200, versions_response.text)
+                manifest = versions_response.json()
+                cover = manifest["streams"][1]["versions"][0]
+                self.assertEqual(cover["public_media"], {
+                    "url": "/api/materials/mat_cover", "name": "cover.png",
+                    "mime": "image/png", "available": True,
+                })
+                body_versions = manifest["streams"][2]["versions"]
+                self.assertEqual([item["number"] for item in body_versions], [1, 2, 3])
+                self.assertTrue(all("source_excerpt" not in item for item in body_versions))
+                body = next(item for item in body_versions if item["preview_theme_id"] == "red-white")
+                self.assertEqual(body["layout_excerpt"], "另一个真实主题结构 同一来源的第二种排版。")
+                serialized = json.dumps(manifest, ensure_ascii=False)
+                self.assertNotIn("body_html", serialized)
+                self.assertNotIn('"path"', serialized)
+
+                record_path = root / "data" / "studio_projects" / f"{project['id']}.json"
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                record["article"]["selected_theme_id"] = "olive-journal"
+                record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                long_preview = next(
+                    item for item in client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                    if item["preview_theme_id"] == "olive-journal"
+                )
+                self.assertEqual(long_preview["layout_excerpt"], long_layout_text[:180])
+                self.assertEqual(len(long_preview["layout_excerpt"]), 180)
+
+                digest = record["article"]["variants"]["olive-journal"]["html_sha256"]
+                layout_path = root / record["article"]["variants"]["olive-journal"]["path"]
+                layout_path.write_text(
+                    '<section><p><span leaf="">内容已改变但仍是安全HTML</span></p></section>',
+                    encoding="utf-8",
+                )
+                stat = layout_path.stat()
+                import os
+                os.utime(layout_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+                invalidated = next(
+                    item for item in client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                    if item["id"] == "body_v1__olive-journal"
+                )
+                self.assertIsNone(invalidated["preview_theme_id"])
+                self.assertEqual(invalidated["layout_excerpt"], "")
+                self.assertEqual(digest, record["article"]["variants"]["olive-journal"]["html_sha256"])
+
+                unsafe_html = '<section><script>不安全内容</script><p><span leaf="">错误摘要</span></p></section>'
+                unsafe_digest = hashlib.sha256(unsafe_html.encode("utf-8")).hexdigest()
+                unsafe_path = root / "assets" / "output" / "text" / "articles" / f"{unsafe_digest}.html"
+                unsafe_path.parent.mkdir(parents=True, exist_ok=True)
+                unsafe_path.write_text(unsafe_html, encoding="utf-8")
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                record["article"]["selected_theme_id"] = "graphite-minimal"
+                record["article"]["version_history"]["streams"]["body"][0]["snapshot"]["layouts"].append({
+                    "theme_id": "graphite-minimal",
+                    "html_sha256": unsafe_digest,
+                    "path": unsafe_path.relative_to(root).as_posix(),
+                    "source_sha256": record["article"]["source_sha256"],
+                    "catalog_fingerprint": "fixture-catalog",
+                })
+                record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                fallback = next(
+                    item for item in client.get(f"{path}/versions").json()["streams"][2]["versions"]
+                    if item["id"] == "body_v1__graphite-minimal"
+                )
+                self.assertIsNone(fallback["preview_theme_id"])
+                self.assertEqual(fallback["layout_excerpt"], "")
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                layouts = record["article"]["version_history"]["streams"]["body"][0]["snapshot"]["layouts"]
+                record["article"]["version_history"]["streams"]["body"][0]["snapshot"]["layouts"] = [layouts[-1]]
+                record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                unavailable = client.get(f"{path}/versions").json()["streams"][2]["versions"][0]
+                self.assertEqual(unavailable["id"], "body_v1")
+                self.assertIsNone(unavailable["preview_theme_id"])
+                self.assertEqual(unavailable["layout_excerpt"], "")
+
+    def test_legacy_title_manifest_deduplicates_without_persisting_or_renumbering(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            root = Path(temporary)
+            with client_for(root) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "旧标题重复",
+                }).json()["project"]
+                record_path = root / "data" / "studio_projects" / f"{project['id']}.json"
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                article = record["article"]
+                article["title"] = " 标题 "
+                article["source_markdown"] = "正文"
+                module = importlib.import_module("studio_articles")
+                article["source_sha256"] = module.article_source_sha256(" 标题 ", "正文")
+                article["title_variants"] = {
+                    "legacy_title_a": {
+                        "title": "标题", "source_sha256": module.article_source_sha256("标题", "旧正文A"),
+                    },
+                    "legacy_title_b": {
+                        "title": " 标题 ", "source_sha256": module.article_source_sha256(" 标题 ", "旧正文B"),
+                    },
+                }
+                article["selected_title_variant_id"] = "legacy_title_b"
+                record_path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+                response = client.get(f"/api/studio/articles/{project['id']}/versions")
+                self.assertEqual(response.status_code, 200, response.text)
+                titles = response.json()["streams"][0]["versions"]
+                self.assertEqual(len(titles), 1)
+                self.assertEqual(titles[0]["id"], "title_v3")
+                self.assertTrue(titles[0]["active"])
+                untouched = json.loads(record_path.read_text(encoding="utf-8"))
+                self.assertNotIn("version_history", untouched["article"])
+                self.assertEqual(list(untouched["article"]["title_variants"]), [
+                    "legacy_title_a", "legacy_title_b",
+                ])
+                self.assertEqual(untouched["revision"], record["revision"])
+
     def test_generic_media_refs_preserve_all_supported_managed_kinds(self):
         TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
@@ -770,7 +1509,7 @@ class StudioArticleTests(unittest.TestCase):
                 stored_task = storage.get_canvas_task("article-node-run-fixture")
                 self.assertEqual(stored_task["canvas_id"], "article-settings")
 
-    def test_source_change_expires_variants_and_revision_conflict_preserves_current(self):
+    def test_title_and_source_changes_preserve_safe_layout_and_revision_conflict(self):
         TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
             with client_for(Path(temporary)) as client:
@@ -783,15 +1522,39 @@ class StudioArticleTests(unittest.TestCase):
                     "selected_theme_id": "moyu-green",
                     "variants": {"moyu-green": {"body_html": GOOD_HTML}},
                 }).json()["article"]
-                next_save = client.put(f"/api/studio/articles/{project['id']}", json={
+                original_layout = saved["variants"]["moyu-green"]
+                original_digest = original_layout["source_sha256"]
+
+                title_change = client.put(f"/api/studio/articles/{project['id']}", json={
                     "expected_revision": saved["revision"],
+                    "title": "标题二",
+                })
+                self.assertEqual(title_change.status_code, 200, title_change.text)
+                titled = title_change.json()["article"]
+                titled_layout = titled["variants"]["moyu-green"]
+                self.assertTrue(titled_layout["valid"])
+                self.assertTrue(titled_layout["available"])
+                self.assertFalse(titled_layout["source_matches"])
+                self.assertTrue(titled_layout["catalog_matches"])
+                self.assertEqual(titled_layout["source_sha256"], original_digest)
+                self.assertEqual(titled_layout["html_sha256"], original_layout["html_sha256"])
+                self.assertEqual(titled_layout["body_html"], GOOD_HTML)
+
+                next_save = client.put(f"/api/studio/articles/{project['id']}", json={
+                    "expected_revision": titled["revision"],
                     "source_markdown": "正文二",
                 })
                 self.assertEqual(next_save.status_code, 200, next_save.text)
                 current = next_save.json()["article"]
-                self.assertFalse(current["variants"]["moyu-green"]["valid"])
+                layout_after_source_change = current["variants"]["moyu-green"]
+                self.assertTrue(layout_after_source_change["valid"])
+                self.assertTrue(layout_after_source_change["available"])
+                self.assertFalse(layout_after_source_change["source_matches"])
+                self.assertTrue(layout_after_source_change["catalog_matches"])
+                self.assertEqual(layout_after_source_change["source_sha256"], original_digest)
+                self.assertEqual(layout_after_source_change["body_html"], GOOD_HTML)
                 conflict = client.put(f"/api/studio/articles/{project['id']}", json={
-                    "expected_revision": saved["revision"],
+                    "expected_revision": titled["revision"],
                     "source_markdown": "旧页面覆盖",
                 })
                 self.assertEqual(conflict.status_code, 409)
@@ -825,6 +1588,45 @@ class StudioArticleTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 400, fragment)
                     current = client.get(f"/api/studio/articles/{project['id']}").json()["article"]
                     self.assertEqual(current["source_markdown"], "原文必须保留")
+
+    def test_corrupt_stored_html_is_not_exposed_by_article_get(self):
+        TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=TEST_TMP_ROOT) as temporary:
+            root = Path(temporary)
+            with client_for(root) as client:
+                project = client.post("/api/studio/projects", json={
+                    "module": "article", "name": "排版读取安全测试",
+                }).json()["project"]
+                path = f"/api/studio/articles/{project['id']}"
+                initial = client.get(path).json()["article"]
+                saved = client.put(path, json={
+                    "expected_revision": initial["revision"],
+                    "source_markdown": "安全原文",
+                    "selected_theme_id": "moyu-green",
+                    "variants": {"moyu-green": {"body_html": GOOD_HTML}},
+                })
+                self.assertEqual(saved.status_code, 200, saved.text)
+
+                unsafe_html = '<section><script>alert(1)</script></section>'
+                unsafe_digest = hashlib.sha256(unsafe_html.encode("utf-8")).hexdigest()
+                unsafe_path = root / "assets" / "output" / "text" / "articles" / f"{unsafe_digest}.html"
+                unsafe_path.parent.mkdir(parents=True, exist_ok=True)
+                unsafe_path.write_text(unsafe_html, encoding="utf-8")
+
+                record_path = root / "data" / "studio_projects" / f"{project['id']}.json"
+                record = json.loads(record_path.read_text(encoding="utf-8"))
+                raw_variant = record["article"]["variants"]["moyu-green"]
+                raw_variant["path"] = unsafe_path.relative_to(root).as_posix()
+                raw_variant["html_sha256"] = unsafe_digest
+                record_path.write_text(json.dumps(record), encoding="utf-8")
+
+                response = client.get(path)
+                self.assertEqual(response.status_code, 200, response.text)
+                variant = response.json()["article"]["variants"]["moyu-green"]
+                self.assertFalse(variant["valid"])
+                self.assertFalse(variant["available"])
+                self.assertEqual(variant["body_html"], "")
+                self.assertNotIn("alert(1)", response.text)
 
     def test_invalid_theme_unknown_id_and_corrupt_record_are_safe(self):
         TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)

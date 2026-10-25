@@ -20,6 +20,8 @@ from canvas_core.hypit_config import (
 HYPIT_SETTINGS_IDENTITY = studio_module_identity("hypit")
 ARTICLE_SETTINGS_IDENTITY = studio_module_identity("article")
 MUSIC_SETTINGS_IDENTITY = studio_module_identity("music")
+SCRIPT_SETTINGS_IDENTITY = studio_module_identity("script")
+NOVEL_SETTINGS_IDENTITY = studio_module_identity("novel")
 HYPIT_SETTINGS_PROJECT_ID = HYPIT_SETTINGS_IDENTITY.settings_project_id
 HYPIT_SETTINGS_CANVAS_URL = HYPIT_SETTINGS_IDENTITY.settings_canvas_url
 ARTICLE_SETTINGS_CANVAS_ID = ARTICLE_SETTINGS_IDENTITY.settings_canvas_id
@@ -28,6 +30,12 @@ ARTICLE_SETTINGS_CANVAS_URL = ARTICLE_SETTINGS_IDENTITY.settings_canvas_url
 MUSIC_SETTINGS_CANVAS_ID = MUSIC_SETTINGS_IDENTITY.settings_canvas_id
 MUSIC_SETTINGS_PROJECT_ID = MUSIC_SETTINGS_IDENTITY.settings_project_id
 MUSIC_SETTINGS_CANVAS_URL = MUSIC_SETTINGS_IDENTITY.settings_canvas_url
+SCRIPT_SETTINGS_CANVAS_ID = SCRIPT_SETTINGS_IDENTITY.settings_canvas_id
+SCRIPT_SETTINGS_PROJECT_ID = SCRIPT_SETTINGS_IDENTITY.settings_project_id
+SCRIPT_SETTINGS_CANVAS_URL = SCRIPT_SETTINGS_IDENTITY.settings_canvas_url
+NOVEL_SETTINGS_CANVAS_ID = NOVEL_SETTINGS_IDENTITY.settings_canvas_id
+NOVEL_SETTINGS_PROJECT_ID = NOVEL_SETTINGS_IDENTITY.settings_project_id
+NOVEL_SETTINGS_CANVAS_URL = NOVEL_SETTINGS_IDENTITY.settings_canvas_url
 
 
 def is_settings_canvas(value: Any, canvas_id: str | None = None) -> bool:
@@ -102,10 +110,16 @@ class HypitSettingsCanvasService:
         self.canvas_url = canvas_url or identity.settings_canvas_url
         self.title = title or identity.settings_canvas_title_zh
         self.migrate_legacy = module_id == "hypit" if migrate_legacy is None else bool(migrate_legacy)
-        self.schema_version_key = {"hypit": "hypit_flow_schema_version", "article": "article_flow_schema_version",
-                                   "music": "music_flow_schema_version"}[module_id]
-        self.migration_done_key = {"hypit": "hypit_legacy_migration_done", "article": "article_settings_initialized",
-                                  "music": "music_settings_initialized"}[module_id]
+        self.schema_version_key = {
+            "hypit": "hypit_flow_schema_version", "article": "article_flow_schema_version",
+            "music": "music_flow_schema_version", "script": "script_flow_schema_version",
+            "novel": "novel_flow_schema_version",
+        }[module_id]
+        self.migration_done_key = {
+            "hypit": "hypit_legacy_migration_done", "article": "article_settings_initialized",
+            "music": "music_settings_initialized", "script": "script_settings_initialized",
+            "novel": "novel_settings_initialized",
+        }[module_id]
         self._load_canvas = load_canvas
         self._save_canvas = save_canvas
         self._lock = lock
@@ -437,7 +451,9 @@ def create_hypit_settings_canvas_router(
     route_path = base_path or (
         "/api/hypit/settings-canvas" if service.module_id == "hypit" else
         "/api/studio/articles/settings-canvas" if service.module_id == "article" else
-        "/api/studio/music/settings-canvas"
+        "/api/studio/music/settings-canvas" if service.module_id == "music" else
+        "/api/studio/scripts/settings-canvas" if service.module_id == "script" else
+        "/api/studio/novels/settings-canvas"
     )
 
     @router.get(route_path)

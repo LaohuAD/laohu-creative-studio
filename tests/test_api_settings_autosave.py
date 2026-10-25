@@ -38,8 +38,17 @@ function response(body, ok = true) {
 
 function createHarness() {
     const elements = new Map();
+    const documentListeners = {};
     const makeElement = id => {
         const listeners = {};
+        const attributes = {};
+        const dataset = {};
+        const camelDataName = name => name.slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+        if (id === 'settingsContent') {
+            attributes['data-api-startup'] = 'loading';
+            attributes['aria-busy'] = 'true';
+            dataset.apiStartup = 'loading';
+        }
         return {
             id,
             textContent: '',
@@ -48,7 +57,7 @@ function createHarness() {
             checked: false,
             hidden: false,
             disabled: false,
-            dataset: {},
+            dataset,
             style: {},
             listeners,
             classList: {
@@ -61,9 +70,21 @@ function createHarness() {
             querySelectorAll() { return []; },
             addEventListener(type, fn) { listeners[type] = fn; },
             dispatchEvent(event) { listeners[event.type]?.(event); },
-            setAttribute() {},
-            removeAttribute() {},
-            getAttribute() { return null; },
+            setAttribute(name, value) {
+                attributes[name] = String(value);
+                if (name.startsWith('data-')) dataset[camelDataName(name)] = String(value);
+            },
+            removeAttribute(name) {
+                delete attributes[name];
+                if (name.startsWith('data-')) delete dataset[camelDataName(name)];
+            },
+            getAttribute(name) {
+                if (Object.prototype.hasOwnProperty.call(attributes, name)) return attributes[name];
+                if (name.startsWith('data-') && Object.prototype.hasOwnProperty.call(dataset, camelDataName(name))) {
+                    return dataset[camelDataName(name)];
+                }
+                return null;
+            },
             getBoundingClientRect() { return { left: 0, right: 0, top: 0, bottom: 0 }; },
             closest() { return null; },
             contains() { return false; },
@@ -72,6 +93,7 @@ function createHarness() {
     };
     const document = {
         title: '',
+        readyState: 'loading',
         body: makeElement('body'),
         documentElement: makeElement('documentElement'),
         getElementById(id) {
@@ -84,7 +106,8 @@ function createHarness() {
         },
         querySelectorAll() { return []; },
         createElement(tag) { return makeElement(tag); },
-        addEventListener() {},
+        addEventListener(type, fn) { (documentListeners[type] ||= []).push(fn); },
+        dispatchEvent(event) { (documentListeners[event.type] || []).forEach(fn => fn(event)); },
     };
     const window = {
         parent: { postMessage() {} },
@@ -94,6 +117,7 @@ function createHarness() {
         lucide: { createIcons() {} },
     };
     const putCalls = [];
+    const getCalls = [];
     const pendingPuts = [];
     let putMode = 'resolved';
     const initialProviders = [
@@ -102,6 +126,7 @@ function createHarness() {
     ];
     const fetch = (url, options = {}) => {
         const method = options.method || 'GET';
+        if (method === 'GET') getCalls.push(url);
         if (method === 'GET' && url === '/api/providers') {
             return Promise.resolve(response({ providers: initialProviders.map(item => ({ ...item })) }));
         }
@@ -166,6 +191,7 @@ function createHarness() {
         context,
         document,
         putCalls,
+        getCalls,
         pendingPuts,
         setPutMode(mode) { putMode = mode; },
         resolveNextPut() {
@@ -177,8 +203,21 @@ function createHarness() {
 }
 
 async function load(harness) {
-    await harness.context.window.onload();
+    harness.document.dispatchEvent({ type: 'DOMContentLoaded' });
+    await harness.context.startApiSettings();
     await wait(30);
+}
+
+async function testDomContentLoadedStartupIsIdempotent() {
+    const h = createHarness();
+    h.document.dispatchEvent({ type: 'DOMContentLoaded' });
+    await Promise.all([h.context.startApiSettings(), h.context.startApiSettings()]);
+    assert.strictEqual(h.getCalls.filter(url => url === '/api/providers').length, 1,
+        'providers are read once at DOMContentLoaded');
+    assert.strictEqual(h.getCalls.filter(url => url === '/api/model-capabilities').length, 1,
+        'the shared capability catalog is read once at DOMContentLoaded');
+    assert.strictEqual(h.document.getElementById('settingsContent').dataset.apiStartup, undefined,
+        'settings become editable after startup reads finish');
 }
 
 function input(harness, id, value) {
@@ -338,6 +377,7 @@ async function testAppRemovalOnlyChangesItsRegion() {
 }
 
 (async () => {
+    await testDomContentLoadedStartupIsIdempotent();
     await testAppRemovalOnlyChangesItsRegion();
     await testOlderDebounceCannotRewindAnotherObject();
     await testFailedKeyRemainsAfterNavigation();

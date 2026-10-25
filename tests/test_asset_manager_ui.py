@@ -33,6 +33,29 @@ class AssetManagerUiTests(unittest.TestCase):
         self.assertNotIn("input-scope-switcher", self.script)
         self.assertNotIn("input-scope-switcher", self.styles)
 
+    def test_creatable_tree_items_share_plus_icon_and_accessible_sibling_sort_handles(self):
+        self.assertNotIn('data-lucide="folder-plus"', self.script)
+        self.assertIn('data-workflow-cat-new title="新建工作流分组"><i data-lucide="plus"', self.script)
+        self.assertIn('data-asset-cat-new><i data-lucide="plus"', self.script)
+        self.assertIn('data-prompt-cat-new><i data-lucide="plus"', self.script)
+        self.assertIn('data-tree-sort-handle', self.script)
+        self.assertIn("event.key === 'ArrowUp' || event.key === 'ArrowDown'", self.script)
+        self.assertIn("data-sort-group", self.script)
+        self.assertIn("/api/asset-library/reorder", self.script)
+        self.assertIn("/api/prompt-libraries/reorder", self.script)
+        self.assertIn("data-sort-library-id", self.script)
+        self.assertIn("data-sort-category-type", self.script)
+        self.assertIn(".tree-sort-handle", self.styles)
+        self.assertIn("tree-sort-handle:focus-visible", self.styles)
+
+    def test_sorting_keeps_system_and_aggregate_rows_fixed(self):
+        self.assertIn("lib.id === 'default' ? libraryRow", self.script)
+        self.assertIn("isSystem ? libraryRow", self.script)
+        self.assertIn("const reorderable = !PROMPT_BUILTIN_CATEGORY_IDS.has(cat.id) && !protectedCategory", self.script)
+        self.assertIn("data-prompt-cat=\"all\"", self.script)
+        self.assertIn("lambda item: item.get(\"id\") != \"default\"", (ROOT / "main.py").read_text(encoding="utf-8"))
+        self.assertIn("lambda item: item.get(\"id\") != \"system\"", (ROOT / "main.py").read_text(encoding="utf-8"))
+
     def test_temporary_materials_are_flat_and_can_be_promoted(self):
         navigation = self.script.split("function renderUnifiedInputNavigation(){", 1)[1].split("function updateSearchQueryFromInput", 1)[0]
         self.assertNotIn("renderLocalUploadFolderBranch", navigation)

@@ -653,14 +653,16 @@ def generation_capability_tags(profile: Dict[str, Any]) -> Tuple[List[str], List
     return [pair[0] for pair in pairs], [pair[1] for pair in pairs]
 
 
-def compile_catalog_options(catalog: Dict[str, Any], *, adapter_id: str = "") -> List[Dict[str, Any]]:
+def compile_catalog_options(catalog: Dict[str, Any], *, adapter_id: str = "",
+                            identity_document: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """把 ModelCapabilityRegistry.build_catalog 的结果编译为扁平可执行选项。
 
     前端不再自行计算 option_id，避免前后端各算一套标识（§13.5）。
     同一真实 ID 在不同站点出现时产出多个选项，各自带自己的 region 与 option_id（E01）。
     """
     compiled: Dict[str, Dict[str, Any]] = {}
-    identity_document = load_identity_document(Path(__file__).resolve().parent)
+    if identity_document is None:
+        identity_document = load_identity_document(Path(__file__).resolve().parent)
     for provider in (catalog or {}).get("providers") or []:
         if not isinstance(provider, dict):
             continue

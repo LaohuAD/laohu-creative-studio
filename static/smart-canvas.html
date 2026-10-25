@@ -31,10 +31,13 @@
                 var isHypitSettings=query.get('id')==='hypit-settings' && settingsMode==='hypit-settings';
                 var isArticleSettings=query.get('id')==='article-settings' && settingsMode==='article-settings';
                 var isMusicSettings=query.get('id')==='music-settings' && settingsMode==='music-settings';
+                var isScriptSettings=query.get('id')==='script-settings' && settingsMode==='script-settings';
+                var isNovelSettings=query.get('id')==='novel-settings' && settingsMode==='novel-settings';
                 var isCanvasSettings=query.get('id')==='canvas-settings' && settingsMode==='canvas-settings';
-                if(isHypitSettings || isArticleSettings || isMusicSettings || isCanvasSettings) {
+                if(isHypitSettings || isArticleSettings || isMusicSettings || isScriptSettings || isNovelSettings || isCanvasSettings) {
                     root.dataset.canvasMode=settingsMode;
                     root.dataset.canvasSettings='true';
+                    if(isScriptSettings || isNovelSettings) root.dataset.textOptimizationSettings='true';
                     if(query.get('embedded')==='1') root.dataset.canvasEmbedded='1';
                 }
 
@@ -45,7 +48,7 @@
     <script src="/static/js/theme.js?v=2026.10.04.theme-1"></script>
     <script src="/static/js/touch-mouse.js?v=2026.08.17.1786430759"></script>
     <script src="/static/js/i18n.js?v=2026.08.17.1787068901"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.08.17.1787813528">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.10.23.text-editor-1">
     <link rel="stylesheet" href="/static/css/model-config-control.css?v=2026.09.23.1">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
     <link rel="stylesheet" href="/static/css/studio-theme-palettes.css?v=2026.10.04.theme-1">
@@ -66,6 +69,7 @@
                     <div id="inputThumbsRow" class="input-thumbs-row"></div>
                     <div class="prompt-row">
                         <div id="promptInput" class="prompt-input" contenteditable="true" data-i18n-placeholder="smart.promptPlaceholder" data-placeholder="描述你想生成或编辑的图片..."></div>
+                        <button id="promptExpandButton" class="canvas-text-expand-btn" type="button" data-canvas-text-expand="prompt" data-i18n-title="smart.expandPrompt" aria-label="放大编辑提示词" title="放大编辑提示词"><i data-lucide="maximize-2" aria-hidden="true"></i></button>
                         <button id="composerTemplateBtn" class="composer-template-btn" type="button" title="模板库" aria-label="模板库" data-i18n-title="smart.promptTemplateLibrary">
                             <i data-lucide="library"></i><span data-i18n="smart.promptTemplateLibrary">模板库</span>
                         </button>
@@ -170,15 +174,18 @@
                 <div id="minimapViewport" class="smart-minimap-viewport"></div>
             </div>
         </div>
-        <div id="hypitCanvasTools" class="hypit-canvas-tools" hidden>
-            <button id="hypitOutputDrawerToggle" type="button" class="hypit-output-toggle" aria-label="添加输出端口" title="添加输出端口" data-hypit-label-en="Add output port" aria-expanded="false" aria-controls="hypitOutputDrawer"><i data-lucide="corner-down-right"></i><span>添加输出端口</span></button>
+        <div id="settingsCanvasToolbar" class="settings-canvas-toolbar">
+            <div id="hypitCanvasTools" class="hypit-canvas-tools" hidden>
+                <button id="hypitOutputDrawerToggle" type="button" class="hypit-output-toggle" aria-label="添加输出端口" title="添加输出端口" data-hypit-label-en="Add output port" aria-expanded="false" aria-controls="hypitOutputDrawer"><i data-lucide="corner-down-right"></i><span>添加输出端口</span></button>
+            </div>
+            <button id="canvasProductionToggle" class="smart-production-toggle" type="button" aria-expanded="false"><i data-lucide="table-properties"></i><span>创作进度</span></button>
+            <button id="canvasAgentToggle" disabled class="smart-agent-toggle" type="button"><i data-lucide="bot"></i><span>节点默认设置</span></button>
+            <button id="smartPriceToggle" class="smart-price-toggle" type="button" title="价格对比" aria-label="价格对比" data-i18n-title="smart.priceComparison"><i data-lucide="circle-dollar-sign"></i><span data-i18n="smart.priceComparison">价格对比</span></button>
+            <button id="smartWorkflowToggle" class="smart-workflow-toggle" type="button" title="导入导出工作流" aria-label="导入导出工作流"><i data-lucide="package-open"></i><span>工作流</span></button>
+            <button id="smartShortcutToggle" class="smart-shortcut-toggle" type="button" onclick="toggleSmartCanvasShortcuts()" title="快捷键" aria-label="快捷键" data-i18n-title="smart.shortcuts"><i data-lucide="keyboard"></i><span data-i18n="smart.shortcuts">快捷键</span></button>
+            <button id="smartLogToggle" class="smart-log-toggle" type="button" onclick="toggleSmartCanvasLog()" title="日志" aria-label="日志" data-i18n-title="canvas.logs"><i data-lucide="list-todo"></i><span data-i18n="canvas.logs">日志</span></button>
+            <button id="assetToggle" class="asset-toggle" type="button"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">素材库</span></button>
         </div>
-        <button id="canvasProductionToggle" class="smart-production-toggle" type="button" aria-expanded="false"><i data-lucide="table-properties"></i><span>创作进度</span></button>
-        <button id="canvasAgentToggle" disabled class="smart-agent-toggle" type="button"><i data-lucide="bot"></i><span>节点默认设置</span></button>
-        <button id="smartPriceToggle" class="smart-price-toggle" type="button" title="价格对比" aria-label="价格对比" data-i18n-title="smart.priceComparison"><i data-lucide="circle-dollar-sign"></i><span data-i18n="smart.priceComparison">价格对比</span></button>
-        <button id="smartWorkflowToggle" class="smart-workflow-toggle" type="button" title="导入导出工作流" aria-label="导入导出工作流"><i data-lucide="package-open"></i><span>工作流</span></button>
-        <button id="smartShortcutToggle" class="smart-shortcut-toggle" type="button" onclick="toggleSmartCanvasShortcuts()" title="快捷键" aria-label="快捷键" data-i18n-title="smart.shortcuts"><i data-lucide="keyboard"></i><span data-i18n="smart.shortcuts">快捷键</span></button>
-        <button id="smartLogToggle" class="smart-log-toggle" type="button" onclick="toggleSmartCanvasLog()" title="日志" aria-label="日志" data-i18n-title="canvas.logs"><i data-lucide="list-todo"></i><span data-i18n="canvas.logs">日志</span></button>
         <aside id="smartPriceComparisonPanel" class="price-comparison-panel" aria-hidden="true">
             <div class="price-comparison-head">
                 <div>
@@ -194,7 +201,6 @@
             <div id="smartPriceComparisonNote" class="price-comparison-note"></div>
             <div id="smartPriceComparisonBody" class="price-comparison-body"></div>
         </aside>
-        <button id="assetToggle" class="asset-toggle" type="button"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">素材库</span></button>
         <aside id="smartWorkflowTransferModal" class="workflow-transfer-panel">
             <div class="workflow-transfer-head">
                 <div>
@@ -508,6 +514,15 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
+    <dialog id="canvasTextFieldDialog" class="canvas-text-field-dialog" aria-labelledby="canvasTextFieldHeading" aria-describedby="canvasTextFieldHint">
+        <div class="canvas-text-field-dialog-inner">
+            <header class="canvas-text-field-dialog-head">
+                <div><h2 id="canvasTextFieldHeading"></h2><p id="canvasTextFieldHint"></p></div>
+                <button id="canvasTextFieldDone" type="button" data-i18n="smart.expandDone">收起</button>
+            </header>
+            <div id="canvasTextFieldHost"></div>
+        </div>
+    </dialog>
     <dialog id="canvasAgentDialog" class="canvas-agent-dialog"><div class="canvas-agent-head"><h2 id="canvasAgentHeading"></h2><button id="canvasAgentClose" type="button" aria-label="关闭">×</button></div><section id="canvasAgentDefaults"></section><p id="canvasAgentFeedback" role="status" aria-live="polite"></p></dialog>
     <script src="/static/js/media-ui.js"></script>
     <script src="/static/js/material-promote.js?v=2026.08.17.1786546376"></script>
