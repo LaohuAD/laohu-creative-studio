@@ -95,6 +95,8 @@ class StudioMusicGenerationBridge:
             settings_revision = int(context.get("settings_revision") or 1)
         else:
             current = self.music_store.get(project_id)
+            if purpose == "song" and current.get("score_drafts"):
+                raise HTTPException(409, "乐谱仍有未归档草稿，请先保存并校验后生成")
             requested_revision = payload.get("base_revision")
             if requested_revision is not None and int(requested_revision) != int(current["revision"]):
                 raise HTTPException(409, detail={"message": "歌曲内容已更新，请重新读取后再生成。",
@@ -107,6 +109,8 @@ class StudioMusicGenerationBridge:
                 "title", "lyrics", "style_prompt", "notes", "cover_prompt",
             )}
             source_snapshot["reference_audio_refs"] = copy.deepcopy(current.get("reference_audio_refs") or [])
+            if "selected_score_ref_id" in current:
+                source_snapshot["selected_score_ref_id"] = current["selected_score_ref_id"]
             source_snapshot["score_refs"] = copy.deepcopy(current.get("score_refs") or [])
             source_snapshot.update({"source_sha256": str(current["source_sha256"]),
                                     "accepted_revision": int(current["revision"])})

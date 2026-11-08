@@ -44,6 +44,39 @@ def flow_canvas():
 
 
 class HypitCanvasCoreTests(unittest.TestCase):
+    def test_voice_clone_keeps_locked_reference_audio_and_transcript_and_updates_only_speech_input(self):
+        for module in ('hypit', 'article'):
+            with self.subTest(module=module):
+                canvas_id = f'{module}-settings'
+                canvas = {'id': canvas_id, 'kind': 'smart', 'revision': 3, 'nodes': [
+                    {'id': 'reference-audio', 'type': 'smart-material', 'hypitInputLocked': True,
+                     'images': [{'kind': 'audio', 'url': '/api/materials/fixed-audio'}]},
+                    {'id': 'reference-transcript', 'type': 'smart-material', 'hypitInputLocked': True,
+                     'images': [{'kind': 'text', 'text': '固定参考台词', 'content': '固定参考台词'}]},
+                    {'id': 'speech', 'type': 'smart-material', 'hypitInputLocked': False,
+                     'images': [{'kind': 'text', 'text': '默认待生成台词', 'content': '默认待生成台词'}]},
+                    {'id': 'app', 'type': 'smart-ai-app', 'runSettings': {'rhAppId': 'fixture-voice'}},
+                    {'id': 'output', 'type': 'smart-hypit-output', 'hypitSlot': 'voice', 'outputKind': 'audio'},
+                ], 'connections': [
+                    {'from': 'reference-audio', 'to': 'app', 'kind': 'input', 'targetFieldKey': '2::audio'},
+                    {'from': 'reference-transcript', 'to': 'app', 'kind': 'input', 'targetFieldKey': '6::value'},
+                    {'from': 'speech', 'to': 'app', 'kind': 'input', 'targetFieldKey': '7::value'},
+                    {'from': 'app', 'to': 'output', 'kind': 'input'},
+                ]}
+                original = copy.deepcopy(canvas)
+                prepared = prepare_hypit_task_canvas(canvas, 'voice', {'prompt': '本次输入台词'}, 'output',
+                                                     canvas_id=canvas_id, module_id=module)['canvas']
+                by_id = {node['id']: node for node in prepared['nodes']}
+                self.assertEqual(by_id['reference-audio']['images'], original['nodes'][0]['images'])
+                self.assertEqual(by_id['reference-transcript']['images'], original['nodes'][1]['images'])
+                self.assertEqual(by_id['speech']['images'][0]['text'], '本次输入台词')
+                self.assertEqual(prepared['connections'], original['connections'])
+                self.assertEqual(canvas, original)
+                with self.assertRaisesRegex(ValueError, '锁定'):
+                    prepare_hypit_task_canvas(canvas, 'voice', {
+                        'prompt': '不得改写参考台词', 'prompt_target_node_id': 'reference-transcript',
+                    }, 'output', canvas_id=canvas_id, module_id=module)
+
     def test_run_evidence_fingerprint_survives_connecting_output_after_success(self):
         before_connect = flow_canvas()
         before_connect["nodes"] = [node for node in before_connect["nodes"] if node["id"] != "output"]

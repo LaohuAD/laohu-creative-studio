@@ -174,7 +174,7 @@ assert.equal(original.id,'a');assert.equal(original.resultVersions[0].runInputRe
         source=(ROOT/'static/js/smart-canvas.js').read_text()
         spec=source[source.index('function externalParameterSpec'):source.index('function externalParameterProfile')]
         setter=source[source.index('function setCapabilityParameter('):source.index('function generatedCapabilityParameterLabel')]
-        code="const assert=require('node:assert/strict');const settings={};let writes=0;function persistActiveSmartSettings(){writes++}function scheduleSave(){}function rhFieldRole(f){return f.kind}function rhExtractFieldOptions(f){return f.options}\n"+spec+setter+"""
+        code="const assert=require('node:assert/strict');const settings={};const CAPABILITY_PARAMETER_UNSET='__canvas_unset__';let writes=0;function persistActiveSmartSettings(){writes++}function scheduleSave(){}function updateRhAiAppInputRowState(){}function rhFieldRole(f){return f.kind}function rhExtractFieldOptions(f){return f.options}\n"+spec+setter+"""
 const field={kind:'select',fieldType:'SELECT',options:['0','1'],optionLabels:{'0':'关闭','1':'开启'},fieldValue:'0',label:'模式'};
 const definition=externalParameterSpec(field,'rh');assert.equal(definition.type,'enum');assert.deepEqual(definition.options,['0','1']);assert.equal(definition.option_labels['0'],'关闭');
 setCapabilityParameter({_externalEngine:'rh',parameters:{mode:definition}},'mode','0');
@@ -182,7 +182,9 @@ assert.equal(settings.rhParams.mode.value,'0');
 const num={type:'number',min:0,max:10};setCapabilityParameter({_externalEngine:'comfy',parameters:{scale:num}},'scale',0);
 assert.equal(settings.comfyParams.scale,0);setCapabilityParameter({_externalEngine:'comfy',parameters:{scale:num}},'scale',20);assert.equal(settings.comfyParams.scale,20);
 setCapabilityParameter({_externalEngine:'comfy',parameters:{flag:{type:'boolean'}}},'flag',false);assert.equal(settings.comfyParams.flag,false);
-assert.equal(settings.capabilityParameters,undefined);assert.equal(writes,4);
+setCapabilityParameter({_externalEngine:'rh',parameters:{mode:definition}},'mode',CAPABILITY_PARAMETER_UNSET);
+assert.equal(settings.rhParams.mode.value,'','显式清空不能变成使用默认值或发送内部哨兵');
+assert.equal(settings.capabilityParameters,undefined);assert.equal(writes,5);
 """
         result=subprocess.run(['node','-e',code],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)

@@ -29,6 +29,45 @@ def _loopback(host):
         return False
 
 
+def _is_laohu_oauth_referrer(value):
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme.lower() == 'https'
+                and parsed.hostname
+                and parsed.hostname.lower().rstrip('.') == 'api.lao-hu.com'
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.port in (None, 443))
+    except ValueError:
+        return False
+
+
+def _is_laohu_oauth_callback_navigation(scope, headers, expected):
+    """Permit only the provider's top-level redirect to the exact local callback."""
+    client = scope.get('client') or ('', 0)
+    host = headers.get(b'host', b'').decode('latin-1').lower()
+    if not (
+        scope.get('type') == 'http'
+        and scope.get('method') == 'GET'
+        and scope.get('scheme') == 'http'
+        and scope.get('path') == '/api/laohu/account/callback'
+        and host == '127.0.0.1:3000'
+        and expected == ('http', '127.0.0.1', 3000)
+        and _loopback(str(client[0]).split('%', 1)[0])
+        and headers.get(b'sec-fetch-site', b'').lower() in {b'cross-site', b'none'}
+        and headers.get(b'sec-fetch-mode', b'').lower() == b'navigate'
+        and headers.get(b'sec-fetch-dest', b'').lower() == b'document'
+    ):
+        return False
+    referrer = headers.get(b'referer', b'').decode('latin-1')
+    if referrer and not _is_laohu_oauth_referrer(referrer):
+        return False
+    origin = headers.get(b'origin', b'').decode('latin-1')
+    if origin and _origin(origin) != ('https', 'api.lao-hu.com', 443):
+        return False
+    return True
+
+
 class LocalRequestBoundary:
     def __init__(self, app):
         self.app = app
@@ -56,12 +95,13 @@ class LocalRequestBoundary:
         expected = _origin(scheme + '://' + host)
         origin = headers.get(b'origin', b'').decode('latin-1')
         actual = _origin(origin) if origin else None
-        allowed = bool(expected and self._trusted_host(expected[1], scope))
-        if origin:
+        oauth_callback_navigation = _is_laohu_oauth_callback_navigation(scope, headers, expected)
+        allowed = oauth_callback_navigation or bool(expected and self._trusted_host(expected[1], scope))
+        if origin and not oauth_callback_navigation:
             equivalent_loopback = bool(actual and expected and actual[0] == expected[0] and actual[2] == expected[2]
                                        and _loopback(actual[1]) and _loopback(expected[1]))
             allowed = allowed and bool(actual and (actual == expected or equivalent_loopback))
-        elif headers.get(b'sec-fetch-site') == b'cross-site' and scope.get('path', '').startswith(('/api/', '/ws/')):
+        elif not oauth_callback_navigation and headers.get(b'sec-fetch-site') == b'cross-site' and scope.get('path', '').startswith(('/api/', '/ws/')):
             allowed = False
         if not allowed:
             log.warning('已拒绝非当前页面来源的本地请求：%s %s', scope['type'], scope.get('path', ''))
@@ -82,7 +122,7 @@ class LocalRequestBoundary:
             await send({'type':'http.response.body', 'body':b''})
             return
         async def send_response(message):
-            if message['type'] == 'http.response.start' and origin:
+            if message['type'] == 'http.response.start' and origin and not oauth_callback_navigation:
                 message = dict(message)
                 message['headers'] = list(message.get('headers', [])) + [(b'access-control-allow-origin', origin.encode('latin-1')), (b'vary', b'Origin')]
             await send(message)

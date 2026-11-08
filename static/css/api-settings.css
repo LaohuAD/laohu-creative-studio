@@ -449,6 +449,7 @@ body.show-volcengine .api-base-url-field > .label,
 body.show-volcengine .api-base-url-field > .field-frame,
 body.show-ai-money .api-base-url-field > .label,
 body.show-ai-money .api-base-url-field > .field-frame { display:none !important; }
+body.show-ai-money .connection-details { display:none !important; }
 body.show-jimeng .verify-action-row,
 body.show-codex .verify-action-row,
 body.show-gemini-cli .verify-action-row { display:none !important; }
@@ -501,7 +502,7 @@ body.studio-theme-dark .rh-paste-input { background:var(--soft); border-color:va
 .rh-group-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .rh-group-title { font-size:12px; font-weight:950; letter-spacing:.06em; text-transform:uppercase; color:var(--text); }
 .rh-group-count { min-width:28px; height:24px; padding:0 8px; border-radius:7px; background:var(--soft); color:var(--muted); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900; }
-.rh-card-list { display:grid; grid-template-columns:1fr; gap:10px; max-height:min(460px, 52vh); overflow:auto; padding-right:4px; overscroll-behavior:contain; }
+.rh-card-list { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; max-height:min(460px, 52vh); overflow:auto; padding-right:4px; overscroll-behavior:contain; }
 .rh-config-card { border:1px solid var(--line); border-radius:14px; background:var(--panel); padding:10px; display:grid; grid-template-columns:60px minmax(0,1fr) auto; gap:10px; align-items:start; }
 body.studio-theme-dark .rh-config-card { background:var(--soft); border-color:var(--line-strong); }
 .rh-sync-card { border-style:dashed; }
@@ -519,7 +520,7 @@ body.studio-theme-dark .rh-config-card { background:var(--soft); border-color:va
 }
 .rh-thumb { width:60px; height:80px; border-radius:10px; border:1px solid var(--line); background:var(--soft); display:flex; align-items:center; justify-content:center; overflow:hidden; color:var(--muted); cursor:pointer; }
 .rh-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
-.rh-card-main { min-width:0; display:flex; flex-direction:column; gap:7px; }
+.rh-card-main { min-width:0; display:flex; flex-direction:column; gap:7px; overflow-wrap:anywhere; }
 .rh-card-title-field { display:flex; flex-direction:column; gap:4px; }
 .rh-card-title-field span { color:var(--faint); font-size:10px; font-weight:900; letter-spacing:.08em; text-transform:uppercase; }
 .rh-card-main input,.rh-card-main textarea { width:100%; border:1px solid var(--line); border-radius:9px; background:var(--soft); color:var(--text); outline:none; padding:0 9px; font-size:12px; font-weight:700; }
@@ -4649,6 +4650,8 @@ html.studio-theme-dark body .onboarding-step-label-alt {
     .endpoint-grid,
     .rh-card-columns { grid-template-columns:1fr; }
     .models-toolbar { align-items:flex-start; flex-direction:column; }
+    body.show-ai-money #settingsContent #modelsHead.block { align-items:stretch; flex-direction:column; }
+    body.show-ai-money #modelsHead > div:first-child { width:100%; min-width:0; align-self:stretch; flex:0 0 auto; }
     .models-toolbar-actions { width:100%; justify-content:flex-end; }
     .lora-row { grid-template-columns:1fr; }
     .lora-row .icon-btn { width:100%; }
@@ -6550,6 +6553,11 @@ body.studio-theme-dark .rh-region-card { border-color:var(--line-strong); backgr
     .runninghub-model-region-tabs { align-self:stretch; }
     .runninghub-model-region-tabs button { flex:1; }
 }
+@media (max-width:480px){
+    .rh-app-region-card .rh-config-card { grid-template-columns:minmax(0,1fr) auto; }
+    .rh-app-region-card .rh-card-main { grid-column:1 / -1; grid-row:2; }
+    .rh-app-region-card .rh-card-actions { grid-column:2; grid-row:1; }
+}
 
 /* 固定平台只呈现可操作的配置，避免重复标题与协议占位。 */
 .editor-sub:empty { display:none; }
@@ -6686,3 +6694,107 @@ html:not([lang^="en"]) .api-settings-boot-en { display:none !important; }
     outline-offset:2px;
 }
 .api-settings-boot-error:not([hidden]) { color:var(--studio-danger, #c13f33); }
+
+/* laohu 账户卡：与现有 API 设置共用主题色和手动 Key 保存行。 */
+.laohu-account-card {
+    display:grid;
+    gap:14px;
+    margin:0 0 18px;
+    padding:16px 18px;
+    min-height:0;
+    justify-content:stretch;
+    align-content:start;
+    border:1px solid var(--line-strong);
+    border-radius:16px;
+    background:var(--panel);
+    color:var(--text);
+}
+.laohu-account-card[hidden] { display:none !important; }
+.laohu-account-head,
+.laohu-account-brand,
+.laohu-account-main,
+.laohu-account-profile,
+.laohu-account-balance,
+.laohu-account-actions,
+.laohu-account-links { display:flex; align-items:center; }
+.laohu-account-head,
+.laohu-account-main { justify-content:space-between; gap:16px; }
+.laohu-account-brand { min-width:0; gap:11px; }
+.laohu-account-mark {
+    flex:0 0 38px;
+    width:38px;
+    height:38px;
+    display:grid;
+    place-items:center;
+    border:1px solid color-mix(in srgb, var(--studio-accent, #7047eb) 28%, var(--line));
+    border-radius:12px;
+    background:color-mix(in srgb, var(--studio-accent, #7047eb) 11%, var(--panel));
+    color:var(--studio-accent, #7047eb);
+}
+.laohu-account-title { margin:0; color:var(--text); font-size:15px; line-height:1.3; font-weight:850; }
+.laohu-account-main { align-items:flex-start; }
+.laohu-account-identity { min-width:0; display:grid; gap:5px; }
+.laohu-account-connection { color:var(--muted); font-size:12px; font-weight:800; }
+.laohu-account-connection[data-state="connected"] { color:#16814e; }
+.laohu-account-connection[data-state="error"] { color:var(--studio-danger, #c13f33); }
+.laohu-account-connection[data-state="busy"] { color:var(--studio-accent, #7047eb); }
+body.studio-theme-dark .laohu-account-connection[data-state="connected"],
+html.studio-theme-dark body .laohu-account-connection[data-state="connected"] { color:#70d6a3; }
+.laohu-account-profile { flex-wrap:wrap; gap:8px 14px; }
+.laohu-account-username { color:var(--text); font-size:13px; font-weight:850; }
+.laohu-account-balance { gap:6px; color:var(--muted); font-size:11px; }
+.laohu-account-balance strong { color:var(--text); font-size:13px; font-weight:850; }
+.laohu-account-mode-message { max-width:620px; margin:0; color:var(--text); font-size:12px; line-height:1.5; font-weight:750; }
+.laohu-account-message { max-width:620px; margin:0; color:var(--muted); font-size:11.5px; line-height:1.5; }
+.laohu-account-actions { flex:0 0 auto; flex-wrap:wrap; justify-content:flex-end; gap:7px; }
+.laohu-account-actions .action-btn { min-height:34px; padding:0 10px; border-color:var(--line-strong); background:var(--panel); color:var(--text); white-space:nowrap; }
+.laohu-account-actions .action-btn:disabled { cursor:not-allowed; opacity:.55; }
+.laohu-account-actions .action-btn[hidden] { display:none !important; }
+.laohu-account-actions .action-btn.primary-btn { border-color:var(--studio-accent, #7047eb); background:var(--studio-accent, #7047eb); color:#fff; }
+.laohu-account-links { flex-wrap:wrap; gap:7px 16px; padding-top:11px; border-top:1px solid var(--line); }
+.laohu-account-links [hidden] { display:none !important; }
+.laohu-account-links a { color:var(--studio-accent-strong, #5834c2); font-size:11.5px; font-weight:800; text-decoration:none; }
+.laohu-account-links a:hover { text-decoration:underline; }
+.laohu-manual-key-section { display:grid; gap:7px; min-width:0; padding-top:10px; border-top:1px solid var(--line); }
+.laohu-account-console { display:inline-flex; align-items:center; gap:4px; width:max-content; color:var(--studio-accent-strong, #5834c2); font-size:10.5px; font-weight:800; text-decoration:none; }
+.laohu-account-console:hover { text-decoration:underline; }
+body.studio-theme-dark .laohu-account-links a,
+html.studio-theme-dark body .laohu-account-links a,
+body.studio-theme-dark .laohu-account-console,
+html.studio-theme-dark body .laohu-account-console,
+html[data-studio-appearance="dark"] .laohu-account-links a,
+html[data-studio-appearance="dark"] .laohu-account-console { color:var(--studio-accent-text, #d8ccff); }
+.laohu-manual-key-slot .api-key-field { margin:0; }
+.laohu-key-entry-line { grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+.laohu-key-entry-line .field-frame { min-width:0; }
+.laohu-key-entry-line .field-frame input { min-width:0; padding-inline:10px; font-size:12px; }
+.laohu-key-entry-line .field-frame input[readonly] { cursor:default; }
+.laohu-key-save,
+.laohu-key-cancel { display:inline-flex; align-items:center; justify-content:center; min-height:36px; padding:0 10px; font-size:11px; font-weight:850; white-space:nowrap; }
+.laohu-key-save[hidden],
+.laohu-key-cancel[hidden] { display:none !important; }
+.laohu-key-cancel { border-color:var(--line-strong); background:var(--panel); color:var(--text); }
+.laohu-key-save:disabled,
+.laohu-key-cancel:disabled { cursor:not-allowed; opacity:.55; }
+.laohu-credential-status { display:block; margin-top:5px; color:var(--muted); font-size:10.5px; line-height:1.35; }
+.laohu-key-clear > span { display:none; }
+body.show-ai-money .canvas-models-context { display:none !important; }
+body.show-ai-money #modelsHead .block-desc[data-i18n="api.modelsDesc"],
+body.show-ai-money .model-grid > .canvas-model-category > .block-head .block-desc { display:none !important; }
+body.show-ai-money .laohu-key-actions { min-width:0; justify-content:flex-end; }
+body.show-ai-money .laohu-key-save,
+body.show-ai-money .laohu-key-cancel { display:inline-flex; }
+body.show-ai-money .laohu-key-clear { display:none !important; }
+@media (max-width:760px) {
+    .laohu-account-card { gap:11px; margin-bottom:14px; padding:13px; }
+    .laohu-account-main { flex-direction:column; align-items:stretch; }
+    .laohu-account-actions { justify-content:flex-start; }
+    .laohu-account-links { gap:6px 12px; padding-top:9px; }
+    .laohu-manual-key-section { padding-top:8px; }
+}
+@media (max-width:420px) {
+    body.show-ai-money .laohu-key-entry-line { grid-template-columns:minmax(0,1fr) auto; gap:5px; }
+    body.show-ai-money .laohu-key-save,
+    body.show-ai-money .laohu-key-cancel { min-height:34px; padding:0 8px; font-size:10.5px; }
+    body.show-ai-money .laohu-key-entry-line .field-frame input { padding-inline:7px; font-size:11px; }
+}

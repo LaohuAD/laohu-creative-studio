@@ -41,7 +41,14 @@
     "qwen/qwen3.7-plus",
     "qwen/qwen3.8-flash-next",
     "qwen/qwen3.8-max",
-    "whisper-1"
+    "whisper-1",
+    "kling-v4-custom-element",
+    "kling-v4-custom-voice",
+    "laohu-op-5.5",
+    "laohu/gm-4-argon",
+    "qwen/qwen3.8-omni-flash",
+    "kling-elements-advanced",
+    "kling-lip-sync-identify-face"
   ],
   "image_models": [
     "dola-seedream-5.0-pro-i2i",
@@ -93,7 +100,26 @@
     "vosr2-image-upscale",
     "wan-2.7-global-i2i",
     "wan-2.7-global-i2i-pro",
-    "wan-2.7-global-t2i"
+    "wan-2.7-global-t2i",
+    "flux-3-image",
+    "flux-3-image-i2i",
+    "flux-3-image-klein-i2i",
+    "flux-3-image-klein-t2i",
+    "flux-3-image-t2i",
+    "krea-v3-i2i",
+    "krea-v3-t2i",
+    "laohu-image-g-v2.6-flare",
+    "laohu-image-g-v2.6-lowprice",
+    "laohu-image-g-v2.6-sunburst",
+    "laohu-image-hy-v3.5-preview",
+    "laohu-image-muse",
+    "laohu-image-nb-2.1",
+    "laohu-image-nb-2.1-lowprice",
+    "laohu-image-nb-pro-lowprice",
+    "mai-image-2-6",
+    "mai-image-2-6-flash",
+    "moss-image",
+    "z-image-t2i"
   ],
   "video_models": [
     "FlashVSR_video_upscale",
@@ -126,8 +152,6 @@
     "happyhorse-1.1-i2v",
     "happyhorse-1.1-r2v",
     "happyhorse-1.1-t2v",
-    "kling-elements-advanced",
-    "kling-lip-sync-identify-face",
     "kling-lip-sync-video",
     "kling-o3-4k-i2v",
     "kling-o3-4k-r2v",
@@ -216,7 +240,21 @@
     "wan-3.0-i2v",
     "wan-3.0-prime-i2v",
     "wan-3.0-prime-r2v",
-    "wan-3.0-r2v"
+    "wan-3.0-r2v",
+    "Topaz-Upscale-LowPirce",
+    "kling-v4-i2v",
+    "kling-v4-omni",
+    "kling-v4-t2v",
+    "laohu-video-muse",
+    "laohu/motion-video",
+    "vidu-q4-preview-global-i2v",
+    "vidu-q4-preview-global-r2v",
+    "vidu-q4-preview-i2v",
+    "vidu-q4-preview-r2v",
+    "wan-3.0-global-prime-t2v",
+    "wan-3.0-global-t2v",
+    "wan-3.0-prime-t2v",
+    "wan-3.0-t2v"
   ],
   "audio_models": [
     "doubao-seed-audio-1.0",
@@ -273,10 +311,11 @@
     "suno-upload-extend",
     "suno-upsample-tags",
     "suno-vox",
-    "suno-wav"
+    "suno-wav",
+    "doubao-seed-tts-2.0"
   ],
-  "source_retrieved_at": "2026-10-05",
-  "source_model_count": 274,
+  "source_retrieved_at": "2026-11-06",
+  "source_model_count": 321,
   "source_etag": "",
   "source_models": [
     {
@@ -317,6 +356,33 @@
     },
     {
       "id": "hailuo-2.3-t2v-pro",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "hitem3d-v2-multi-image-to-3d",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "vidu-q4-preview-global-i2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "hitem3d-v2-image-to-3d",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -371,6 +437,15 @@
     },
     {
       "id": "hailuo-h3-i2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "wan-3.0-prime-t2v",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -512,6 +587,15 @@
       ]
     },
     {
+      "id": "Topaz-Upscale-LowPirce",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "qwen-image-3.0-pro-i2i",
       "object": "model",
       "created": 1626777600,
@@ -596,6 +680,15 @@
       "supported_endpoint_types": []
     },
     {
+      "id": "laohu/motion-video",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "midjourney-variation",
       "object": "model",
       "created": 1626777600,
@@ -613,6 +706,15 @@
     },
     {
       "id": "kling-o3-4k-i2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "meshy-6-global-text-to-3d",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -690,6 +792,15 @@
       "owned_by": "apimart-midjourney",
       "supported_endpoint_types": [
         "image-generation"
+      ]
+    },
+    {
+      "id": "laohu-image-g-v2.6-lowprice",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
       ]
     },
     {
@@ -804,6 +915,15 @@
       "supported_endpoint_types": []
     },
     {
+      "id": "laohu-image-nb-pro-lowprice",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "typesafe/jev-1.13",
       "object": "model",
       "created": 1626777600,
@@ -883,7 +1003,34 @@
       ]
     },
     {
+      "id": "flux-3-image",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "image-generation"
+      ]
+    },
+    {
+      "id": "laohu-hk-5.5",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "openai",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "laohu-video-gk-v15",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "mai-image-2-6",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -928,6 +1075,15 @@
       ]
     },
     {
+      "id": "flux-3-image-t2i",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "image-generation"
+      ]
+    },
+    {
       "id": "kling-v3.0-pro-t2v",
       "object": "model",
       "created": 1626777600,
@@ -955,6 +1111,15 @@
       ]
     },
     {
+      "id": "krea-v3-i2i",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "minmax-h3-context-ir-multimodal",
       "object": "model",
       "created": 1626777600,
@@ -977,6 +1142,15 @@
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "qwen/qwen3.8-omni-flash",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "openai",
       "supported_endpoint_types": [
         "openai"
       ]
@@ -1015,6 +1189,15 @@
       "owned_by": "doubaovideo",
       "supported_endpoint_types": [
         "image-generation"
+      ]
+    },
+    {
+      "id": "laohu-image-muse",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
       ]
     },
     {
@@ -1166,6 +1349,15 @@
       "supported_endpoint_types": []
     },
     {
+      "id": "krea-v3-t2i",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "suno-upload-cover",
       "object": "model",
       "created": 1626777600,
@@ -1174,6 +1366,15 @@
     },
     {
       "id": "vidu-q3-ad-r2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "wan-3.0-global-prime-t2v",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -1403,6 +1604,15 @@
       ]
     },
     {
+      "id": "laohu-video-muse",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "suno-persona",
       "object": "model",
       "created": 1626777600,
@@ -1434,6 +1644,24 @@
       "owned_by": "doubaovideo",
       "supported_endpoint_types": [
         "openai"
+      ]
+    },
+    {
+      "id": "laohu-op-5.5",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "openai",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "flux-3-image-klein-i2i",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "image-generation"
       ]
     },
     {
@@ -1514,6 +1742,15 @@
       ]
     },
     {
+      "id": "hitem3d-portrait-v2.1-multi-image-to-3d",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "vidu-q3-ad-short-play",
       "object": "model",
       "created": 1626777600,
@@ -1524,6 +1761,15 @@
     },
     {
       "id": "kling-o3-4k-t2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "mai-image-2-6-flash",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -1565,6 +1811,15 @@
       "owned_by": "doubaovideo",
       "supported_endpoint_types": [
         "openai-video"
+      ]
+    },
+    {
+      "id": "hitem3d-portrait-v2.1-image-to-3d",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
       ]
     },
     {
@@ -1629,6 +1884,15 @@
       ]
     },
     {
+      "id": "kling-v4-i2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "dola-seedream-5.0-flash-i2i",
       "object": "model",
       "created": 1626777600,
@@ -1656,7 +1920,25 @@
       ]
     },
     {
+      "id": "laohu-image-g-v2.6-flare",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "FlashVSR_video_upscale",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "meshy-6-global-image-to-3d",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -1673,6 +1955,15 @@
     },
     {
       "id": "laohu-video-g-omni-flash",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "vidu-q4-preview-global-r2v",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -1848,6 +2139,15 @@
       ]
     },
     {
+      "id": "flux-3-image-i2i",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "image-generation"
+      ]
+    },
+    {
       "id": "minimax-speech-2.8-hd",
       "object": "model",
       "created": 1626777600,
@@ -1866,7 +2166,25 @@
       ]
     },
     {
+      "id": "laohu-image-nb-2.1-lowprice",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "minimax-h3-ow-r2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "kling-v4-custom-element",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -1954,6 +2272,15 @@
       ]
     },
     {
+      "id": "z-image-t2i",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "kling-v3.0-pro-i2v",
       "object": "model",
       "created": 1626777600,
@@ -1971,6 +2298,15 @@
     },
     {
       "id": "minimax-h3-ow-t2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "kling-v4-custom-voice",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -2009,6 +2345,15 @@
       "created": 1626777600,
       "owned_by": "apimart music",
       "supported_endpoint_types": []
+    },
+    {
+      "id": "kling-v4-omni",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
     },
     {
       "id": "hailuo-2.3-fast-pro-i2v",
@@ -2072,6 +2417,15 @@
       "supported_endpoint_types": []
     },
     {
+      "id": "laohu-image-nb-2.1",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "midjourney-upscale",
       "object": "model",
       "created": 1626777600,
@@ -2106,6 +2460,15 @@
       "supported_endpoint_types": []
     },
     {
+      "id": "wan-3.0-t2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "mureka-v8-bgm",
       "object": "model",
       "created": 1626777600,
@@ -2116,6 +2479,15 @@
     },
     {
       "id": "vidu-q3-turbo-t2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "vidu-q4-preview-r2v",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -2140,6 +2512,15 @@
       ]
     },
     {
+      "id": "vidu-q4-preview-i2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "seedream-v5-flash-layer-decomposition",
       "object": "model",
       "created": 1626777600,
@@ -2154,6 +2535,15 @@
       "created": 1626777600,
       "owned_by": "apimart music",
       "supported_endpoint_types": []
+    },
+    {
+      "id": "flux-3-image-klein-t2i",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "image-generation"
+      ]
     },
     {
       "id": "hailuo-h3-t2v",
@@ -2208,11 +2598,29 @@
       ]
     },
     {
+      "id": "doubao-seed-tts-2.0",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "flowmusic-replace",
       "object": "model",
       "created": 1626777600,
       "owned_by": "apimart music",
       "supported_endpoint_types": []
+    },
+    {
+      "id": "wan-3.0-global-t2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
     },
     {
       "id": "seedance-2.5-standard-i2v",
@@ -2234,6 +2642,15 @@
     },
     {
       "id": "laohu/g5.6-luna",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "openai",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "laohu/gm-4-argon",
       "object": "model",
       "created": 1626777600,
       "owned_by": "openai",
@@ -2391,6 +2808,15 @@
       ]
     },
     {
+      "id": "laohu-image-hy-v3.5-preview",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "seedance-2.0-global-mini-multi",
       "object": "model",
       "created": 1626777600,
@@ -2401,6 +2827,15 @@
     },
     {
       "id": "wan-3.0-global-prime-r2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "laohu-image-g-v2.6-sunburst",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -2477,6 +2912,15 @@
       ]
     },
     {
+      "id": "moss-image",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "wan-3.0-global-i2v",
       "object": "model",
       "created": 1626777600,
@@ -2523,6 +2967,15 @@
     },
     {
       "id": "hailuo-h3-max-i2v",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "doubaovideo",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
+      "id": "kling-v4-t2v",
       "object": "model",
       "created": 1626777600,
       "owned_by": "doubaovideo",
@@ -2628,6 +3081,15 @@
       ]
     },
     {
+      "id": "laohu-sn-5.5",
+      "object": "model",
+      "created": 1626777600,
+      "owned_by": "openai",
+      "supported_endpoint_types": [
+        "openai"
+      ]
+    },
+    {
       "id": "minimax-h3-ow-i2v",
       "object": "model",
       "created": 1626777600,
@@ -2659,5 +3121,15 @@
       "owned_by": "apimart music",
       "supported_endpoint_types": []
     }
+  ],
+  "unclassified_models": [
+    "hitem3d-portrait-v2.1-image-to-3d",
+    "hitem3d-portrait-v2.1-multi-image-to-3d",
+    "hitem3d-v2-image-to-3d",
+    "hitem3d-v2-multi-image-to-3d",
+    "laohu-hk-5.5",
+    "laohu-sn-5.5",
+    "meshy-6-global-image-to-3d",
+    "meshy-6-global-text-to-3d"
   ]
 }

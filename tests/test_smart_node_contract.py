@@ -35,6 +35,47 @@ def capability_identity_expression(source):
 
 
 class SmartNodeContractTests(unittest.TestCase):
+    def test_run_button_tracks_tasks_and_serializes_stop_before_rerun(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text()
+        controls = source[source.index("const selectedNodeRunOperations"):source.index("function smartGenerationVersionKey")]
+        entry = source[source.index("async function runSelectedNode()"):source.index("function comfyFieldKind")]
+        data = run_node("""
+const assert=require('node:assert/strict');
+const CanvasCreation=require('./static/js/canvas-creation.js');
+const a={id:'a',type:'text',creationTasks:[]},b={id:'b',type:'text',creationTasks:[]};
+let nodes=[a,b],current=a,starts=0,cancels=0,releaseRun,releaseStop;
+const runBtn={dataset:{},innerHTML:'',disabled:false};
+const window={},hypitNodeRunOperations=new Map(),SMART_NODE_TYPES={textGenerator:'text'};
+const selectedNode=()=>current,smartNodeInFlight=n=>!!n.pending,isSmartRunnableNode=()=>true;
+const smartCascadeIsLoopRunning=()=>false,settingsNodeModelOptionsReady=()=>true;
+const escapeHtml=s=>s,tr=s=>s,savePromptDraftForCurrent=()=>{};
+async function runPromptLLMNode(id){
+ starts++;const node=nodes.find(n=>n.id===id);
+ node.creationTasks.push({id:'task-'+starts,sourceExecutionNodeId:id,creationTask:true,isRunPlaceholder:true,runStatus:'running',pending:1});
+ syncRunButtonState();await new Promise(resolve=>{releaseRun=resolve});
+}
+async function cancelExecutionResultRun(id){
+ cancels++;await new Promise(resolve=>{releaseStop=resolve});
+ CanvasCreation.tasks(nodes).find(t=>t.id===id).runStatus='cancelled';releaseRun();
+}
+""" + controls + entry + """
+(async()=>{
+ const first=runSelectedNode();assert.equal(runBtn.disabled,true);assert.equal(runBtn.dataset.runState,'smart.submittingRun');
+ await Promise.resolve();assert.equal(starts,1);assert.equal(runBtn.dataset.runState,'smart.cancelRun');assert.equal(runBtn.disabled,false);
+ current=b;syncRunButtonState();assert.equal(runBtn.dataset.runState,'smart.run');assert.equal(runBtn.disabled,false);
+ current=a;syncRunButtonState();const stop=runSelectedNode();assert.equal(runBtn.disabled,true);assert.equal(runBtn.dataset.runState,'smart.cancellingRun');
+ await runSelectedNode();assert.equal(starts,1);assert.equal(cancels,1);
+ releaseStop();await stop;await first;assert.equal(runBtn.dataset.runState,'smart.run');assert.equal(runBtn.disabled,false);
+ const second=runSelectedNode();await Promise.resolve();assert.equal(starts,2);
+ const stop2=runSelectedNode();releaseStop();await stop2;await second;
+ // A persisted task still exposes Stop after the local invocation map is gone.
+ a.creationTasks.push({id:'restored',sourceExecutionNodeId:'a',creationTask:true,runStatus:'running',pending:1});
+ syncRunButtonState();assert.equal(runBtn.dataset.runState,'smart.cancelRun');
+ console.log(JSON.stringify({starts,cancels,restored:activeRunsForExecutionNode(a).map(t=>t.id)}));
+})().catch(e=>{console.error(e);process.exit(1)});
+""")
+        self.assertEqual(data, {"starts": 2, "cancels": 2, "restored": ["restored"]})
+
     def test_api_model_picker_keeps_reviewed_laohu_image_badges_distinct(self):
         source = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         badge = source[source.index("function providerModelBadge"):source.index("function runningHubAvailabilityBadge")]
@@ -443,6 +484,139 @@ console.log(JSON.stringify({
         self.assertNotIn("pickMediaForSmartNode(created.id)", menu)
         self.assertIn("clipboardData?.getData('text/plain')", paste)
         self.assertIn("createTextMaterialNodeAt", paste)
+
+    def test_material_menu_creates_editable_input_without_a_model_call(self):
+        html = (ROOT / "static/smart-canvas.html").read_text(encoding="utf-8")
+        self.assertNotIn('data-create-type="text-input"', html)
+        self.assertIn('data-create-type="material"><span class="create-card-icon"><i data-lucide="upload-cloud"', html)
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        menu = source[source.index("function createNodeFromMenu"):source.index("function setSpaceCanvasPanReady")]
+        data = run_node("""
+const c=require('./static/js/smart-node-contract.js');
+const vm=require('node:vm');
+let edited=[],created=[];
+const ctx={createMenuPoint:{x:10,y:20},createMenuGroupId:'',createMenuConnection:null,
+ viewportCenter:()=>({x:0,y:0}),closeCreateMenu:()=>{},addCreatedNodeToMenuGroup:()=>{},
+ capabilityUiText:(zh,en)=>zh,SMART_NODE_TYPES:c.NODE_TYPES,
+ createExecutionNode:()=>{throw Error('文本输入不得创建生成节点')},
+ createTextMaterialNodeAt:(point,text,options)=>{const n=c.createTextMaterial({id:'text-input',...point,text,name:options.name});created.push(n);return n},
+ beginSmartInlineTextEdit:(id,index)=>edited.push({id,index})};
+vm.createContext(ctx);
+vm.runInContext(""" + json.dumps(menu) + """,ctx);
+ctx.createNodeFromMenu('material');
+console.log(JSON.stringify({created,edited}));
+""")
+        self.assertEqual(data["created"][0]["title"], "素材")
+        self.assertEqual(data["created"][0]["type"], "smart-material")
+        self.assertEqual(data["created"][0]["images"][0]["kind"], "text")
+        self.assertEqual(data["created"][0]["sourceKind"], "input")
+        self.assertEqual(data["edited"], [{"id": "text-input", "index": 0}])
+
+    def test_material_upload_keeps_identity_lock_history_and_rejects_stale_uploads(self):
+        source = (ROOT / 'static/js/smart-canvas.js').read_text(encoding='utf-8')
+        helper = source[source.index('async function replaceTextMaterialFromFiles'):source.index('function bindNodeEvents')]
+        data = run_node("""
+const vm=require('node:vm');
+let pending=[],saves=0;
+const node={id:'material',type:'smart-material',sourceKind:'input',hypitInputLocked:true,creationRevision:1,
+ images:[{kind:'text',text:'参考台词',resultId:'old-text'}]};
+const ctx={nodes:[node],isSupportedTextFile:f=>f.kind==='text',mediaKindForFile:f=>f.kind,
+ uploadFiles:()=>new Promise(resolve=>pending.push(resolve)),pushUndo:()=>{},uid:k=>k,
+ CanvasCreation:{ensure:()=>{},snapshot:n=>JSON.parse(JSON.stringify({images:n.images}))},
+ capabilityUiText:zh=>zh,render:()=>{},scheduleSave:()=>saves++};
+vm.createContext(ctx);vm.runInContext(""" + json.dumps(helper) + """,ctx);
+(async()=>{
+ const first=ctx.replaceTextMaterialFromFiles(node,[{name:'ref.wav',kind:'audio'}]);
+ pending.shift()([{url:'/api/materials/ref',assetId:'ref',name:'ref.wav',kind:'audio'}]);await first;
+ const previous=JSON.stringify(node);
+ const stale=ctx.replaceTextMaterialFromFiles(node,[{name:'late.mp4',kind:'video'}]);node.creationRevision++;
+ pending.shift()([{url:'/api/materials/late',kind:'video'}]);let rejected=false;
+ try{await stale}catch(e){rejected=true}
+ if(node.images[0].assetId!=='ref')throw Error('stale upload replaced current media');
+ await ctx.replaceTextMaterialFromFiles(node,[{name:'new.md',kind:'text',text:async()=> '新文字'}]);
+ console.log(JSON.stringify({node,previous:JSON.parse(previous),rejected,saves}));
+})();
+""")
+        self.assertTrue(data['rejected'])
+        self.assertEqual(data['saves'], 2)
+        self.assertIs(data['node']['hypitInputLocked'], True)
+        self.assertEqual(data['node']['id'], 'material')
+        self.assertEqual(data['node']['sourceKind'], 'input')
+        self.assertNotIn('resultId', data['node']['images'][0])
+        self.assertEqual(data['previous']['resultVersions'][0]['images'][0]['text'], '参考台词')
+        self.assertEqual(data['node']['images'][0]['text'], '新文字')
+
+    def test_ai_app_field_states_follow_connections_local_values_and_explicit_empty(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        start = source.index('function rhAiAppFieldInputState(')
+        helper = source[start:source.index('function updateRhAiAppInputRowState', start)]
+        data = run_node("""
+const c=require('./static/js/smart-node-contract.js'), vm=require('node:vm');
+const fields=[{nodeId:'2',fieldName:'audio',fieldType:'AUDIO',fieldValue:'default.wav'},
+ {nodeId:'7',fieldName:'value',fieldType:'STRING',fieldValue:'默认台词'},
+ {nodeId:'10',fieldName:'enabled',fieldType:'BOOLEAN',fieldValue:false}];
+const settings={rhParams:{'7::value':{value:''}}}, app={id:'app'}, text={id:'text',title:'待生成台词'};
+const ctx={SMART_NODE_CONTRACT:c,settings,nodes:[app,text],canvas:{connections:[]},
+ activeSettingsSubject:()=>app,capabilityUiText:(zh,en)=>zh,
+ rhInputFieldKind:c.runningHubFieldMediaKind,rhParamKey:(id,name)=>id+'::'+name,
+ rhDefaultValue:f=>String(f.fieldValue??''),connectionTargetFieldKey:e=>e.targetFieldKey};
+vm.createContext(ctx);vm.runInContext(""" + json.dumps(helper) + """,ctx);
+const initial=fields.map(f=>ctx.rhAiAppFieldInputState(f,fields,[]));
+ctx.canvas.connections.push({from:'text',to:'app',kind:'input',targetFieldKey:'7::value'});
+const connected=ctx.rhAiAppFieldInputState(fields[1],fields,[]);
+console.log(JSON.stringify({initial,connected}));
+""")
+        self.assertEqual([item['status'] for item in data['initial']], ['local', 'empty', 'local'])
+        self.assertEqual(data['connected']['status'], 'mapped')
+        self.assertTrue(data['connected']['connected']['pending'])
+        self.assertEqual(data['connected']['connected']['name'], '待生成台词')
+
+    def test_ai_app_string_schema_uses_text_input_instead_of_type_metadata_options(self):
+        source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
+        helper = source[source.index('function rhExtractFieldOptions'):source.index('function rhDefaultValue')]
+        data = run_node("""
+const vm=require('node:vm'),ctx={};vm.createContext(ctx);
+vm.runInContext(""" + json.dumps(helper) + """,ctx);
+console.log(JSON.stringify({options:ctx.rhExtractFieldOptions({fieldType:'STRING',fieldData:['STRING']})}));
+""")
+        self.assertIsNone(data['options'])
+        controls = source[source.index('function renderRhUnconnectedInputControl'):source.index('function renderRhSettingField')]
+        self.assertIn('<textarea', controls)
+        self.assertIn('未连接时使用默认', controls)
+        self.assertIn('当前没有', controls)
+        self.assertIn('data-rh-field-upload', controls)
+
+    def test_ai_app_field_upload_keeps_owner_and_ignores_late_replaced_or_cleared_files(self):
+        source = (ROOT / 'static/js/smart-canvas.js').read_text(encoding='utf-8')
+        helper = source[source.index('async function uploadRhAiAppFieldFile'):source.index('function comfyRandomEnabledField')]
+        data = run_node("""
+const vm=require('node:vm'),field={nodeId:'2',fieldName:'audio',fieldType:'AUDIO'};
+const a={id:'a',runSettings:{rhAppId:'app-a',rhParams:{}}},b={id:'b',runSettings:{rhAppId:'app-b',rhParams:{}}};
+let selected=a,pending=[],saves=0,errors=[];
+const ctx={settings:a.runSettings,nodes:[a,b],runningHubFieldUploads:new Map(),
+ activeSettingsSubject:()=>selected,smartSettingsForNode:n=>n.runSettings,
+ mediaKindForFile:f=>f.kind,mediaKindForItem:i=>i.kind,capabilityUiText:(zh,en)=>en,
+ rhActiveFields:()=>[field],rhParamKey:(n,k)=>n+'::'+k,rhInputFieldKind:()=> 'audio',
+ rhAiAppFieldInputState:()=>({connected:null}),persistActiveSmartSettings:()=>{},renderDynamicParams:()=>{},
+ scheduleSave:()=>saves++,toast:()=>{},errorToast:s=>errors.push(s),
+ uploadFiles:()=>new Promise(r=>pending.push(r))};
+vm.createContext(ctx);vm.runInContext(""" + json.dumps(helper) + """,ctx);
+const input=()=>({files:[{kind:'audio'}],dataset:{rhFieldUpload:'2::audio',rhFieldKind:'audio'},isConnected:true});
+(async()=>{
+ const one=ctx.uploadRhAiAppFieldFile(input());selected=b;ctx.settings=b.runSettings;
+ pending.shift()([{kind:'audio',url:'/api/materials/a',assetId:'a'}]);await one;
+ if(a.runSettings.rhParams['2::audio'].value!=='/api/materials/a'||Object.keys(b.runSettings.rhParams).length)throw Error('late owner changed');
+ selected=a;ctx.settings=a.runSettings;a.runSettings.rhParams={};
+ const old=ctx.uploadRhAiAppFieldFile(input()), latest=ctx.uploadRhAiAppFieldFile(input());
+ pending.shift()([{kind:'audio',url:'/api/materials/old'}]);await old;
+ pending.shift()([{kind:'audio',url:'/api/materials/latest'}]);await latest;
+ if(a.runSettings.rhParams['2::audio'].value!=='/api/materials/latest')throw Error('latest upload lost');
+ const cancelled=ctx.uploadRhAiAppFieldFile(input());a.runSettings.rhParams['2::audio']={value:''};ctx.runningHubFieldUploads.delete('a:2::audio');
+ pending.shift()([{kind:'audio',url:'/api/materials/stale'}]);await cancelled;
+ console.log(JSON.stringify({saves,errors,cleared:a.runSettings.rhParams['2::audio'].value}));
+})().catch(e=>{console.error(e);process.exit(1)});
+""")
+        self.assertEqual(data, {'saves':2,'errors':[],'cleared':''})
 
     def test_recent_canvas_node_copy_beats_stale_external_image_and_never_replaces_selection(self):
         source = (ROOT / "static/js/smart-canvas.js").read_text(encoding="utf-8")
@@ -3279,7 +3453,10 @@ console.log(JSON.stringify(c.reconcileRunningHubInputBindings(fields,refs,{
         field = source[source.index("function renderRhSettingField"):source.index("function comfyRandomEnabledField")]
         self.assertIn('class="rh-ai-app-params"', params)
         self.assertIn('class="rh-ai-app-param-list"', params)
-        self.assertIn("renderExternalParameterControl(field,'rh')", field)
+        self.assertIn("externalParameterSpec(field,'rh')", field)
+        self.assertIn("renderCapabilityParameterEditor", field)
+        self.assertIn('role="switch"', field)
+        self.assertNotIn('smart-popover', field)
         self.assertIn('function externalParameterSpec', source)
         self.assertIn(".composer.ai-app-composer .composer-card", css)
         self.assertIn("grid-template-areas:\"thumbs\" \"params\" \"run\"", css)
@@ -3398,7 +3575,8 @@ console.log(JSON.stringify({explicit,resolved}));
         self.assertNotIn("data-rh-input-mode", field)
         self.assertNotIn("直接输入", field)
         self.assertNotIn("外部节点", field)
-        self.assertIn(".rh-ai-app-media-row.is-missing", css)
+        self.assertIn(".rh-ai-app-media-row.is-local", css)
+        self.assertIn(".rh-ai-app-param-list .rh-ai-app-media-row", css)
         self.assertIn(".rh-ai-app-media-row.is-mapped", css)
         self.assertNotIn(".rh-ai-app-direct-text", css)
         self.assertNotIn(".rh-ai-app-direct-media", css)
@@ -4173,7 +4351,8 @@ console.log(JSON.stringify({source,result}));
         cancel_flow = source[source.index("class CanvasRunCancelledSignal"):source.index("function executionNodeForRunSubject")]
         poller = source[source.index("async function pollSmartCanvasTask"):source.index("function finalizeSmartPendingTask")]
 
-        self.assertIn('data-cancel-run="${escapeAttr(node.id)}"', source)
+        self.assertIn("async function stopSelectedNodeRuns", source)
+        self.assertIn("return stopSelectedNodeRuns(node)", source)
         self.assertIn("async function cancelExecutionResultRun", cancel_flow)
         self.assertIn("cancelledExecutionResultNodeIds.add(resultNode.id)", cancel_flow)
         self.assertIn("clearSmartNodeBusyState(resultNode)", cancel_flow)

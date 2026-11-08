@@ -87,6 +87,9 @@ const comfyuiLocalSection = document.getElementById('comfyuiLocalSection');
 const recommendContent = document.getElementById('recommendContent');
 const recommendPanel = document.getElementById('recommendPanel');
 const providerOnboardingCard = document.getElementById('providerOnboardingCard');
+const laohuAccountCard = document.getElementById('laohuAccountCard');
+const laohuManualKeySlot = document.getElementById('laohuManualKeySlot');
+const apiKeyFieldAnchor = document.getElementById('apiKeyFieldAnchor');
 const customProviderGuide = document.getElementById('customProviderGuide');
 const rhWorkflowEditorOverlay = document.getElementById('rhWorkflowEditorOverlay');
 const rhWorkflowEditorTitle = document.getElementById('rhWorkflowEditorTitle');
@@ -188,6 +191,12 @@ let apiAutosaveSerial = Promise.resolve();
 let apiAutosaveLastWriteRevision = 0;
 let apiAutosaveRevision = 0;
 let apiNavigationCaptureInProgress = false;
+let laohuKeyDraft = '';
+let laohuKeyEditing = false;
+let laohuKeySaveBusy = false;
+let laohuKeyModePending = false;
+let laohuKeyModePendingMessage = '';
+let laohuKeyModePendingDraft = '';
 let apiClosingHypitSettings = false;
 const ARTICLE_SETTINGS_CANVAS_ID = 'article-settings';
 const MUSIC_SETTINGS_CANVAS_ID = 'music-settings';
@@ -324,13 +333,22 @@ function captureApiAutosaveDraft(item, region='', revision=apiAutosaveRevision){
     const objectId = apiAutosaveObjectKey(item.id, resolvedRegion);
     const objectRevision = (apiAutosaveObjectRevision.get(objectId) || 0) + 1;
     apiAutosaveObjectRevision.set(objectId, objectRevision);
+    const snapshot = cloneApiSettingsValue(providers);
+    // A laohu replacement Key is kept outside providers until the explicit save action.
+    // This prevents model/config autosaves from carrying an uncommitted credential.
+    snapshot.forEach(entry => {
+        if(entry?.id === 'ai-money'){
+            delete entry.api_key;
+            delete entry._clearKey;
+        }
+    });
     return {
         objectId,
         providerId:item.id,
         region:resolvedRegion,
         revision,
         objectRevision,
-        providers:cloneApiSettingsValue(providers)
+        providers:snapshot
     };
 }
 
@@ -1683,10 +1701,98 @@ function volcengineAssetKeyHintText(item){
 function isNewUserProvider(item){
     if(!item) return false;
     if(item.id === 'modelscope') return !item.has_key;
-    if(item.id === 'ai-money') return !item.has_key;
     if(item.id === 'agnes') return !item.has_key;
     return false;
 }
+function syncLaohuManualKeyField(isLaohu){
+    const keyField = keyInput?.closest?.('.api-key-field');
+    if(isLaohu && keyField && laohuManualKeySlot && keyField.parentElement !== laohuManualKeySlot){
+        laohuManualKeySlot.appendChild(keyField);
+    } else if(!isLaohu && keyField && apiKeyFieldAnchor?.parentElement && keyField.parentElement !== apiKeyFieldAnchor.parentElement){
+        apiKeyFieldAnchor.insertAdjacentElement('afterend', keyField);
+    }
+}
+function syncLaohuManualKeyUi(){
+    if(provider()?.id !== 'ai-money') return false;
+    const saveButton = document.getElementById('laohuSaveKeyButton');
+    const cancelButton = document.getElementById('laohuCancelKeyButton');
+    const clearButton = keyInput?.closest?.('.api-key-field')?.querySelector('.laohu-key-clear');
+    const keyLabel = document.getElementById('keyLabel');
+    const statusLine = window.LaohuAccount?.getCredentialDisplay?.() || {
+        preview:tr('api.laohuCredentialNone'),
+        status:tr('api.laohuCredentialNone')
+    };
+    if(keyLabel){
+        keyLabel.dataset.i18n = 'api.laohuInputLabel';
+        keyLabel.textContent = tr('api.laohuInputLabel');
+    }
+    if(keyHint) keyHint.textContent = laohuKeyEditing
+        ? tr('api.laohuCredentialUnsaved')
+        : (statusLine.status || tr('api.laohuCredentialNone'));
+    if(keyInput){
+        keyInput.type = laohuKeyEditing ? 'password' : 'text';
+        keyInput.readOnly = !laohuKeyEditing;
+        keyInput.placeholder = laohuKeyEditing ? tr('api.laohuKeyPlaceholder') : tr('api.laohuCredentialNone');
+        keyInput.autocomplete = laohuKeyEditing ? 'new-password' : 'off';
+        keyInput.disabled = laohuKeySaveBusy || Boolean(window.LaohuAccount?.isBusy?.());
+        if(!laohuKeyEditing) keyInput.value = String(statusLine.preview || tr('api.laohuCredentialNone'));
+    }
+    if(clearButton) clearButton.hidden = true;
+    if(saveButton){
+        saveButton.disabled = laohuKeySaveBusy || Boolean(window.LaohuAccount?.isBusy?.())
+            || (laohuKeyEditing && !String(laohuKeyDraft || '').trim());
+        saveButton.textContent = laohuKeySaveBusy ? tr('api.laohuSavingKey')
+            : laohuKeyEditing ? tr('api.laohuSaveKey') : tr('api.laohuUpdateKey');
+    }
+    if(cancelButton){
+        cancelButton.hidden = !laohuKeyEditing;
+        cancelButton.disabled = laohuKeySaveBusy || Boolean(window.LaohuAccount?.isBusy?.());
+    }
+    return true;
+}
+function beginLaohuKeyEdit(){
+    if(provider()?.id !== 'ai-money' || laohuKeyEditing || laohuKeySaveBusy || window.LaohuAccount?.isBusy?.()) return false;
+    laohuKeyEditing = true;
+    laohuKeyDraft = '';
+    if(keyInput){
+        keyInput.value = '';
+        keyInput.type = 'password';
+        keyInput.readOnly = false;
+    }
+    window.LaohuAccount?.showMessage?.('');
+    syncLaohuManualKeyUi();
+    keyInput?.focus?.();
+    return true;
+}
+function cancelLaohuKeyEdit(){
+    if(provider()?.id !== 'ai-money' || !laohuKeyEditing || laohuKeySaveBusy || window.LaohuAccount?.isBusy?.()) return false;
+    laohuKeyDraft = '';
+    laohuKeyEditing = false;
+    window.LaohuAccount?.showMessage?.('');
+    syncLaohuManualKeyUi();
+    return true;
+}
+function handleLaohuKeyButton(){
+    if(laohuKeyEditing) return void saveLaohuKey();
+    beginLaohuKeyEdit();
+}
+window.addEventListener('laohu-account-status', () => {
+    if(selectedId !== 'ai-money') return;
+    const status = window.LaohuAccount?.getStatus?.();
+    if(laohuKeyModePending && status?.mode === 'manual' && status?.has_manual_key === true){
+        if(laohuKeyModePendingDraft && laohuKeyDraft === laohuKeyModePendingDraft){
+            laohuKeyDraft = '';
+            if(keyInput && keyInput.value === laohuKeyModePendingDraft) keyInput.value = '';
+        }
+        laohuKeyModePending = false;
+        laohuKeyModePendingMessage = '';
+        laohuKeyModePendingDraft = '';
+    } else if(laohuKeyModePending && laohuKeyModePendingMessage){
+        window.LaohuAccount?.showMessage?.(laohuKeyModePendingMessage);
+    }
+    syncLaohuManualKeyUi();
+});
+window.addEventListener('studio-lang-change', syncLaohuManualKeyUi);
 function isApimartProviderContext(item){
     const baseUrl = String(baseInput?.value || item?.base_url || '').trim().toLowerCase();
     return baseUrl.includes('apimart.ai');
@@ -1919,8 +2025,9 @@ function syncEditor(){
     item.image_edit_endpoint = '';
     item.rh_apps = normalizeRhEntries(item.rh_apps || [], 'app');
     item.rh_workflows = normalizeRhEntries(item.rh_workflows || [], 'workflow');
-    const key = keyInput.value.trim();
-    if(key) item.api_key = key;
+    const key = item.id === 'ai-money' ? '' : keyInput.value.trim();
+    if(item.id === 'ai-money') delete item.api_key;
+    else if(key) item.api_key = key;
     if(item.id === 'runninghub'){
         const activeRegion = runningHubRegionFromItem(item);
         item.base_url = RUNNINGHUB_REGIONS[activeRegion].baseUrl;
@@ -4021,9 +4128,23 @@ function renderEditor(){
         imageEditRouteInput.value = normalizeImageEditRoute(item.image_edit_route);
         imageEditRouteInput.disabled = item.id === 'modelscope' || item.id === 'runninghub' || item.id === 'volcengine' || item.id === 'ai-money' || CLI_PROTOCOLS.has(String(protocolInput?.value || item.protocol || '').toLowerCase());
     }
-    keyInput.value = item.api_key || '';
-    keyInput.placeholder = item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.enterKey');
-    keyHint.textContent = keyStatusText(item.has_key);
+    keyInput.value = item.id === 'ai-money' ? (laohuKeyEditing ? laohuKeyDraft : '') : (item.api_key || '');
+    if(item.id === 'ai-money'){
+        keyInput.type = laohuKeyEditing ? 'password' : 'text';
+        keyInput.readOnly = !laohuKeyEditing;
+    } else {
+        keyInput.type = 'password';
+        keyInput.readOnly = false;
+    }
+    const keyLabel = document.getElementById('keyLabel');
+    if(item.id !== 'ai-money' && keyLabel){
+        keyLabel.removeAttribute('data-i18n');
+        keyLabel.textContent = 'API Key';
+    }
+    keyInput.placeholder = item.id === 'ai-money'
+        ? tr('api.enterKey')
+        : item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.enterKey');
+    keyHint.textContent = keyStatusText(item.id === 'ai-money' ? false : item.has_key);
     const isModelScope = item.id === 'modelscope';
     const isRunningHub = item.id === 'runninghub';
     const isVolcengine = item.id === 'volcengine' || String(protocolInput?.value || item.protocol || '').toLowerCase() === 'volcengine';
@@ -4034,6 +4155,14 @@ function renderEditor(){
     const isCodex = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'codex';
     const isGeminiCli = String(protocolInput?.value || item.protocol || '').toLowerCase() === 'gemini-cli';
     const showCustomGuide = isCustomApiProvider(item);
+    const keyClearButton = keyInput?.closest?.('.api-key-field')?.querySelector('.laohu-key-clear');
+    if(keyClearButton){
+        const titleKey = isAiMoney ? 'api.removeLocalKeyTitle' : 'api.clearKeyTitle';
+        keyClearButton.dataset.i18nTitle = titleKey;
+        keyClearButton.title = tr(titleKey);
+        if(!isAiMoney) keyClearButton.hidden = false;
+    }
+    if(!isAiMoney && keyInput) keyInput.disabled = false;
     nameInput.disabled = isAiMoney || isAgnes;
     baseInput.disabled = isModelScope || isRunningHub || isVolcengine || isAiMoney || isAgnes;
     if(isRunningHub){
@@ -4093,8 +4222,8 @@ function renderEditor(){
         item.image_request_mode = 'openai';
         nameInput.value = item.name;
         baseInput.value = item.base_url;
-        keyInput.placeholder = item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.aiMoneyKeyPlaceholder');
-        keyHint.textContent = keyStatusText(item.has_key);
+        keyInput.placeholder = laohuKeyEditing ? tr('api.laohuKeyPlaceholder') : tr('api.laohuCredentialNone');
+        keyHint.textContent = '';
     }
     if(isJimeng){
         applyCliProtocolDefaults(item, 'jimeng');
@@ -4124,6 +4253,11 @@ function renderEditor(){
         customProviderGuide.hidden = !showCustomGuide;
         customProviderGuide.style.display = showCustomGuide ? 'grid' : 'none';
     }
+    syncLaohuManualKeyField(isAiMoney);
+    if(isAiMoney){
+        syncLaohuManualKeyUi();
+    }
+    window.LaohuAccount?.setActive(isAiMoney);
     updateApimartDomesticHint(item);
     renderProviderOnboarding(item);
     renderRecommendApi();
@@ -4509,6 +4643,7 @@ function currentProviderApiKey(item, region=''){
             || runningHubRegionInput(targetRegion, 'free')?.value.trim()
             || '';
     }
+    if(item?.id === 'ai-money') return '';
     return keyInput.value.trim();
 }
 function currentRunningHubRegion(item){
@@ -5264,9 +5399,114 @@ async function applyModelPicker(){
         renderPickerSelection(item, {image:previousModels.image_models, chat:previousModels.chat_models, video:previousModels.video_models, audio:previousModels.audio_models, modelNames:previousModels.model_names});
     }
 }
+async function saveLaohuKey(){
+    const item = providers.find(candidate => candidate?.id === 'ai-money');
+    if(!item || selectedId !== 'ai-money' || !laohuKeyEditing || keyInput?.readOnly === true || laohuKeySaveBusy) return false;
+    const inputAtStart = keyInput;
+    const submittedDraft = String(inputAtStart?.value || '');
+    const submittedKey = submittedDraft.trim();
+    if(!submittedKey){
+        window.LaohuAccount?.showMessage?.(tr('api.laohuKeyEmpty'));
+        return false;
+    }
+    const startingMode = window.LaohuAccount?.getStatus?.()?.mode === 'account' ? 'account' : 'manual';
+    laohuKeySaveBusy = true;
+    if(keyInput) keyInput.disabled = true;
+    syncLaohuManualKeyUi();
+    window.LaohuAccount?.showMessage?.(tr('api.laohuSavingKey'));
+    let completed = false;
+    try {
+        const objectId = apiAutosaveObjectKey('ai-money', apiAutosaveRegion(item));
+        if(apiAutosaveDirtyObjects.has(objectId) || apiAutosavePendingByKey.has(objectId)){
+            const flushed = await captureApiObjectBeforeNavigation({immediate:true});
+            if(flushed !== true){
+                window.LaohuAccount?.showMessage?.(tr('api.autosaveFailed') || tr('api.saveFailed'));
+                return false;
+            }
+        } else if(apiAutosaveInFlightByKey.has(objectId)){
+            const flushed = await apiAutosaveSerial;
+            if(flushed !== true){
+                window.LaohuAccount?.showMessage?.(tr('api.autosaveFailed') || tr('api.saveFailed'));
+                return false;
+            }
+        }
+        const currentItem = providers.find(candidate => candidate?.id === 'ai-money');
+        if(!currentItem) return false;
+        syncEditor();
+        laohuKeyDraft = submittedDraft;
+        const write = apiAutosaveSerial.then(() => {
+            // Rebase the explicit Key write on the newest in-memory provider snapshot.
+            // Other settings may have changed while an earlier autosave was finishing.
+            syncEditor();
+            const latestItem = providers.find(candidate => candidate?.id === 'ai-money');
+            if(!latestItem) return false;
+            const revision = ++apiAutosaveRevision;
+            const latestDraft = captureApiAutosaveDraft(latestItem, apiAutosaveRegion(latestItem), revision);
+            const laohuItem = latestDraft?.providers?.find(candidate => candidate?.id === 'ai-money');
+            if(!latestDraft || !laohuItem) return false;
+            laohuItem.api_key = submittedKey;
+            delete laohuItem._clearKey;
+            clearProviderAutosaveTimer(latestDraft.objectId);
+            apiAutosavePendingByKey.delete(latestDraft.objectId);
+            return saveProviders(latestDraft, {explicitLaohuKey:true});
+        });
+        apiAutosaveSerial = write.catch(() => false);
+        let saved = false;
+        try { saved = await write; } catch(_error) { saved = false; }
+        if(!saved){
+            window.LaohuAccount?.showMessage?.(tr('api.laohuKeySaveFailed'));
+            return false;
+        }
+        if(selectedId !== 'ai-money'){
+            laohuKeyModePending = true;
+            laohuKeyModePendingMessage = startingMode === 'account'
+                ? tr('api.laohuKeySavedModeFailedAccount')
+                : tr('api.laohuKeySavedModeFailedManual');
+            laohuKeyModePendingDraft = submittedDraft;
+            return false;
+        }
+        const status = window.LaohuAccount?.getStatus?.();
+        if(status?.has_manual_key !== true){
+            window.LaohuAccount?.showMessage?.(tr('api.laohuKeySaveNotConfirmed'));
+            return false;
+        }
+        const previousMode = status?.mode === 'account' ? 'account' : 'manual';
+        const modeResult = await window.LaohuAccount?.switchMode?.('manual');
+        const modeChanged = Boolean(modeResult) && (modeResult?.mode === 'manual'
+            || window.LaohuAccount?.getStatus?.()?.mode === 'manual');
+        if(modeChanged){
+            laohuKeyModePending = false;
+            laohuKeyModePendingMessage = '';
+            laohuKeyModePendingDraft = '';
+            if(laohuKeyDraft === submittedDraft){
+                laohuKeyDraft = '';
+                if(selectedId === 'ai-money' && keyInput === inputAtStart && keyInput.value === submittedDraft) keyInput.value = '';
+            }
+            laohuKeyEditing = false;
+            window.LaohuAccount?.showMessage?.('');
+            completed = true;
+            return true;
+        }
+        const failureMessage = previousMode === 'account'
+            ? tr('api.laohuKeySavedModeFailedAccount')
+            : tr('api.laohuKeySavedModeFailedManual');
+        laohuKeyModePending = selectedId !== 'ai-money';
+        laohuKeyModePendingMessage = failureMessage;
+        laohuKeyModePendingDraft = submittedDraft;
+        window.LaohuAccount?.showMessage?.(failureMessage);
+        return false;
+    } finally {
+        laohuKeySaveBusy = false;
+        if(selectedId === 'ai-money') syncLaohuManualKeyUi();
+        if(!completed && laohuKeyModePending && selectedId === 'ai-money' && laohuKeyModePendingMessage){
+            window.LaohuAccount?.showMessage?.(laohuKeyModePendingMessage);
+        }
+    }
+}
 async function saveKeyOnly(){
     const item = provider();
     if(!item) return;
+    if(item.id === 'ai-money') return saveLaohuKey();
     const key = keyInput.value.trim();
     if(!key){ await StudioDialog.alert(tr('api.enterKeyAlert') || '请输入 Key', {type:'warning'}); return; }
     if(item.id === 'agnes') item.enabled = true;
@@ -5277,14 +5517,20 @@ async function saveKeyOnly(){
 async function clearKeyOnly(){
     const item = provider();
     if(!item) return;
-    if(!item.has_key && !keyInput.value){ return; }
-    if(!await StudioDialog.confirm(tr('api.confirmClearKey') || '确认清除当前 Key？', {type:'danger'})) return;
+    if(item.id === 'ai-money') return;
+    const hasKeyToClear = item.has_key || keyInput.value;
+    if(!hasKeyToClear){ return; }
+    const confirmKey = 'api.confirmClearKey';
+    if(!await StudioDialog.confirm(tr(confirmKey) || '确认清除当前 Key？', {type:'danger'})) return;
     const previousEnabled = item.enabled;
     const previousClearKey = item._clearKey;
     if(item.id === 'agnes') item.enabled = false;
     item._clearKey = true;
     const ok = await saveProviders();
-    if(ok) keyInput.value = '';
+    if(ok){
+        keyInput.value = '';
+        if(item.id === 'ai-money') void window.LaohuAccount?.refreshStatus?.();
+    }
     else {
         item.enabled = previousEnabled;
         item._clearKey = previousClearKey;
@@ -5734,6 +5980,29 @@ function removeModel(kind, index){
     if(kind === 'image') renderMsLoras();
     void scheduleProviderAutosave({providerId:item.id, immediate:true, sync:false});
 }
+async function refreshLaohuProviderAfterAccountStatus(){
+    if(selectedId !== 'ai-money') return false;
+    const providerId = selectedId;
+    const providerRequest = fetch('/api/providers').then(response => readApiResponse(response, tr('api.loadFailed') || '加载平台失败'));
+    const capabilityRequest = fetch('/api/model-capabilities').then(response => response.ok ? response.json() : null).catch(() => null);
+    const [providerResult, capabilityResult] = await Promise.allSettled([providerRequest, capabilityRequest]);
+    if(selectedId !== providerId) return false;
+    if(providerResult.status !== 'fulfilled') return false;
+    const remote = (providerResult.value?.providers || []).find(item => item?.id === 'ai-money');
+    const local = providers.find(item => item?.id === 'ai-money');
+    if(!remote || !local) return false;
+    // 只刷新服务端凭据状态；本地未保存 Key 草稿和模型启用清单由现有编辑器继续持有。
+    local.has_key = remote.has_key === true;
+    local.key_preview = String(remote.key_preview || '');
+    if(capabilityResult.status === 'fulfilled' && capabilityResult.value?.providers){
+        modelCapabilityCatalog = capabilityResult.value;
+    }
+    renderProviderList();
+    if(selectedId === 'ai-money'){
+        syncLaohuManualKeyUi();
+    }
+    return true;
+}
 async function loadProviders(){
     setApiSettingsStartupState('loading');
     setStatus(tr('api.loading'));
@@ -5763,7 +6032,8 @@ async function loadProviders(){
         setApiSettingsStartupState('error');
     }
 }
-async function saveProviders(draft=null){
+async function saveProviders(draft=null, options={}){
+    const explicitLaohuKey = options?.explicitLaohuKey === true;
     let saveDraft = draft;
     if(!saveDraft){
         syncEditor();
@@ -5781,6 +6051,8 @@ async function saveProviders(draft=null){
     if(saveDraft.revision < apiAutosaveLastWriteRevision) return true;
     apiAutosaveLastWriteRevision = saveDraft.revision;
     const requestProviders = cloneApiSettingsValue(saveDraft.providers || providers) || [];
+    const laohuManualKeyWrite = requestProviders.some(item => item?.id === 'ai-money'
+        && (Boolean(String(item.api_key || '').trim()) || item._clearKey === true));
     requestProviders.forEach(item => {
         item.id = normalizeId(item.id);
         applyLockedRecommendedProtocol(item);
@@ -5857,7 +6129,7 @@ async function saveProviders(draft=null){
     }
     const isLatestDraft = () => saveDraft.revision === apiAutosaveRevision
         && saveDraft.objectRevision === apiAutosaveObjectRevision.get(saveDraft.objectId);
-    setStatus(draft ? (tr('api.autosaving') || tr('api.saving')) : tr('api.saving'));
+    if(!explicitLaohuKey) setStatus(draft ? (tr('api.autosaving') || tr('api.saving')) : tr('api.saving'));
     try {
         const res = await fetch('/api/providers', {
             method:'PUT',
@@ -5930,16 +6202,21 @@ async function saveProviders(draft=null){
             } else {
                 renderEditor();
             }
-            setStatus(draft ? (tr('api.autosaved') || tr('api.saved')) : tr('api.saved'));
+            if(!explicitLaohuKey) setStatus(draft ? (tr('api.autosaved') || tr('api.saved')) : tr('api.saved'));
             // 广播变更，画布等其他 iframe 立即重新拉取最新平台/模型列表
             broadcastStudioApiChange('providers-changed');
+        }
+        if(laohuManualKeyWrite && selectedId === 'ai-money'){
+            await window.LaohuAccount?.refreshStatus?.();
         }
         return true;
     } catch(err) {
         if(isLatestDraft()){
-            apiAutosaveDirtyObjects.add(saveDraft.objectId);
-            apiAutosavePendingByKey.set(saveDraft.objectId, saveDraft);
-            setStatus(draft ? (tr('api.autosaveFailed') || tr('api.saveFailed')) : (err.message || tr('api.saveFailed')));
+            if(!explicitLaohuKey){
+                apiAutosaveDirtyObjects.add(saveDraft.objectId);
+                apiAutosavePendingByKey.set(saveDraft.objectId, saveDraft);
+            }
+            setStatus(explicitLaohuKey ? (err.message || tr('api.saveFailed')) : draft ? (tr('api.autosaveFailed') || tr('api.saveFailed')) : (err.message || tr('api.saveFailed')));
         }
         return false;
     }
@@ -6002,6 +6279,7 @@ function startApiSettings(){
     apiSettingsStarted = true;
     if(window.StudioTheme) window.StudioTheme.applyPreference(window.StudioTheme.getPreference());
     if(window.StudioI18n) window.StudioI18n.apply();
+    window.LaohuAccount?.setProviderRefreshCallback(refreshLaohuProviderAfterAccountStatus);
     document.title = tr('api.title');
     syncRecommendView();
     apiSettingsStartupPromise = loadProviders();
@@ -6045,9 +6323,22 @@ function startApiSettings(){
         if(input) input.addEventListener('input', () => {
             refreshProviderOnboarding();
             if(input === keyInput) updateApimartDomesticHint();
+            if(input === keyInput && provider()?.id === 'ai-money'){
+                if(!laohuKeyEditing || keyInput.readOnly) return;
+                laohuKeyDraft = input.value;
+                syncLaohuManualKeyUi();
+                return;
+            }
             void scheduleCurrentProviderAutosave(false);
         });
     });
+    keyInput?.addEventListener('keydown', event => {
+        if(provider()?.id !== 'ai-money' || !laohuKeyEditing || keyInput.readOnly || event.key !== 'Enter' || event.isComposing || event.repeat) return;
+        event.preventDefault();
+        void saveLaohuKey();
+    });
+    document.getElementById('laohuSaveKeyButton')?.addEventListener('click', handleLaohuKeyButton);
+    document.getElementById('laohuCancelKeyButton')?.addEventListener('click', cancelLaohuKeyEdit);
     [volcAkInput, volcSkInput, volcProjectInput, volcRegionInput].forEach(input => {
         if(input) input.addEventListener('input', () => void scheduleCurrentProviderAutosave(false));
     });

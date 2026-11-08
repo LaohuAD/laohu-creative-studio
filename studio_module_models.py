@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
-from studio_modules import studio_module_identity, studio_module_label
+from studio_modules import studio_module_identity, studio_module_label, studio_capability_label
 
 try:  # FastAPI 在运行环境里一定存在；缺失时本模块仍可用于纯逻辑测试
     from fastapi import Request
@@ -105,10 +105,6 @@ _ARTICLE_SLOT_NODE_TYPES = {
 
 def music_slot_descriptors() -> List[Dict[str, Any]]:
     """歌曲/封面配置槽复用共享模型目录与普通画布的执行节点契约。"""
-    labels = {
-        "music": {"zh": "歌曲", "en": "Song"},
-        "image": {"zh": "封面", "en": "Cover"},
-    }
     descriptors = []
     for slot, node_type in (("music", "music_generation"), ("image", "image_generation")):
         descriptors.append({
@@ -117,7 +113,7 @@ def music_slot_descriptors() -> List[Dict[str, Any]]:
             "selection_policy": "fixed",
             "node_type": node_type,
             "capability_name": node_type.replace("_", "-"),
-            "label": dict(labels[slot]),
+            "label": studio_capability_label(slot),
             "expected_output": dict(_OUTPUT_MEDIA[node_type]),
             "allowed_operations": sorted(_SLOT_OPERATIONS[slot]),
             "required_input_scenarios": list(_SLOT_SCENARIOS.get(slot, ["text_prompt"])),
@@ -140,7 +136,7 @@ def manuscript_slot_descriptors(module_id: str) -> List[Dict[str, Any]]:
             "selection_policy": "fixed",
             "node_type": "text_generation",
             "capability_name": "text-generation",
-            "label": {"zh": "文本", "en": "Text"},
+            "label": studio_capability_label("text"),
             "expected_output": dict(_OUTPUT_MEDIA["text_generation"]),
             # 候选仍来自共享启用清单和文本节点契约；不复制模块专属模型表。
             "allowed_operations": [],
@@ -155,14 +151,6 @@ def manuscript_slot_descriptors(module_id: str) -> List[Dict[str, Any]]:
 
 def article_slot_descriptors() -> List[Dict[str, Any]]:
     """为文章设置图声明实际画布执行类型；只按共享模型目录的输出契约筛选。"""
-    labels = {
-        "text": {"zh": "文本", "en": "Text"},
-        "image": {"zh": "图片", "en": "Image"},
-        "video": {"zh": "视频", "en": "Video"},
-        "audio": {"zh": "音效", "en": "Sound effects"},
-        "music": {"zh": "音乐", "en": "Music"},
-        "voice": {"zh": "语音", "en": "Voice"},
-    }
     descriptors = []
     for slot, node_type in _ARTICLE_SLOT_NODE_TYPES.items():
         descriptors.append({
@@ -171,7 +159,7 @@ def article_slot_descriptors() -> List[Dict[str, Any]]:
             "selection_policy": "fixed",
             "node_type": node_type,
             "capability_name": node_type.replace("_", "-"),
-            "label": dict(labels[slot]),
+            "label": studio_capability_label(slot),
             "expected_output": dict(_OUTPUT_MEDIA[node_type]),
             # 文章沿用用户启用清单、可执行状态和实际输出类型；Hypit 的用途
             # 黑名单不属于文章宿主的选择规则。

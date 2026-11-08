@@ -118,6 +118,29 @@ class ProjectStorageTests(unittest.TestCase):
         self.assertNotIn('"cookie"', serialized)
         self.assertEqual(run["standard_request"]["inputs"]["prompt"], "测试")
 
+    def test_task_index_compact_encoding_preserves_private_snapshot(self):
+        snapshot={'prompt':'中文台词\n第二句','nested':{'value':[1,False,None]}}
+        self.storage.create_canvas_task({'id':'compact','status':'queued','private_snapshot':snapshot})
+        raw=self.storage.canvas_task_index_path.read_text()
+        self.assertEqual(raw.count('\n'),1)
+        self.assertEqual(ProjectStorage(self.root).get_canvas_task('compact')['private_snapshot'],snapshot)
+
+    def test_task_read_cache_reuses_unchanged_index_and_observes_other_writers(self):
+        self.storage.create_canvas_task({'id':'cached','status':'queued',
+                                         'private_snapshot':{'prompt':'original'}})
+        with patch.object(self.storage,'_load_index',wraps=self.storage._load_index) as load:
+            first=self.storage.get_canvas_task('cached')
+            first['private_snapshot']['prompt']='caller edit'
+            self.assertEqual(self.storage.get_canvas_task('cached')['private_snapshot']['prompt'],'original')
+            self.assertIsNone(self.storage.get_canvas_task('missing'))
+            self.assertEqual(load.call_count,1)
+            other=ProjectStorage(self.root)
+            other.update_canvas_task('cached',status='succeeded')
+            self.assertEqual(self.storage.get_canvas_task('cached')['status'],'succeeded')
+            self.assertEqual(load.call_count,2)
+            self.storage.canvas_task_index_path.write_text('{broken',encoding='utf-8')
+            with self.assertRaises(StorageError): self.storage.get_canvas_task('cached')
+
     def test_canvas_tasks_persist_across_storage_instances(self):
         created = self.storage.create_canvas_task({
             "id": "canvas_img_1",
@@ -514,6 +537,9 @@ class ProjectStorageTests(unittest.TestCase):
         (self.storage.backups_dir / "old.zip").write_bytes(b"old")
         (self.root / "API").mkdir()
         (self.root / "API" / ".env").write_text("SECRET=1", encoding="utf-8")
+        (self.root / "API" / ".laohu-login-app.json").write_text("{\"client_secret\":\"PRIVATE\"}", encoding="utf-8")
+        (self.root / "API" / ".laohu-account-session.json").write_text("{\"access_token\":\"PRIVATE\"}", encoding="utf-8")
+        (self.root / "API" / ".Laohu-login-app-extra.JSON").write_text("{\"client_secret\":\"PRIVATE\"}", encoding="utf-8")
 
         archive = self.storage.create_backup(include_secrets=True)
 
@@ -522,6 +548,9 @@ class ProjectStorageTests(unittest.TestCase):
         self.assertIn("data/canvases/one.json", names)
         self.assertIn("assets/materials/one.bin", names)
         self.assertIn("API/.env", names)
+        self.assertNotIn("API/.laohu-login-app.json", names)
+        self.assertNotIn("API/.laohu-account-session.json", names)
+        self.assertNotIn("API/.Laohu-login-app-extra.JSON", names)
         self.assertNotIn("data/backups/old.zip", names)
         self.assertIn("backup-manifest.json", names)
 
@@ -532,6 +561,23 @@ class ProjectStorageTests(unittest.TestCase):
 
         with self.assertRaises(StorageError):
             self.storage.restore_backup(archive)
+
+    def test_restore_rejects_machine_private_laohu_credentials(self):
+        private_paths = (
+            "API/.laohu-login-app.json",
+            "./API/.laohu-account-session.json",
+            "API/./.LAOHU-login-app.JSON",
+            "API\\.laohu-account-session.JSON",
+        )
+        for index, private_path in enumerate(private_paths):
+            archive = self.root / f"private-credential-{index}.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("backup-manifest.json", "{}")
+                bundle.writestr(private_path, '{"private":"test-only"}')
+            with self.subTest(path=private_path), self.assertRaisesRegex(StorageError, "本机专属"):
+                self.storage.restore_backup(archive)
+        self.assertFalse((self.root / "API" / ".laohu-login-app.json").exists())
+        self.assertFalse((self.root / "API" / ".laohu-account-session.json").exists())
 
 
 if __name__ == "__main__":

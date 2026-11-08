@@ -24,6 +24,7 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, Mapping, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+from studio_modules import studio_capability_label
 from canvas_agent import is_local_client
 from canvas_core.json_store import DataFileError, read_json, write_json
 
@@ -85,7 +86,7 @@ SUPPORTED_HYPIT_CAPABILITIES = (
         "node_type": "text_generation",
         "capability": _capability_ref("text-generation"),
         "returns": _capability_ref("text"),
-        "label": {"zh": "文本生成", "en": "Text generation"},
+        "label": studio_capability_label("text"),
     },
     {
         "slot": "image",
@@ -93,7 +94,7 @@ SUPPORTED_HYPIT_CAPABILITIES = (
         "node_type": "image_generation",
         "capability": _capability_ref("image-generation"),
         "returns": _capability_ref("image-set"),
-        "label": {"zh": "图片生成", "en": "Image generation"},
+        "label": studio_capability_label("image"),
     },
     {
         "slot": "video",
@@ -101,17 +102,17 @@ SUPPORTED_HYPIT_CAPABILITIES = (
         "node_type": "video_generation",
         "capability": _capability_ref("video-generation"),
         "returns": _capability_ref("video-set"),
-        "label": {"zh": "视频生成", "en": "Video generation"},
+        "label": studio_capability_label("video"),
     },
     {
         "slot": "audio", "kind": "audio", "node_type": "audio_generation",
         "capability": _capability_ref("audio-generation"), "returns": _capability_ref("audio-set"),
-        "label": {"zh": "音频生成", "en": "Audio generation"},
+        "label": studio_capability_label("audio"),
     },
     {
         "slot": "music", "kind": "music", "node_type": "music_generation",
         "capability": _capability_ref("music-generation"), "returns": _capability_ref("audio-set"),
-        "label": {"zh": "音乐生成", "en": "Music generation"},
+        "label": studio_capability_label("music"),
     },
     {
         "slot": "voice",
@@ -119,7 +120,7 @@ SUPPORTED_HYPIT_CAPABILITIES = (
         "node_type": "audio_generation",
         "capability": _capability_ref("speech-generation"),
         "returns": _capability_ref("audio-set"),
-        "label": {"zh": "语音生成", "en": "Speech generation"},
+        "label": studio_capability_label("voice"),
     },
 )
 

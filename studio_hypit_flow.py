@@ -8,7 +8,7 @@ import inspect
 import json
 import re
 import threading
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from collections.abc import Mapping
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -113,6 +113,9 @@ class HypitFlowRunner:
         *,
         canvas_id: str = HYPIT_SETTINGS_CANVAS_ID,
         module_id: str = "hypit",
+        bind_execution_auth: Callable[[str, dict[str, Any]], Any] | None = None,
+        execution_auth_scope: Callable[[str], Any] | None = None,
+        release_execution_auth: Callable[[str], Any] | None = None,
     ):
         canvas_id = str(canvas_id or "").strip()
         module_id = str(module_id or "").strip()
@@ -130,10 +133,48 @@ class HypitFlowRunner:
         self.publish_node_result = publish_node_result
         self.canvas_id = canvas_id
         self.module_id = module_id
+        self.bind_execution_auth = bind_execution_auth
+        self.execution_auth_scope = execution_auth_scope or (lambda _binding_id: nullcontext())
+        self.release_execution_auth = release_execution_auth
         self.flow_kind = f"{module_id}_settings_flow"
         self._active: dict[str, asyncio.Task] = {}
         self._active_guard = threading.RLock()
         self._cancel_requested: set[str] = set()
+
+    def _release_auth_binding_safely(self, binding_id: str) -> None:
+        if self.release_execution_auth is None:
+            return
+        try:
+            self.release_execution_auth(str(binding_id))
+        except Exception:
+            # 凭据清理故障不能改写任务状态，也不能泄露到公开任务错误。
+            return
+
+    def _release_auth_if_task_absent(self, run_id: str, binding_ids: list[str]) -> None:
+        if self.release_execution_auth is None:
+            return
+        try:
+            task = self.storage.get_canvas_task(str(run_id))
+        except Exception:
+            # 持久化状态不确定时保留绑定，避免让已创建任务失去原身份。
+            return
+        if task is None:
+            for binding_id in binding_ids:
+                self._release_auth_binding_safely(binding_id)
+
+    def _release_auth_if_terminal(self, run_id: str, execution_nodes: list[dict[str, Any]]) -> None:
+        if self.release_execution_auth is None:
+            return
+        try:
+            task = self.storage.get_canvas_task(str(run_id))
+        except Exception:
+            return
+        if not isinstance(task, Mapping) or str(task.get("status") or "") not in {"succeeded", "failed", "cancelled"}:
+            return
+        for node in execution_nodes:
+            node_id = str(node.get("id") or node.get("node_id") or "")
+            if node_id:
+                self._release_auth_binding_safely(f"{run_id}:{node_id}")
 
     @staticmethod
     def _canonical(value: Any) -> str:
@@ -857,17 +898,35 @@ class HypitFlowRunner:
                     "error_category": "",
                     "error": "",
                 }
-                self.storage.create_canvas_task({
-                    "id": run_id,
-                    "canvas_id": self.canvas_id,
-                    "module_id": self.module_id,
-                    "node_id": output_node_id,
-                    "kind": self.flow_kind,
-                    "status": "queued",
-                    "request": request_identity,
-                    "private_snapshot": accepted_snapshot,
-                    "result": task_result,
-                })
+                bound_auth_ids: list[str] = []
+                if self.bind_execution_auth is not None:
+                    try:
+                        for node in execution_nodes:
+                            node_id = str(node.get("id") or "")
+                            binding_id = f"{run_id}:{node_id}"
+                            bound_auth_ids.append(binding_id)
+                            self.bind_execution_auth(binding_id, copy.deepcopy(prepared_requests[node_id]))
+                    except Exception:
+                        self._release_auth_if_task_absent(run_id, bound_auth_ids)
+                        raise HTTPException(
+                            status_code=503,
+                            detail=self._module_message("无法固定本次任务的账户凭据；任务未提交"),
+                        ) from None
+                try:
+                    self.storage.create_canvas_task({
+                        "id": run_id,
+                        "canvas_id": self.canvas_id,
+                        "module_id": self.module_id,
+                        "node_id": output_node_id,
+                        "kind": self.flow_kind,
+                        "status": "queued",
+                        "request": request_identity,
+                        "private_snapshot": accepted_snapshot,
+                        "result": task_result,
+                    })
+                except Exception:
+                    self._release_auth_if_task_absent(run_id, bound_auth_ids)
+                    raise
                 self.storage.update_run_status(run_id, "queued")
                 task = asyncio.create_task(self._execute(
                     run_id,
@@ -1077,13 +1136,15 @@ class HypitFlowRunner:
             await self._notify(run_id, "running")
             for node in execution_nodes:
                 node_id = str(node.get("id") or "")
+                auth_binding_id = f"{run_id}:{node_id}"
                 self._set_step(run_id, node_id, status="running")
                 actual_upstream = self._upstream_values(node_id, upstream_ids, collected, by_id, placeholders=False)
                 try:
-                    request = await self._await(self.prepare_node_request(
-                        task_canvas, node, request_id, actual_upstream, user_request, preflight=False,
-                    ))
-                    resolved = await self._await(self.preflight_node(task_canvas, node, request, request_id))
+                    with self.execution_auth_scope(auth_binding_id):
+                        request = await self._await(self.prepare_node_request(
+                            task_canvas, node, request_id, actual_upstream, user_request, preflight=False,
+                        ))
+                        resolved = await self._await(self.preflight_node(task_canvas, node, request, request_id))
                 except Exception as exc:
                     last_error_category = "input_validation"
                     raise RuntimeError(f"节点 {node_id} 的运行时输入校验失败：{self._safe_error(getattr(exc, 'detail', exc))}") from exc
@@ -1097,9 +1158,10 @@ class HypitFlowRunner:
                     self._set_step(run_id, node_id, status="running", provider_task_id=provider_task_id)
 
                 try:
-                    raw = await self._await(self.execute_node(
-                        task_canvas, node, request, request_id, resolved, on_submitted,
-                    ))
+                    with self.execution_auth_scope(auth_binding_id):
+                        raw = await self._await(self.execute_node(
+                            task_canvas, node, request, request_id, resolved, on_submitted,
+                        ))
                     pending = self._provider_pending(raw)
                     self._mark_submitted(run_id, pending["provider_task_id"] if pending else "")
                 except Exception as exc:
@@ -1144,7 +1206,8 @@ class HypitFlowRunner:
                         "title": str(node.get("title") or node.get("type") or self._module_message("Hypit 流程结果")),
                         "test": test,
                     }
-                    media = self._media_refs(await self._await(self.collect_results(raw, request, collect_task)))
+                    with self.execution_auth_scope(auth_binding_id):
+                        media = self._media_refs(await self._await(self.collect_results(raw, request, collect_task)))
                     if not media:
                         raise ValueError("节点没有返回可收集的媒体结果")
                     ids = self._result_ids(media)
@@ -1243,6 +1306,8 @@ class HypitFlowRunner:
                 if current not in {"failed", "cancelled", "succeeded"}:
                     self.storage.update_run_status(run_id, "failed", error=error)
             await self._notify(run_id, "failed")
+        finally:
+            self._release_auth_if_terminal(run_id, execution_nodes)
 
     async def cancel(self, run_id: str) -> dict[str, Any]:
         """Cancel only this runner's persistent task, preserving service-restart recovery semantics."""
@@ -1252,6 +1317,10 @@ class HypitFlowRunner:
             raise HTTPException(status_code=404, detail="模块文本优化任务不存在")
         status = str(flow.get("status") or "")
         if status in {"succeeded", "failed", "cancelled"}:
+            task_record = self.storage.get_canvas_task(run_id) or {}
+            private_snapshot = task_record.get("private_snapshot") if isinstance(task_record.get("private_snapshot"), Mapping) else {}
+            step_summaries = private_snapshot.get("steps") if isinstance(private_snapshot.get("steps"), list) else []
+            self._release_auth_if_terminal(run_id, [item for item in step_summaries if isinstance(item, dict)])
             return {"task_id": run_id, "status": status, "cancelled": status == "cancelled"}
         with self._active_guard:
             active = self._active.get(run_id)
@@ -1264,6 +1333,9 @@ class HypitFlowRunner:
         result = copy.deepcopy(task.get("result") if isinstance(task.get("result"), Mapping) else {})
         result.update({"error_category": "cancelled", "error": message})
         self.storage.update_canvas_task(run_id, status="cancelled", error=message, result=result)
+        task_snapshot = task.get("private_snapshot") if isinstance(task.get("private_snapshot"), Mapping) else {}
+        step_summaries = task_snapshot.get("steps") if isinstance(task_snapshot.get("steps"), list) else []
+        self._release_auth_if_terminal(run_id, [item for item in step_summaries if isinstance(item, dict)])
         run = self.storage.get_run(run_id)
         if run and self._attempt(run).get("status") not in {"succeeded", "failed", "cancelled"}:
             self.storage.update_run_status(run_id, "cancelled", error=message)

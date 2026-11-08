@@ -740,6 +740,7 @@ class StudioAppExecution:
     async def _prepare_runninghub_request(self, request: dict[str, Any]) -> dict[str, Any]:
         prepared = copy.deepcopy(request)
         refs = prepared.get('references') or []
+        used = set()
         refs_by_kind = {kind: [ref for ref in refs if ref.get('kind') == kind and ref.get('url')]
                         for kind in ('image', 'video', 'audio')}
         uploaded_by_url: dict[str, str] = {}
@@ -761,12 +762,13 @@ class StudioAppExecution:
                 continue
             value = (prepared.get('app_field_values') or {}).get(key)
             ref = next((item for item in refs_by_kind[raw] if str(item.get('url')) == str(value)), None)
-            if ref is None and 'media_field_keys' not in prepared:
+            if ref is None and 'media_field_keys' not in prepared and key not in (prepared.get('app_field_values') or {}):
                 ref = next((item for item in refs_by_kind[raw] if id(item) not in used), None)
             if ref is None and key in media_field_keys:
                 raise ValueError(f'工作流媒体字段 {key} 没有匹配的引用素材')
             if ref is None:
                 continue
+            used.add(id(ref))
             reference_key = str(ref.get('url') or '')
             uploaded = uploaded_by_url.get(reference_key)
             if not uploaded:
@@ -840,7 +842,7 @@ class StudioAppExecution:
             raise ValueError('RunningHub 提交成功但没有返回 taskId')
         request['provider_task_id'] = provider_task_id
         if on_submitted:
-            await on_submitted(provider_task_id)
+            await _invoke(on_submitted, provider_task_id)
         last = {}
         for index in range(self.max_polls):
             if index and self.poll_interval:

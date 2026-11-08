@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+from contextlib import nullcontext
 from html.parser import HTMLParser
 import json
 import mimetypes
@@ -1028,6 +1029,10 @@ def request_for(canvas, node, *, app_fields=None, comfy_fields=None):
             bound = None
             node_id, field_name = field_parts(field)
             binding_key = f'{node_id}::{field_name}'
+            local_params = settings.get('rhParams') or {}
+            has_local_value = any(candidate and candidate in local_params for candidate in (
+                key, binding_key, str(field.get('paramid') or '').strip(),
+            ))
             requested_ref = str(bindings.get(key) or bindings.get(binding_key) or '').strip()
             if requested_ref:
                 bound = next((ref for ref in refs
@@ -1038,25 +1043,42 @@ def request_for(canvas, node, *, app_fields=None, comfy_fields=None):
                                      in {key, binding_key}
                                      and ref.get('kind') == kind), None)
                 bound = target_bound
-            if bound is None and kind in media_by_kind and media_field_counts[kind] == 1 and len(media_by_kind[kind]) == 1:
+            connected = any(
+                str(edge.get('to') or '') == str(node.get('id') or '')
+                and str(edge.get('targetFieldKey') or edge.get('target_field_key') or '') in {key, binding_key}
+                and str(edge.get('kind') or 'input') not in {'result', 'story', 'history'}
+                for edge in canvas.get('connections', []) if isinstance(edge, dict)
+            )
+            if bound is None and not connected and kind in media_by_kind and media_field_counts[kind] == 1 and len(media_by_kind[kind]) == 1:
                 bound = media_by_kind[kind][0]
+            bound_value = (bound or {}).get('text', (bound or {}).get('content', '')) if kind == 'text' else (bound or {}).get('url')
+            if connected and not str(bound_value or '').strip():
+                raise ValueError(f'AI 应用已连接字段 {key} 的来源尚无可用内容，请先填写或运行来源节点')
             if kind == 'text':
                 if bound:
                     value = bound.get('text', bound.get('content', ''))
-                elif value in (None, '') and str(field.get('inputRole') or field.get('input_role') or field.get('role') or '').strip().lower() in {
+                elif not has_local_value and value in (None, '') and str(field.get('inputRole') or field.get('input_role') or field.get('role') or '').strip().lower() in {
                     'prompt', 'positive_prompt', 'caption', 'description', 'instruction'
                 }:
                     value = prompt
-                if value in (None, ''):
+                if not has_local_value and value in (None, ''):
                     value = default_value(field)
             elif kind in {'image', 'video', 'audio'}:
-                value = (bound or {}).get('url') or ''
+                value = (bound or {}).get('url') if bound else (
+                    value if has_local_value else ('' if workflow_mode else default_value(field))
+                )
+                if not bound and isinstance(value, str) and value.startswith(('/api/materials/', '/api/results/', '/assets/', '/input/', '/output/', 'https://', 'http://')):
+                    stored_media = (local_params.get(key) or {}).get('media', {}) if isinstance(local_params.get(key), dict) else {}
+                    refs.append({**{name: stored_media[name] for name in ('id', 'assetId', 'resultId', 'materialId', 'name') if name in stored_media},
+                                 'kind': kind, 'url': value, 'targetFieldKey': key})
             elif value is None:
                 value = default_value(field)
             if value in (None, ''):
                 if field.get('required') is True:
                     raise ValueError(f"RunningHub AI 应用缺少必填输入：{key}")
-                continue
+                if not has_local_value:
+                    continue
+                value = ''
             value = coerce(field, value)
             field_values[key] = value
             if kind in {'text', 'image', 'video', 'audio'}:
@@ -1135,7 +1157,8 @@ def request_for(canvas, node, *, app_fields=None, comfy_fields=None):
 
 class StudioExecution:
     def __init__(self, *, load_canvas, save_canvas, lock, storage, preflight, generate, collect, notify,
-                 task_metadata=None):
+                 task_metadata=None, bind_execution_auth=None, execution_auth_scope=None,
+                 release_execution_auth=None):
         self.load = load_canvas
         self.save = save_canvas
         self.lock = lock
@@ -1145,7 +1168,40 @@ class StudioExecution:
         self.collect = collect
         self.notify = notify
         self.task_metadata = task_metadata
+        self.bind_execution_auth = bind_execution_auth
+        self.execution_auth_scope = execution_auth_scope or (lambda _binding_id: nullcontext())
+        self.release_execution_auth = release_execution_auth
         self.handles = {}
+
+    def _release_auth_binding_safely(self, binding_id):
+        if self.release_execution_auth is None:
+            return
+        try:
+            self.release_execution_auth(str(binding_id))
+        except Exception:
+            # 凭据清理故障不得改写任务状态，也不得把异常详情写入公开任务。
+            return
+
+    def _release_auth_if_terminal(self, task_id):
+        if self.release_execution_auth is None:
+            return
+        try:
+            task = self.storage.get_canvas_task(str(task_id))
+        except Exception:
+            return
+        if isinstance(task, dict) and task.get('status') in {'succeeded', 'failed', 'cancelled'}:
+            self._release_auth_binding_safely(task_id)
+
+    def _release_auth_if_task_absent(self, task_id):
+        if self.release_execution_auth is None:
+            return
+        try:
+            task = self.storage.get_canvas_task(str(task_id))
+        except Exception:
+            # 持久化状态不确定时保留绑定，避免让已创建任务失去原身份。
+            return
+        if task is None:
+            self._release_auth_binding_safely(task_id)
 
     async def submit(self, canvas, node, request_id):
         task_id = 'studio_' + hashlib.sha256(f"{canvas['id']}:{node['id']}:{request_id}".encode()).hexdigest()[:32]
@@ -1185,10 +1241,20 @@ class StudioExecution:
                     'runRef': validated, 'creationSignature': signature, **copy.deepcopy(task_metadata)}
             for key in ('creationTasks', 'resultVersions'):
                 task.pop(key, None)
-            self.storage.create_canvas_task({'id': task_id, 'status': 'queued', 'kind': request['kind'],
-                                            'canvas_id': canvas['id'], 'node_id': node['id'],
-                                            'request': request, 'creation_snapshot': task,
-                                            **copy.deepcopy(task_metadata)})
+            if self.bind_execution_auth is not None:
+                try:
+                    self.bind_execution_auth(task_id, copy.deepcopy(request))
+                except Exception:
+                    self._release_auth_if_task_absent(task_id)
+                    raise ValueError('无法固定本次任务的账户凭据；任务未提交') from None
+            try:
+                self.storage.create_canvas_task({'id': task_id, 'status': 'queued', 'kind': request['kind'],
+                                                'canvas_id': canvas['id'], 'node_id': node['id'],
+                                                'request': request, 'creation_snapshot': task,
+                                                **copy.deepcopy(task_metadata)})
+            except Exception:
+                self._release_auth_if_task_absent(task_id)
+                raise
             current.setdefault('creationTasks', []).append(task)
             self.save(latest)
         await self.notify(latest)
@@ -1235,12 +1301,13 @@ class StudioExecution:
     async def _run(self, canvas_id, task, request):
         try:
             await self._transition(canvas_id, task, 'running')
-            result = await self.generate(request)
-            if result.get('jimeng_pending') or result.get('pending'):
-                task['upstreamPending'] = copy.deepcopy(result)
-                await self._transition(canvas_id, task, 'recoverable', error='上游仍在运行，需查询原任务')
-                return
-            media = await self.collect(result, request, task)
+            with self.execution_auth_scope(str(task['id'])):
+                result = await self.generate(request)
+                if result.get('jimeng_pending') or result.get('pending'):
+                    task['upstreamPending'] = copy.deepcopy(result)
+                    await self._transition(canvas_id, task, 'recoverable', error='上游仍在运行，需查询原任务')
+                    return
+                media = await self.collect(result, request, task)
             if not media:
                 raise ValueError('接口没有返回可保存的结果')
             await self._transition(canvas_id, task, 'succeeded', media=media)
@@ -1248,6 +1315,8 @@ class StudioExecution:
             await self._transition(canvas_id, task, 'cancelled', error='已停止本地等待，上游任务可能仍在运行')
         except Exception as exc:
             await self._transition(canvas_id, task, 'failed', error=str(getattr(exc, 'detail', None) or exc))
+        finally:
+            self._release_auth_if_terminal(task['id'])
 
     async def cancel(self, canvas, node, task_id):
         task = self.storage.get_canvas_task(task_id)
@@ -1261,4 +1330,7 @@ class StudioExecution:
             if current.get('status') in {'queued', 'running'}:
                 await self._transition(canvas['id'], task['creation_snapshot'], 'cancelled',
                                        error='已取消本地任务；已提交的上游请求可能仍在运行')
+                self._release_auth_if_terminal(task_id)
+        else:
+            self._release_auth_if_terminal(task_id)
         return self.storage.get_canvas_task(task_id)

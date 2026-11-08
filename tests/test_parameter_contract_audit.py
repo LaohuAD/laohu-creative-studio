@@ -131,9 +131,9 @@ console.log(JSON.stringify(c.parameterIssues({model_id:'fixture',parameters:{
         snapshot = json.loads((ROOT / 'data/model_capabilities/snapshots/ai-money-catalog.json').read_text())
         raw_models = snapshot.get('source_models') or []
         raw_ids = {item.get('id') for item in raw_models if isinstance(item, dict)}
-        self.assertEqual(snapshot.get('source_model_count'), 274)
-        self.assertEqual(len(raw_models), 274)
-        self.assertEqual(len(raw_ids), 274)
+        self.assertEqual(snapshot.get('source_model_count'), len(raw_models))
+        self.assertEqual(len(raw_ids), len(raw_models), '原始目录的模型 ID 不得重复或缺失')
+        self.assertGreaterEqual(len(raw_ids), 274, '目录刷新应保留已有模型')
         self.assertIn('FlashVSR_video_upscale', snapshot['video_models'])
 
         expected = {

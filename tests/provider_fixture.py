@@ -1,10 +1,13 @@
 """能力回归使用公开档案构造启用清单，不读取维护者的模型配置或密钥。"""
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+
+from studio_laohu_account import LaohuAccountState
 
 
 def configured_providers():
@@ -50,6 +53,29 @@ class ConfiguredProvidersMixin:
         # 都把这条间接写入链指向外接盘测试缓存，避免污染用户历史。
         history_cache = ROOT / 'cache' / 'studio-tests'
         history_cache.mkdir(parents=True, exist_ok=True)
+        self._provider_state_tempdir = tempfile.TemporaryDirectory(
+            prefix='provider-test-account-', dir=history_cache,
+        )
+        self.addCleanup(self._provider_state_tempdir.cleanup)
+        account_state = LaohuAccountState(base_dir=self._provider_state_tempdir.name)
+        account_state_patch = patch.object(main, 'LAOHU_ACCOUNT_STATE', account_state)
+        account_state_patch.start()
+        self.addCleanup(account_state_patch.stop)
+
+        # These suites must not read the maintainer's live provider environment.
+        empty_api_env = Path(self._provider_state_tempdir.name) / 'API' / '.env'
+        empty_api_env.parent.mkdir(parents=True, exist_ok=True)
+        empty_api_env.write_text('', encoding='utf-8')
+        api_env_patch = patch.object(main, 'API_ENV_FILE', str(empty_api_env))
+        api_env_patch.start()
+        self.addCleanup(api_env_patch.stop)
+        credential_env_patch = patch.dict(os.environ, {
+            'API_PROVIDER_LAOHU_KEY': '',
+            'API_PROVIDER_AI_MONEY_KEY': '',
+        })
+        credential_env_patch.start()
+        self.addCleanup(credential_env_patch.stop)
+
         self._history_tempdir = tempfile.TemporaryDirectory(
             prefix='provider-test-history-', dir=history_cache,
         )

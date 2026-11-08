@@ -256,6 +256,42 @@ class HeadlessCanvasTests(unittest.IsolatedAsyncioTestCase):
                 "reject-ordinary-input-lock",
             )
 
+    async def test_text_input_lock_works_in_each_module_settings_and_allows_manual_edit(self):
+        for module in ("hypit", "article", "music", "script", "novel"):
+            with self.subTest(module=module):
+                self._use_hypit_settings_canvas()
+                canvas_id = f"{module}-settings"
+                self.stored["id"] = canvas_id
+                material = await self.executor.execute(canvas_id, "create_node", {
+                    "kind": "material", "title": "参考音频台词", "text": "固定参考台词",
+                }, f"create-{module}-text")
+                result = await self.executor.execute(canvas_id, "update_node", {
+                    "node_id": material["node_id"], "hypitInputLocked": True,
+                }, f"lock-{module}-text")
+                self.assertIs(result["node"]["hypitInputLocked"], True)
+                edited = await self.executor.execute(canvas_id, "update_node", {
+                    "node_id": material["node_id"], "text": "手动修改参考台词",
+                }, f"edit-{module}-locked-text")
+                self.assertIs(edited["node"]["hypitInputLocked"], True)
+                self.assertEqual(edited["node"]["images"][0]["text"], "手动修改参考台词")
+                unlocked = await self.executor.execute(canvas_id, "update_node", {
+                    "node_id": material["node_id"], "hypit_input_locked": False,
+                }, f"unlock-{module}-text")
+                self.assertIs(unlocked["node"]["hypitInputLocked"], False)
+        self.assertEqual(self.submitted, [])
+
+    async def test_input_lock_does_not_apply_to_generated_result_materials(self):
+        self._use_hypit_settings_canvas()
+        material = await self.executor.execute("hypit-settings", "create_node", {
+            "kind": "material", "title": "生成结果", "text": "模型生成结果",
+        }, "create-result-for-lock")
+        node = next(n for n in self.stored["nodes"] if n["id"] == material["node_id"])
+        node["sourceKind"] = "result"
+        with self.assertRaisesRegex(ValueError, "输入素材"):
+            await self.executor.execute("hypit-settings", "update_node", {
+                "node_id": node["id"], "hypitInputLocked": True,
+            }, "reject-result-lock")
+
     async def test_create_update_connect_duplicate_branch_and_reopen(self):
         material = await self.executor.execute(
             "canvas-1",

@@ -2184,6 +2184,18 @@ def save_provider_catalog_snapshot(
         },
     }
     path = Path(root) / "data" / "model_capabilities" / "snapshots" / f"{safe_provider_id}-catalog.json"
+    if safe_provider_id == "ai-money":
+        raw = (catalog or {}).get("source_models")
+        if isinstance(raw, list) and raw:
+            payload["source_models"] = [{k: item[k] for k in ("id", "object", "created", "owned_by", "supported_endpoint_types") if k in item} for item in raw if isinstance(item, dict) and item.get("id")]
+            payload["source_model_count"] = len(payload["source_models"])
+            from datetime import datetime, timezone
+            payload["source_retrieved_at"] = datetime.now(timezone.utc).isoformat()
+        elif path.exists():
+            previous = _read_json(path)
+            for key in ("source_models", "source_model_count", "source_retrieved_at", "unclassified_models"):
+                if key in previous:
+                    payload[key] = previous[key]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
@@ -3041,7 +3053,7 @@ class ModelCapabilityRegistry:
                     if spec.get("max") is not None and numeric > float(spec["max"]):
                         raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不能大于 {spec['max']}")
                 raise ModelCapabilityError(f"模型 {model_id} 的参数 {key} 不支持取值 {value}")
-        if str(profile.get("model_id") or "").startswith(("MiniMax-H3", "laohu-image-g-v2.5-", "suno-")):
+        if profile.get("provider_id") == "ai-money" or str(profile.get("model_id") or "").startswith(("MiniMax-H3", "laohu-image-g-v2.5-", "suno-")):
             from laohu_protocols import validate_parameters
             try:
                 validate_parameters(profile["model_id"], parameters, counts, normalized_roles, input_metadata)
@@ -3061,7 +3073,7 @@ class ModelCapabilityRegistry:
     @classmethod
     def validate_input_metadata(cls, profile: Dict[str, Any], input_metadata: Dict[str, Any]) -> None:
         constraint_keys = {
-            "min_chars", "max_chars", "min_bytes", "max_bytes",
+            "min_chars", "max_chars", "min_bytes", "max_bytes", "max_total_bytes",
             "min_width", "max_width", "min_height", "max_height",
             "min_pixels", "max_pixels", "max_aspect_ratio",
             "min_duration_seconds", "max_duration_seconds", "max_total_duration_seconds",
@@ -3083,6 +3095,7 @@ class ModelCapabilityRegistry:
             if not items:
                 continue
             total_duration = 0.0
+            total_bytes = 0.0
             for index, item in enumerate(items):
                 name = str(item.get("name") or spec.get("label") or f"{key} {index + 1}")
                 def numeric(field: str, readable_name: str) -> float:
@@ -3105,6 +3118,8 @@ class ModelCapabilityRegistry:
                         raise ModelCapabilityError(f"模型 {model_id} 的「{name}」不能小于 {cls._format_bytes(constraints['min_bytes'])}")
                     if "max_bytes" in constraints and size > float(constraints["max_bytes"]):
                         raise ModelCapabilityError(f"模型 {model_id} 的「{name}」不能超过 {cls._format_bytes(constraints['max_bytes'])}")
+                if "max_total_bytes" in constraints:
+                    total_bytes += numeric("bytes", "文件大小")
                 needs_dimensions = any(field in constraints for field in ("min_width", "max_width", "min_height", "max_height", "min_pixels", "max_pixels", "max_aspect_ratio"))
                 if needs_dimensions:
                     width = numeric("width", "宽度")
@@ -3135,6 +3150,8 @@ class ModelCapabilityRegistry:
                         raise ModelCapabilityError(f"模型 {model_id} 的「{name}」时长不能短于 {constraints['min_duration_seconds']} 秒")
                     if "max_duration_seconds" in constraints and duration > float(constraints["max_duration_seconds"]):
                         raise ModelCapabilityError(f"模型 {model_id} 的「{name}」时长不能超过 {constraints['max_duration_seconds']} 秒")
+            if "max_total_bytes" in constraints and total_bytes > float(constraints["max_total_bytes"]):
+                raise ModelCapabilityError(f"模型 {model_id} 的参考素材总大小超出限制")
             if "max_total_duration_seconds" in constraints and total_duration > float(constraints["max_total_duration_seconds"]):
                 label = str(spec.get("label") or key)
                 raise ModelCapabilityError(f"模型 {model_id} 的「{label}」总时长不能超过 {constraints['max_total_duration_seconds']} 秒")

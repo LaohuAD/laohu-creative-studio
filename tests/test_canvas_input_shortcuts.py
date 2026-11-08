@@ -18,14 +18,8 @@ class CanvasInputShortcutTests(unittest.TestCase):
             source = (ROOT / 'static/js/smart-canvas.js').read_text()
             helper = source[source.index('const SMART_TEXT_EDITABLE_SELECTOR'):source.index('function canvasEditableRootDescriptor')]
             handler = source[source.index('function canvasInputEnterAction'):source.index("promptInput.addEventListener('keydown'", source.index('function canvasInputEnterAction'))]
-            cls.page._evaluate('''
-            (async () => {
-              for (let i=0; i<100 && !document.body; i++) {
-                await new Promise(resolve => setTimeout(resolve, 50));
-              }
-              if (!document.body) throw new Error('测试页面正文未就绪');
-            })()
-        ''')
+            # 初始 about:blank 也有 body；须等目标文档及其脚本结束，才可替换夹具。
+            cls.page._wait_for_demo_ready('输入快捷键夹具替换')
             cls.page._evaluate('''
             document.body.innerHTML = `<div id="composer" class="open" data-smart-node-id="n1">
               <div id="promptInput" contenteditable="true"></div>
@@ -45,6 +39,8 @@ class CanvasInputShortcutTests(unittest.TestCase):
             function selectedNode(){return nodes[0];}
             function isSmartRunnableNode(node){return ['text','image','video','audio','music','app','comfy'].includes(node?.type);}
             function smartNodeInFlight(){return busy;}
+            function activeRunsForExecutionNode(){return [];}
+            var selectedNodeRunOperations = new Map();
             function smartCascadeIsLoopRunning(){return false;}
             runBtn.onclick = () => counts.run++;
             document.querySelector('[data-text-editor-save]').onclick = () => counts.save++;

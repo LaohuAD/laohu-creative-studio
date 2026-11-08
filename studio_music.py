@@ -24,6 +24,8 @@ TIMED_LYRIC_MAX_ROWS = 5000
 
 def music_source_sha256(music: Mapping[str, Any]) -> str:
     source = {key: str(music.get(key) or "") for key in ("title", "lyrics", "style_prompt", "notes", "cover_prompt")}
+    if "selected_score_ref_id" in music:
+        source["selected_score_ref_id"] = music["selected_score_ref_id"]
     source["score_refs"] = copy.deepcopy(music.get("score_refs") or [])
     source["reference_audio_refs"] = copy.deepcopy(music.get("reference_audio_refs") or [])
     return hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -49,9 +51,23 @@ class TimedLyricInput(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class ScoreEditInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reference_id: str = Field(min_length=1, max_length=160)
+    source: str = Field(max_length=MAX_TEXT_BYTES)
+
+
+class MusicRestoreRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+
+
 class MusicPutRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
+    archive: bool = True
+    archive_fields: Optional[list[str]] = None
+    score_edit: Optional[ScoreEditInput] = None
+    selected_score_ref_id: Optional[str] = None
     title: Optional[str] = None
     lyrics: Optional[str] = None
     style_prompt: Optional[str] = None
@@ -83,10 +99,12 @@ class StudioMusicStore:
 
     def __init__(self, project_store: StudioProjectStore,
                  resolve_media_reference: Callable[[str, str], Mapping[str, Any] | None] | None = None,
-                 read_media_reference: Callable[[str, str], bytes | None] | None = None):
+                 read_media_reference: Callable[[str, str], bytes | None] | None = None,
+                 save_score_source: Callable[[str, str, str], Mapping[str, Any]] | None = None):
         self.project_store = project_store
         self.resolve_media_reference = resolve_media_reference
         self.read_media_reference = read_media_reference
+        self.save_score_source = save_score_source
 
     @staticmethod
     def _music(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -161,6 +179,7 @@ class StudioMusicStore:
             music["updated_at"] = int(record.get("updated_at") or 0)
             music["project_id"] = project_id
             music["source_sha256"] = music_source_sha256(music)
+            music["field_versions"] = self._field_versions(music)
             music["source_versions"] = self._project_source_versions(music.get("source_versions") or [])
             music["title_candidates"] = self._project_candidates(music.get("title_candidates"))
             music["score_refs"] = self._project_refs(music.get("score_refs"), score=True)
@@ -168,6 +187,39 @@ class StudioMusicStore:
             music["cover_variants"] = self._project_history(music.get("cover_variants"), "image")
             music["audio_variants"] = self._project_history(music.get("audio_variants"), "audio")
             return music
+
+    @staticmethod
+    def _field_versions(music):
+        # Legacy full snapshots remain untouched. Project only real per-field changes.
+        fields = ("title", "lyrics", "style_prompt", "notes")
+        if isinstance(music.get("field_versions"), dict):
+            return copy.deepcopy(music["field_versions"])
+        result = {field: [] for field in fields}
+        snapshots = list(music.get("source_versions") or []) + [music]
+        if music.get("title_candidates"):
+            snapshots = list(music["title_candidates"].values()) + snapshots
+        for snapshot in snapshots:
+            for field in fields:
+                value = snapshot.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                identity = value.strip() if field == "title" else value
+                digest = hashlib.sha256(identity.encode()).hexdigest()
+                if any(v["id"] == digest for v in result[field]):
+                    continue
+                result[field].append({"id": digest, "number": len(result[field]) + 1,
+                                      "content": value, "created_at": snapshot.get("created_at", 0)})
+        return result
+
+    def restore(self, project_id, field, version_id, expected_revision):
+        if field not in {"title", "lyrics", "style_prompt", "notes"}:
+            raise HTTPException(400, "未知音乐内容类型")
+        with self.project_store.lock:
+            current = self.get(project_id)
+            version = next((v for v in current["field_versions"].get(field, []) if v["id"] == version_id), None)
+            if version is None:
+                raise HTTPException(404, "音乐版本不存在")
+            return self.put(project_id, MusicPutRequest(expected_revision=expected_revision, **{field: version["content"]}))
 
     def _project_candidates(self, raw: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(raw, dict):
@@ -182,6 +234,8 @@ class StudioMusicStore:
     @staticmethod
     def _snapshot(music: Mapping[str, Any], *, source_hash: str = "", accepted_revision: int = 0) -> dict[str, Any]:
         value = {key: str(music.get(key) or "") for key in ("title", "lyrics", "style_prompt", "notes", "cover_prompt")}
+        if "selected_score_ref_id" in music:
+            value["selected_score_ref_id"] = music["selected_score_ref_id"]
         value["reference_audio_refs"] = copy.deepcopy(music.get("reference_audio_refs") or [])
         # Score attachments contribute to source_sha256, so every immutable source
         # version must retain the shared identities that produced that fingerprint.
@@ -335,6 +389,11 @@ class StudioMusicStore:
                                                   "music": self.get(project_id), "revision": actual_revision})
             music = copy.deepcopy(self._music(record))
             fields = payload.model_fields_set
+            music["field_versions"] = self._field_versions(music)
+            if payload.archive_fields is not None and any(f not in {"title", "lyrics", "style_prompt", "notes", "scores"} for f in payload.archive_fields):
+                raise HTTPException(400, "未知归档字段")
+            if "title" in fields and "selected_title_candidate_id" not in fields:
+                music["selected_title_candidate_id"] = None
             for key in ("title", "lyrics", "style_prompt", "notes", "cover_prompt"):
                 if key in fields:
                     value = getattr(payload, key)
@@ -354,6 +413,11 @@ class StudioMusicStore:
                     if prior and prior.get("title") != candidate.title:
                         raise HTTPException(409, f"标题候选 {candidate_id} 已存在且不可覆盖")
                     candidates.setdefault(candidate_id, value)
+                    title_versions = music["field_versions"].setdefault("title", [])
+                    digest = hashlib.sha256(candidate.title.strip().encode()).hexdigest()
+                    if not any(v["id"] == digest for v in title_versions):
+                        title_versions.append({"id": digest, "number": len(title_versions) + 1,
+                                               "content": candidate.title, "created_at": value["created_at"]})
             music["title_candidates"] = candidates
             if "selected_title_candidate_id" in fields:
                 selected = payload.selected_title_candidate_id
@@ -414,12 +478,56 @@ class StudioMusicStore:
                         prior_start = row["start"]
                     variant["timed_lyrics"] = serialized
 
+            if "selected_score_ref_id" in fields:
+                selected = payload.selected_score_ref_id
+                if selected and not any(r.get("id") == selected for r in music.get("score_refs", [])):
+                    raise HTTPException(400, "乐谱不存在")
+                music["selected_score_ref_id"] = selected
+            if payload.score_edit is not None:
+                edit = payload.score_edit
+                ref = next((r for r in music.get("score_refs", []) if r.get("id") == edit.reference_id), None)
+                if ref is None or ref.get("format") not in {"abc", "musicxml"}:
+                    raise HTTPException(400, "只有 ABC 和 MusicXML 乐谱可编辑源文")
+                if len(edit.source.encode("utf-8")) > MAX_TEXT_BYTES or "\x00" in edit.source:
+                    raise HTTPException(413, "乐谱内容超过限制或包含无效字符")
+                music.setdefault("score_drafts", {})[edit.reference_id] = edit.source
+            archive_fields = payload.archive_fields if payload.archive_fields is not None else list(fields)
+            if payload.archive and (payload.score_edit or "scores" in archive_fields):
+                music.pop("score_draft_error", None)
+                for ref_id, source in list(music.get("score_drafts", {}).items()):
+                    ref = next((r for r in music.get("score_refs", []) if r.get("id") == ref_id), None)
+                    if not ref:
+                        continue
+                    try:
+                        self._validate_score_format(ref, source.encode("utf-8"))
+                    except HTTPException as exc:
+                        music["score_draft_error"] = str(exc.detail)
+                        continue
+                    if self.save_score_source is None:
+                        raise HTTPException(503, "乐谱文件保存服务未接入")
+                    saved = self.save_score_source(source, ref["format"], project_id)
+                    added = self._resolve_ref({"result_id": saved["id"], "format": ref["format"]})
+                    self._validate_score_reference(added)
+                    music["score_refs"] = self._merge_refs(music.get("score_refs", []), [added], field="score_refs")
+                    music["selected_score_ref_id"] = added["id"]
+                    del music["score_drafts"][ref_id]
+            if payload.archive:
+                for field in ("title", "lyrics", "style_prompt", "notes"):
+                    if field not in archive_fields and not (field == "title" and "selected_title_candidate_id" in fields):
+                        continue
+                    value = str(music.get(field) or "")
+                    identity = value.strip() if field == "title" else value
+                    digest = hashlib.sha256(identity.encode()).hexdigest()
+                    versions = music["field_versions"].setdefault(field, [])
+                    if value.strip() and not any(v["id"] == digest for v in versions):
+                        versions.append({"id": digest, "number": len(versions) + 1, "content": value,
+                                         "created_at": int(time.time() * 1000)})
             new_source_hash = music_source_sha256(music)
             old_source_hash = music_source_sha256(record["music"])
             next_revision = actual_revision + 1
             source_versions = music.get("source_versions") if isinstance(music.get("source_versions"), list) else []
             source_versions = copy.deepcopy(source_versions)
-            if new_source_hash != old_source_hash:
+            if payload.archive and (new_source_hash != old_source_hash or (payload.archive_fields and not any(v.get("source_sha256") == new_source_hash for v in source_versions))):
                 source_versions.append({
                     "id": f"source_{next_revision}_{new_source_hash[:16]}", "source_sha256": new_source_hash, "revision": next_revision,
                     "created_at": int(time.time() * 1000), **self._snapshot(music, source_hash=new_source_hash),
@@ -519,6 +627,10 @@ class StudioMusicStore:
                 return self.put(project_id, payload)
             except StudioProjectNotFound as exc:
                 raise HTTPException(404, exc.detail) from exc
+
+        @router.post("/{project_id}/versions/{field}/{version_id}/restore", dependencies=[Depends(_guard_local_write)])
+        async def restore_music_version(project_id: str, field: str, version_id: str, payload: MusicRestoreRequest):
+            return self.restore(project_id, field, version_id, payload.expected_revision)
 
         @router.post("/{project_id}/generations", dependencies=[Depends(_guard_local_write)])
         async def submit_music_generation(project_id: str, payload: MusicGenerationRequest):

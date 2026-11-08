@@ -2,6 +2,16 @@
 
 Codex、Claude Code 或其他能调用 HTTP／Python 的 Agent，可以通过结构化命令在当前画布创建节点、填写内容、连接素材、调用模型并检查结果。无需安装新的 Codex 插件，也不要求把模型密钥交给 Agent。
 
+## 按能力表达任务
+
+模块设置图的用途统一称为“文本处理（`text`）、图片创作（`image`）、视频创作（`video`）、配音（`voice`）、音效（`audio`）、音乐（`music`）”；英文分别为 Text Processing、Image Creation、Video Creation、Voice-over、Sound Effects、Music。视频克隆模块的内部身份仍为 `hypit`，接口路径和原生工程不因显示更名改变。
+
+用户可以说“用视频克隆的配音能力，把这段话读出来，只返回结果”，或“用文章模块的图片创作能力，为当前文章生成封面并关联文章”。这些是用法示例，不是接入时自动执行的指令。按整句话理解动作、配置来源、输入和结果归属，不要求固定口令；“图片处理”须区分生成与编辑，并核对实际模型是否支持，“音频”须结合意图区分配音、音效或音乐。
+
+先读取运行服务 `/openapi.json` 和对应项目的 `connection.md`。模块配置图由模块目录给出；通过 `GET /api/canvases/{canvas_id}` 读用途与连线，再通过节点目录/详情取得稳定节点 ID、显示编号、配置与输入。输出端口表示用途，实际运行来源执行节点；多个来源或输入无法唯一定位时再澄清，不根据模型名称推断能力。
+
+只取结果使用普通来源节点 `run_node` 并查询原任务，结果留在共享结果库和节点历史，不自动写入作品字段。准备输入时保留锁定素材、系统提示词及模型默认配置，仅编辑用户明确要求修改的输入；不为单次调用重写共享默认配置。需要关联文章、音乐、剧本或小说时，按对应接入文档走项目 `generations`；视频克隆作品仍走原生 `check/plan/build`。未支持的输入或模块用途明确说明，不虚构无项目生成接口、不创建隐藏工程。软件页面可以关闭，执行服务须保持运行；超时恢复相同操作 ID 和任务，不重复提交收费生成。
+
 ## 连接
 
 1. 启动本项目，使用启动器打开的地址（例如 `http://192.168.1.253:3000/`），或本机 `http://127.0.0.1:3000/`，选择需要创作的项目。标签页可以关闭，服务需保持运行。
@@ -80,6 +90,10 @@ Codex、Claude Code 或其他能调用 HTTP／Python 的 Agent，可以通过结
 素材 URL 应使用上传／查询接口实际返回的 URL，不要推测路径。已有文本素材可用 `update_node` 修改正文；旧正文保留为同一节点内的历史版本，不覆盖旧文件。
 
 RunningHub `app` 节点使用已同步的 `rhAppId`、`rhConfigKey`、`rhParams`，通过 `args.run_settings` 填写。多输入连线必须明确 `target_field_key`，格式为官方 `nodeId::fieldName`。`comfy` 节点的本地 ComfyUI 对应 `comfyWorkflow`、`comfyParams`。不要把工作流 ID 填进 AI 应用入口。
+
+原样传入的台词使用 `kind:"material"` 的文字素材，避免为了输入台词创建 `text` 生成节点。视频克隆、文章、音乐、剧本和小说设置图可用 `update_node` 的 `args.hypitInputLocked:true` 固定输入素材，`false` 允许模块任务替换；锁定后仍可用 `text` 手动修改正文。执行节点、生成结果和普通画布不接受该输入锁。以音色克隆为例，参考音频与参考台词锁定，待生成台词保留为未锁定的独立文字素材，按该应用真实 Schema 分别连接精确字段；不要根据本例猜其他应用的字段键。
+
+AI 应用未连接字段省略 `rhParams` 对应项时沿用应用默认值；明确清空时保存 `rhParams["实际nodeId::fieldName"]={"value":""}`，不能用删除键代替清空。字段有真实外部连接时优先使用来源，来源尚无可用内容会拒绝运行，不回退成默认值。必填字段清空后也须补充输入才能运行。绿色字段仅表示连接，任务成功仍以持久任务和受管结果为准。
 
 ## Python CLI
 
@@ -238,7 +252,7 @@ python canvas_cli.py status CANVAS_ID COMMAND_ID
 
 ## 工作台项目与稳定编号
 
-每个项目拥有独立 ID。`GET /api/studio/projects?module=canvas` 读取画布项目列表，`module=hypit` 读取 Hypit 工程。不要根据当前标签、标题或列表顺序选择作品；同项目可以同时打开多个标签，也可以没有打开的页面。网页标签名固定为模块名。
+每个项目拥有独立 ID。`GET /api/studio/projects?module=canvas` 读取画布项目列表，`module=hypit` 读取 视频克隆 工程。不要根据当前标签、标题或列表顺序选择作品；同项目可以同时打开多个标签，也可以没有打开的页面。网页标签名固定为模块名。
 
 节点的 `displayNumber` 是项目内稳定编号。对单节点命令可使用 `args.node_number`，例如“修改 3 号节点”先核对编号和标题，再提交 `update_node`；真实连线与素材引用继续使用节点 ID。节点移动和排序不改变编号，删除的编号不分配给另一节点。
 
@@ -295,7 +309,7 @@ API 设置中的剧本和小说分别使用共享画布固定配置图 `script-s
 - 项目目录：`GET /api/studio/scripts/{project_id}`。按范围读取 `GET /api/studio/scripts/{project_id}/view?scope=root|episode|scene|segment&node_id=...`；根范围无需 `node_id`。读取某场正文、哈希和分段：`GET /api/studio/scripts/{project_id}/scenes/{scene_id}`。历史列表支持 `GET /api/studio/scripts/{project_id}/history?cursor=&limit=`；用列表里的 `content_sha256` 调用 `GET /api/studio/scripts/{project_id}/history/{content_sha256}` 可读取本项目历史中的完整草稿。该路由只读取此项目登记过的草稿哈希，不是任意 Blob 查询。正文按不可变内容哈希保存；缺失或校验失败要报告，不能当作空文本。
 - 命令：`POST /api/studio/scripts/{project_id}/commands`，JSON `{request_id,expected_revision,action,args}`；用 `GET /api/studio/scripts/{project_id}/commands/{request_id}` 恢复回执。OpenAPI 对各 action 和 batch 子操作给出准确的 discriminated union；未知字段拒绝。`restore_draft` 的 args 必须是 `{source_sha256,replace_structured:true}`，哈希须来自本项目历史列表。它将指定的历史草稿恢复为当前草稿，同时把当前结构化的集、场、分段及正文引用归档保留，不修改或删除画布节点。相同 `request_id` 只可重试相同载荷；内容变化、过期 revision、分段来源指纹失效时先重读并合并，服务端以 409 阻止覆盖。
 - `start` / `end` 是 Unicode 码点的左闭右开范围，按 Python 字符切片计数。替换分段会一次性更新场次完整正文、后续段偏移与来源指纹；结构化完整草稿必须保留未分段正文。只有已保存且每段文本与场次范围严格匹配的内容可导入。
-- 用户明确要求后才导入：`POST /api/agent/canvases/{canvas_id}/commands`，JSON `{request_id,action:"import_script_segments",args:{script_project_id,source_revision,expected_canvas_revision,scope,mode}}`。`scope` 为 `{"type":"project"}`、`{"type":"episode","ids":[...]}`、`{"type":"scene","ids":[...]}` 或 `{"type":"segments","ids":[...]}`；`mode` 为 `append` 或 `new_snapshot`。只允许普通画布，拒绝 Hypit/Article/Music 等模块配置图。剧本里空分段可保存在正文项目，但当前画布快照导入要求所选每段正文非空；遇到空段服务端返回 409 `EMPTY_SCRIPT_SEGMENT`，应先回到剧本补充正文，不创建伪造的制作进度节点。
+- 用户明确要求后才导入：`POST /api/agent/canvases/{canvas_id}/commands`，JSON `{request_id,action:"import_script_segments",args:{script_project_id,source_revision,expected_canvas_revision,scope,mode}}`。`scope` 为 `{"type":"project"}`、`{"type":"episode","ids":[...]}`、`{"type":"scene","ids":[...]}` 或 `{"type":"segments","ids":[...]}`；`mode` 为 `append` 或 `new_snapshot`。只允许普通画布，拒绝 视频克隆/Article/Music 等模块配置图。剧本里空分段可保存在正文项目，但当前画布快照导入要求所选每段正文非空；遇到空段服务端返回 409 `EMPTY_SCRIPT_SEGMENT`，应先回到剧本补充正文，不创建伪造的制作进度节点。
 - 一次成功导入是一个画布 revision：写入完整剧本/分段文本素材节点、段与完整剧本的 story 连线、带项目/正文指纹的 `sourceRef`，并将分段以 `production.role="segment"` 登记到创作进度。它是可追溯的单向快照，不双向同步，不运行模型。相同请求可恢复持久回执；相同来源重复 append 去重。已导入源发生变化时 append 返回 409，用户明确选择 `new_snapshot` 才保留旧节点并追加新快照。超时先原样重试相同 `request_id` 和请求，不换 ID 重复导入。
 - 工作流复制/ZIP 导出会带上已选节点对应的来源快照投影。导入时节点 ID 与快照引用一起重映射；源项目的命令回执不转移。复制后来源仍可追溯，但新副本不自动伪装成原导入节点或新增创作进度登记。
 
@@ -310,8 +324,8 @@ API 设置中的剧本和小说分别使用共享画布固定配置图 `script-s
 - 小说命令：`POST /api/studio/novels/{project_id}/commands`，JSON `{request_id,expected_revision,action,args,expected_sources?}`；恢复回执使用 `GET /api/studio/novels/{project_id}/commands/{request_id}`。动作、参数和 batch 子操作按运行服务 OpenAPI 的 discriminated union；未知字段拒绝。相同 request ID+相同载荷幂等，旧 project revision 或失效 expected_sources 返回 409。归档设定可恢复，恢复旧编辑修订会建立新的 edit_revision，不删除现有历史。
 - 章纲独立保存于章节对象。读当前章纲使用 `GET /api/studio/novels/{project_id}/chapters/{chapter_id}/outline`；读取历史时显式传 `?outline_revision=N`。响应含项目 `revision`、章节 ID、`outline_revision`、`current_outline_revision`、`outline_sha256`、`outline_markdown` 和 `selected_revision`。新章没有章纲时修订号为 `0`、正文和摘要为空。写入使用 `action:"set_chapter_outline"`、`args:{chapter_id,body_markdown}`，并携带当前 `expected_revision` 与稳定 `request_id`；超时原样恢复同一请求，409 后重读并合并。章纲不是小说正文：不得把它加入 `/markdown` 导出、正文 `view`、整书/卷章聚合或其他章节，也不进入画布快照；卷和整书没有章纲字段。
 
-## Hypit 模块
+## 视频克隆 模块
 
-Hypit 使用自己的原生工程、Run、Studio 与评论，不转换成画布节点。`GET /api/studio/projects/{id}/connection?module=hypit` 返回本项目的具体文件与执行入口。官方 Skill 只提供创作方法；工程、程序、模型、结果位置按工作台提供的配置，不能因 PATH 没有全局 `hypit` 就安装另一套程序或打开独立 Studio。
+视频克隆 使用自己的原生工程、Run、Studio 与评论，不转换成画布节点。`GET /api/studio/projects/{id}/connection?module=hypit` 返回本项目的具体文件与执行入口。官方 Skill 只提供创作方法；工程、程序、模型、结果位置按工作台提供的配置，不能因 PATH 没有全局 `hypit` 就安装另一套程序或打开独立 Studio。
 
-程序更新、Hypit 受管版本更新、Agent Skill 更新是不同操作。常规工作台更新不自动拉取 Hypit 上游最新版，不覆盖用户的 Agent 技能。原生结果按清单登记到统一素材库，工程删除不删除成品。
+程序更新、视频克隆 受管版本更新、Agent Skill 更新是不同操作。常规工作台更新不自动拉取 视频克隆 上游最新版，不覆盖用户的 Agent 技能。原生结果按清单登记到统一素材库，工程删除不删除成品。

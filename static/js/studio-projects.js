@@ -19,12 +19,12 @@
             en: { title:'Canvas', description:'Organise assets, connect canvas nodes and build each piece step by step.', listTitle:'Canvas projects', empty:'No canvas projects yet', emptyHint:'Create a project, then choose Open project on its card.', newName:'New canvas project', prepared:'Canvas environment', module:'Canvas' }
         },
         hypit: {
-            zh: { title:'Hypit克隆', description:'管理 Hypit 视频复刻项目，连接外部 Agent，并查看制作内容与结果。', listTitle:'Hypit克隆项目', empty:'还没有 Hypit克隆项目', emptyHint:'创建项目后，点击卡片上的“Agent 接入”复制指令，或点击“打开项目”查看作品。', newName:'新 Hypit克隆项目', prepared:'准备创作技能', module:'Hypit克隆' },
-            en: { title:'Hypit Clone', description:'Manage Hypit video recreation projects, connect an external Agent and review the work.', listTitle:'Hypit Clone projects', empty:'No Hypit Clone projects yet', emptyHint:'Create a project, then choose Connect Agent to copy the instructions or Open project to review your work.', newName:'New Hypit Clone project', prepared:'Prepare creative skills', module:'Hypit Clone' }
+            zh: { title:'视频克隆', description:'管理视频克隆项目，连接外部 Agent，并查看制作内容与结果。', listTitle:'视频克隆项目', empty:'还没有视频克隆项目', emptyHint:'创建项目后，点击卡片上的“Agent 接入”复制指令，或点击“打开项目”查看作品。', newName:'新视频克隆项目', prepared:'准备创作技能', module:'视频克隆' },
+            en: { title:'Video Cloning', description:'Manage video cloning projects, connect an external Agent and review the work.', listTitle:'Video Cloning projects', empty:'No Video Cloning projects yet', emptyHint:'Create a project, then choose Connect Agent to copy the instructions or Open project to review your work.', newName:'New Video Cloning project', prepared:'Prepare creative skills', module:'Video Cloning' }
         },
         article: {
-            zh: { title:'公众号文章', description:'创建文章项目，接入外部 Agent，按需准备技能，再打开文章复制标题、封面和正文。', listTitle:'文章项目', empty:'还没有文章项目', emptyHint:'创建并命名文章项目后，接入 Agent；完成文章后点击“打开项目”预览和复制。', newName:'新文章项目', prepared:'准备创作技能', module:'文章', templateTitle:'排版示例', templateDescription:'了解正文的结构、色彩与排版；封面和标题在文章页单独管理。示例不等于已为当前文章生成排版。', templateLoading:'正在读取版式示例…', templateFailed:'版式示例读取失败', templateEmpty:'暂时没有可用的版式示例', templateRetry:'重试读取示例', templatePreview:'当前示例预览', templateExample:'示例', templateDirectory:'六种正文版式', templateUnavailable:'预览暂不可用' },
-            en: { title:'Articles', description:'Create an article project, connect an external Agent, prepare skills if needed, then open the article to copy its title, cover and body.', listTitle:'Article projects', empty:'No article projects yet', emptyHint:'Create and name a project, connect an Agent, then choose Open project to review and copy the article.', newName:'New article project', prepared:'Prepare creative skills', module:'Articles', templateTitle:'Layout examples', templateDescription:'Explore body structure, color and layout. Titles and covers are managed separately on the article page. Examples are not layouts generated for your article.', templateLoading:'Loading layout examples…', templateFailed:'Could not load layout examples', templateEmpty:'No layout examples are available yet', templateRetry:'Retry loading examples', templatePreview:'Selected example', templateExample:'Example', templateDirectory:'Six body layouts', templateUnavailable:'Preview unavailable' }
+            zh: { title:'公众号文章', description:'创建文章项目，接入外部 Agent，按需准备技能，再打开文章复制标题、封面和正文。', listTitle:'文章项目', empty:'还没有文章项目', emptyHint:'创建并命名文章项目后，接入 Agent；完成文章后点击“打开项目”预览和复制。', newName:'新文章项目', prepared:'准备创作技能', module:'文章', templateTitle:'排版示例', templateDescription:'了解正文的结构、色彩与排版；封面和标题在文章页单独管理。示例不等于已为当前文章生成排版。', templateLoading:'正在读取版式示例…', templateFailed:'版式示例读取失败', templateEmpty:'暂时没有可用的版式示例', templateRetry:'重试读取示例', templatePreview:'当前示例预览', templateExample:'示例', templateDirectory:'正文版式', templateUnavailable:'预览暂不可用' },
+            en: { title:'Articles', description:'Create an article project, connect an external Agent, prepare skills if needed, then open the article to copy its title, cover and body.', listTitle:'Article projects', empty:'No article projects yet', emptyHint:'Create and name a project, connect an Agent, then choose Open project to review and copy the article.', newName:'New article project', prepared:'Prepare creative skills', module:'Articles', templateTitle:'Layout examples', templateDescription:'Explore body structure, color and layout. Titles and covers are managed separately on the article page. Examples are not layouts generated for your article.', templateLoading:'Loading layout examples…', templateFailed:'Could not load layout examples', templateEmpty:'No layout examples are available yet', templateRetry:'Retry loading examples', templatePreview:'Selected example', templateExample:'Example', templateDirectory:'Body layouts', templateUnavailable:'Preview unavailable' }
         },
         music: {
             zh: { title:'音乐创作', description:'管理歌曲作品，接入外部 Agent，并查看歌词、乐谱与音频结果。', listTitle:'音乐项目', empty:'还没有音乐项目', emptyHint:'新建并命名音乐项目，再从项目卡片复制接入指令。创作完成后打开项目查看内容与试听。', newName:'新音乐项目', prepared:'准备创作技能', module:'音乐创作' },
@@ -159,7 +159,7 @@
         page.querySelectorAll('[data-copy="trashKicker"]').forEach(node => { node.textContent = common.trashKicker; });
         page.querySelectorAll('[data-copy="trashTitle"]').forEach(node => { node.textContent = common.trashTitle; });
         page.querySelectorAll('[data-module-label="canvas"]').forEach(node => { node.textContent = L('画布','Canvas'); });
-        page.querySelectorAll('[data-module-label="hypit"]').forEach(node => { node.textContent = L('Hypit克隆','Hypit Clone'); });
+        page.querySelectorAll('[data-module-label="hypit"]').forEach(node => { node.textContent = L('视频克隆','Video Cloning'); });
         page.querySelectorAll('[data-module-label="article"]').forEach(node => { node.textContent = L('公众号文章','Articles'); });
         page.querySelectorAll('[data-module-label="music"]').forEach(node => { node.textContent = L('音乐创作','Music Creation'); });
         page.querySelectorAll('[data-module-label="script"]').forEach(node => { node.textContent = L('剧本创作','Script Writing'); });
@@ -470,7 +470,7 @@
             [L('打开并复制文章','Open and copy the article'),L('点击“打开项目”，按需切换已有标题、封面和正文版本，再复制或导出。','Choose Open project, select available title, cover and body variants, then copy or export them.')]
         ] : module === 'hypit' ? [
             [L('创建项目','Create project'),L('点击“新建项目”并命名。创建后留在这里，不会自动打开新标签。','Choose New project and name it. You stay on this page after creation.')],
-            [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('点击“准备创作技能”，让 Agent 检查已安装的 Hypit 技能和可选更新；是否更新由你确认，不会自动覆盖。','Choose Prepare creative skills to have your Agent check installed Hypit skills and available updates. You decide whether to update; nothing is overwritten automatically.')],
+            [L('准备创作技能 · 可选','Prepare creative skills · optional'),L('点击“准备创作技能”，让 Agent 检查已安装的视频克隆技能和可选更新；是否更新由你确认，不会自动覆盖。','Choose Prepare creative skills to have your Agent check installed Video Cloning skills and available updates. You decide whether to update; nothing is overwritten automatically.')],
             [L('接入项目并创作','Connect and create'),L('点击项目卡片的“Agent 接入”，复制指令到 Agent 对话，再告诉它你想做什么。','Choose Connect Agent on the card, copy the instructions to your Agent, and describe your work.')],
             [L('打开作品','Open your work'),L('点击“打开项目”查看制作内容和结果。Agent 写入内容后页面会更新；关闭标签不影响后台任务。','Choose Open project to see the work and results. Content updates as your Agent writes; closing the tab does not stop background tasks.')]
         ] : [
@@ -688,7 +688,7 @@
             button.textContent=L('安装预览组件','Install preview component');
             document.getElementById('studioPrepareButton').after(button);
             button.onclick=async()=>{
-                if(!await dialogConfirm(L('首次使用需要下载 Hypit 预览组件到工作台。它用于打开作品，与 Agent 端的创作技能不同。现在安装？','Download the Hypit preview component into this workbench? It opens your work and is separate from the creative skills in your Agent.'),{title:L('安装预览组件','Install preview component')}))return;
+                if(!await dialogConfirm(L('首次使用需要下载视频克隆预览组件到工作台。它用于打开作品，与 Agent 端的创作技能不同。现在安装？','Download the Video Cloning preview component into this workbench? It opens your work and is separate from the creative skills in your Agent.'),{title:L('安装预览组件','Install preview component')}))return;
                 button.disabled=true;button.textContent=L('正在安装…','Installing…');
                 try{await api('/api/studio/hypit/runtime/prepare',{method:'POST'});button.remove();}
                 catch(error){button.disabled=false;button.textContent=L('重试安装','Retry installation');await dialogAlert(error.message,{type:'warning'});}

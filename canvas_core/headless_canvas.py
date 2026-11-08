@@ -852,10 +852,10 @@ class HeadlessCanvas:
     def _configure_node(self, canvas: dict[str, Any], node: dict[str, Any], args: Mapping[str, Any]) -> None:
         lock_keys = [key for key in ("hypitInputLocked", "hypit_input_locked") if key in args]
         if lock_keys:
-            if not self._is_hypit_settings_canvas(canvas):
-                raise HeadlessCanvasError("hypitInputLocked 仅适用于 Hypit 配置图")
-            if not self._is_material(node):
-                raise HeadlessCanvasError("只有 Hypit 输入素材可以设置 hypitInputLocked")
+            if not self._settings_module_id(canvas):
+                raise HeadlessCanvasError("hypitInputLocked 仅适用于模块生成设置图")
+            if not self._is_material(node) or str(node.get("sourceKind") or "").lower() == "result":
+                raise HeadlessCanvasError("只有输入素材可以设置 hypitInputLocked")
             values = [args[key] for key in lock_keys]
             if any(type(value) is not bool for value in values) or any(value != values[0] for value in values[1:]):
                 raise HeadlessCanvasError("hypitInputLocked 必须是布尔值")

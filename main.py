@@ -44,6 +44,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from canvas_core.request_boundary import LocalRequestBoundary
+from studio_laohu_account import (
+    LaohuAccountState, LaohuExecutionAuthRequestBoundary, create_laohu_account_router,
+)
 from project_storage import ProjectStorage, StorageError, media_kind as stored_media_kind, sha256_file as storage_sha256_file
 from static.release_update import allowed_file as release_allowed_file, validate_package, package_url, LATEST_URL as R2_LATEST_URL, MAX_PACKAGE_BYTES
 from static.model_migrations import normalize_laohu_model_id
@@ -71,11 +74,15 @@ class QuietAccessLogFilter(logging.Filter):
         args = record.args if isinstance(record.args, tuple) else ()
         if len(args) >= 3:
             path = str(args[2]).split("?", 1)[0]
+            if path == "/api/laohu/account/callback":
+                return False
             status = int(args[4]) if len(args) >= 5 and str(args[4]).isdigit() else 0
             quiet_dynamic = any(path.startswith(prefix) and path.endswith("/meta") for prefix in QUIET_ACCESS_PREFIXES)
             if (path in QUIET_ACCESS_PATHS or quiet_dynamic) and status < 400:
                 return False
         message = record.getMessage()
+        if "/api/laohu/account/callback?" in message or ' /api/laohu/account/callback ' in message:
+            return False
         if any(f'"GET {path}' in message and '" 200' in message for path in QUIET_ACCESS_PATHS):
             return False
         if 'GET /api/canvases/' in message and '/meta' in message and '" 200' in message:
@@ -180,6 +187,11 @@ LOCAL_UPLOAD_DIR = str(PROJECT_STORAGE.materials_dir / "temporary")
 HISTORY_FILE = os.path.join(BASE_DIR, "data", "history.json")
 API_ENV_FILE = os.path.join(BASE_DIR, "API", ".env")
 DATA_DIR = os.path.join(BASE_DIR, "data")
+LAOHU_ACCOUNT_STATE = LaohuAccountState()
+app.add_middleware(
+    LaohuExecutionAuthRequestBoundary,
+    state_getter=lambda: LAOHU_ACCOUNT_STATE,
+)
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
 MEDIA_PREVIEW_DIR = str(PROJECT_STORAGE.previews_dir / "media")
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
@@ -793,7 +805,7 @@ def read_api_env_value(key: str) -> str:
         return ""
     return ""
 
-def provider_env_key_value(provider_id: str) -> str:
+def manual_provider_env_key_value(provider_id: str) -> str:
     provider_id = str(provider_id or "").strip().lower()
     env_key = provider_key_env(provider_id)
     key = os.getenv(env_key, "") or read_api_env_value(env_key)
@@ -806,21 +818,46 @@ def provider_env_key_value(provider_id: str) -> str:
         return MODELSCOPE_API_KEY or ""
     return ""
 
+def provider_env_key_value(provider_id: str) -> str:
+    provider_id = str(provider_id or "").strip().lower()
+    if provider_id == "ai-money":
+        return LAOHU_ACCOUNT_STATE.resolve_model_key(
+            manual_key=lambda: manual_provider_env_key_value(provider_id),
+        )
+    return manual_provider_env_key_value(provider_id)
+
+def laohu_bind_execution_auth(binding_id: str, request: dict):
+    """固定任务接受时选择的 laohu 凭据；凭据只写入本机受保护会话文件。"""
+    provider_id = str((request or {}).get("provider_id") or "").strip().lower()
+    if provider_id != "ai-money":
+        return False
+    return LAOHU_ACCOUNT_STATE.bind_execution(
+        binding_id,
+        manual_key=lambda: manual_provider_env_key_value("ai-money"),
+    )
+
+def laohu_execution_auth_scope(binding_id: str):
+    return LAOHU_ACCOUNT_STATE.execution_auth_scope(binding_id)
+
+def laohu_release_execution_auth(binding_id: str):
+    return LAOHU_ACCOUNT_STATE.release_execution(binding_id)
+
 def runninghub_region_key_value(region="global", use_wallet=False) -> str:
     region = runninghub_normalize_region(region)
     env_key = runninghub_key_env(region, use_wallet=use_wallet)
-    value = os.getenv(env_key, "") or read_api_env_value(env_key)
+    # 设置页保存的替换值是当前配置；reload 子进程可能继承父进程的旧 Key。
+    value = read_api_env_value(env_key) or os.getenv(env_key, "")
     if value:
         return value
     if region == "global":
         legacy_env = "RUNNINGHUB_WALLET_API_KEY" if use_wallet else "RUNNINGHUB_API_KEY"
-        legacy_value = os.getenv(legacy_env, "") or read_api_env_value(legacy_env)
+        legacy_value = read_api_env_value(legacy_env) or os.getenv(legacy_env, "")
         if not legacy_value:
             return ""
         # 旧版保存逻辑曾把当前国内站 Key 同时写入通用变量。国际站只在该
         # legacy 值不等于国内专用 Key 时才兼容读取，避免把国内凭证带到国际站。
         cn_env = runninghub_key_env("cn", use_wallet=use_wallet)
-        cn_value = os.getenv(cn_env, "") or read_api_env_value(cn_env)
+        cn_value = read_api_env_value(cn_env) or os.getenv(cn_env, "")
         if cn_value and hmac.compare_digest(str(legacy_value), str(cn_value)):
             return ""
         return legacy_value
@@ -848,6 +885,13 @@ def mask_secret(value):
         return ""
     tail = value[-4:] if len(value) > 4 else value
     return f"••••••••{tail}"
+
+def laohu_manual_key_preview():
+    """Return only a safe masked preview of the saved manual laohu Key."""
+    key = manual_provider_env_key_value("ai-money")
+    if not key:
+        return ""
+    return mask_secret(key) if len(key) > 4 else "••••••••"
 
 def strip_auth_scheme(value, scheme="Bearer"):
     text = str(value or "").strip()
@@ -1831,13 +1875,40 @@ def public_provider(provider):
             provider = runninghub_provider_with_workflow_store(provider)
         except Exception:
             pass
-    key = provider_env_key_value(provider["id"])
-    item = {
-        **provider,
-        "has_key": bool(key),
-        "key_preview": mask_secret(key),
-        "key_env": provider_key_env(provider["id"]),
-    }
+    provider_id = str(provider.get("id") or "").strip().lower()
+    if provider_id == "ai-money":
+        credential_status = LAOHU_ACCOUNT_STATE.model_credential_status(
+            manual_key=lambda: manual_provider_env_key_value(provider_id),
+        )
+        manual_key = manual_provider_env_key_value(provider_id)
+        has_manual_key = bool(manual_key)
+        has_key = bool(credential_status["has_key"])
+        credential_kind = credential_status.get("credential_kind") or ""
+        if credential_kind == "account":
+            key_preview = "账户授权" if has_key else ""
+        elif credential_status.get("bound") or credential_status.get("pinned"):
+            key_preview = "手动 Key" if has_key else ""
+        else:
+            key_preview = mask_secret(manual_key) if has_key else ""
+        safe_provider = {
+            key: value for key, value in provider.items()
+            if str(key).lower() not in {"api_key", "access_token", "refresh_token", "client_secret", "token"}
+        }
+        item = {
+            **safe_provider,
+            "has_key": has_key,
+            "has_manual_key": has_manual_key,
+            "key_preview": key_preview,
+            "key_env": provider_key_env(provider_id),
+        }
+    else:
+        key = manual_provider_env_key_value(provider_id)
+        item = {
+            **provider,
+            "has_key": bool(key),
+            "key_preview": mask_secret(key),
+            "key_env": provider_key_env(provider_id),
+        }
     if provider.get("id") == "runninghub":
         selected = runninghub_normalize_region(provider.get("rh_region"), runninghub_region_from_base_url(provider.get("base_url"), "global"))
         regions = provider.get("rh_regions") if isinstance(provider.get("rh_regions"), dict) else {}
@@ -4180,7 +4251,8 @@ class MsGenerateRequest(BaseModel):
     client_id: Optional[str] = None
 
 class CanvasLLMRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=LLM_MESSAGE_MAX_LENGTH)
+    # Some text-result tools take only media. Required text is checked by the exact profile.
+    message: str = Field(max_length=LLM_MESSAGE_MAX_LENGTH)
     system_prompt: str = ""
     model: str = ""
     family_id: str = ""
@@ -8551,6 +8623,13 @@ def ai_money_video_request_body(model, prompt, seconds, aspect_ratio="", resolut
     images = [str(url or "").strip() for url in (image_urls or []) if str(url or "").strip()]
     videos = [str(url or "").strip() for url in (video_urls or []) if str(url or "").strip()]
     audios = [str(url or "").strip() for url in (audio_urls or []) if str(url or "").strip()]
+    from laohu_protocols import native_video_body
+    try:
+        native = native_video_body(model_name, str(prompt or ""), seconds, images, videos, audios, capability_parameters)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if native is not None:
+        return native
     if lower_model == "animate-motion-transfer":
         if len(images) != 1 or len(videos) != 1:
             raise HTTPException(status_code=400, detail="Animate 动作迁移需要一张角色图片和一个参考动作视频。")
@@ -8662,6 +8741,8 @@ def ai_money_flowmusic_request_body(model, prompt, reference_audio_url="", capab
 
 def ai_money_audio_request_body(model, prompt, reference_audio_url="", speaker="", audio_format="mp3", sample_rate=24000, speech_rate=0, loudness_rate=0, pitch_rate=0, capability_parameters=None):
     model_name = normalize_laohu_model_id(selected_model(model, "doubao-seed-audio-1.0"))
+    if model_name in {"doubao-seed-tts-2.0", "kling-lip-sync-tts"}:
+        return merge_request_body({"model": model_name, "prompt": str(prompt or "")}, capability_parameters)
     if model_name.lower().startswith("flowmusic-"):
         return ai_money_flowmusic_request_body(model_name, prompt, reference_audio_url, capability_parameters)
     if model_name in {"mureka-v8-bgm", "mureka-v9-bgm"}:
@@ -9186,13 +9267,13 @@ async def generate_ai_money_video(payload, provider, capability_parameters=None)
                 raise HTTPException(status_code=502, detail=f"laohu FashVSR 成功但没有返回视频：{result}")
             return {"videos": [await save_remote_video_to_output(url, prefix="ai_money_fashvsr_") for url in urls], "task_id": task_id, "raw": result}
         image_urls = []
-        for ref in (payload.images or [])[:10]:
+        for ref in (payload.images or []):
             image_urls.append(await ai_money_upload_reference(client, provider, getattr(ref, "url", ""), "image"))
         video_urls = []
-        for ref in (payload.videos or [])[:5]:
+        for ref in (payload.videos or []):
             video_urls.append(await ai_money_upload_reference(client, provider, ref, "video"))
         audio_urls = []
-        for ref in (payload.audios or [])[:5]:
+        for ref in (payload.audios or []):
             audio_urls.append(await ai_money_upload_reference(client, provider, ref, "audio"))
         body = ai_money_video_request_body(
             model=payload.model,
@@ -9208,7 +9289,11 @@ async def generate_ai_money_video(payload, provider, capability_parameters=None)
             seed=payload.seed,
             capability_parameters=capability_parameters,
         )
-        submit_endpoint = "/v1/video/generations" if str(payload.model or "").strip().lower() == "animate-motion-transfer" else "/v1/videos"
+        from model_capabilities import ai_money_profile_from_model_id
+        profile = ai_money_profile_from_model_id(payload.model, "video_generation")
+        submit_endpoint = (profile.get("platform") or {}).get("endpoint") or "/v1/videos"
+        if submit_endpoint not in {"/v1/videos", "/v1/video/generations"}:
+            raise HTTPException(400, "当前视频协议未接入")
         response = await client.post(
             f"{base_url}{submit_endpoint}",
             headers=api_headers(provider=provider, model=body["model"]),
@@ -9220,7 +9305,7 @@ async def generate_ai_money_video(payload, provider, capability_parameters=None)
         if not task_id and isinstance(raw, dict):
             data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
             task_id = data.get("id") or raw.get("id") or raw.get("task_id")
-        result = raw if video_output_urls(raw) else await wait_for_video_task(client, provider, str(task_id), f"{base_url}/v1/videos") if task_id else raw
+        result = raw if video_output_urls(raw) else await wait_for_video_task(client, provider, str(task_id), f"{base_url}{submit_endpoint}") if task_id else raw
         urls = video_output_urls(result)
         if not urls:
             raise HTTPException(status_code=502, detail=f"laohu 视频生成成功但没有返回视频：{result}")
@@ -14313,6 +14398,27 @@ def sanitize_runninghub_app_snapshot(data):
     return snapshot
 
 
+def runninghub_app_snapshot_from_detail(data, webapp_id):
+    """将同站点详情的真实输入字段转换为既有 AI 应用契约。"""
+    if not isinstance(data, dict) or str(data.get("id") or "").strip() != webapp_id:
+        raise HTTPException(status_code=502, detail=f"RunningHub 返回的 AI 应用 {webapp_id} 详情身份不匹配。")
+    access = data.get("publishAccess")
+    if isinstance(access, dict) and (access.get("granted") is False or access.get("needPassword") is True):
+        raise HTTPException(status_code=403, detail=f"无权读取 AI 应用 {webapp_id}，请先在当前 RunningHub 站点取得访问权限。")
+    title = str(data.get("name") or "").strip()
+    fields = data.get("inputNodes")
+    if not title or not isinstance(fields, list) or any(
+        not isinstance(field, dict) or any(
+            not str(field.get(key) or "").strip() for key in ("nodeId", "fieldName", "fieldType")
+        )
+        for field in fields
+    ):
+        raise HTTPException(status_code=502, detail=f"RunningHub 返回的 AI 应用 {webapp_id} 资料不完整。")
+    return sanitize_runninghub_app_snapshot({
+        **data, "webappId": webapp_id, "webappName": title, "nodeInfoList": fields,
+    })
+
+
 def sanitize_runninghub_node_info_list(items):
     result = []
     for item in items or []:
@@ -16272,6 +16378,22 @@ async def runninghub_app_info(webappId: str = "", region: str = ""):
             if accepted:
                 break
             if index == len(api_keys) - 1 or not runninghub_app_info_should_retry(response.status_code, raw):
+                # 部分已发布应用的调用示例返回 901，但同站点详情仍提供完整 inputNodes。
+                # 仅在明确的应用不存在错误下兼容读取，不掩盖鉴权失败、不跨站点或提交生成。
+                if (response.status_code < 400 or response.status_code in (400, 404)) and isinstance(raw, dict) and str(raw.get("code")) == "901":
+                    try:
+                        detail_response = await client.post(
+                            runninghub_endpoint_url(provider, "/api/webapp/detail"),
+                            headers=runninghub_app_headers(True, provider=provider, region=active_region, api_key=api_key),
+                            json={"webappId": webapp_id},
+                        )
+                        detail_raw = detail_response.json()
+                    except (httpx.HTTPError, ValueError) as exc:
+                        raise HTTPException(status_code=502, detail=f"读取 AI 应用 {webapp_id} 详情失败，请稍后重试。") from exc
+                    if detail_response.status_code >= 400 or not isinstance(detail_raw, dict) or detail_raw.get("code") not in (0, "0", None):
+                        message = runninghub_response_message(detail_raw, f"RunningHub HTTP {detail_response.status_code}")
+                        raise HTTPException(status_code=detail_response.status_code if detail_response.status_code >= 400 else 400, detail=f"读取 AI 应用 {webapp_id} 详情失败：{message}")
+                    return {"success": True, "data": runninghub_app_snapshot_from_detail(detail_raw.get("data"), webapp_id)}
                 message = runninghub_response_message(raw, f"RunningHub HTTP {response.status_code}")
                 raise HTTPException(status_code=response.status_code if response.status_code >= 400 else 400, detail=f"读取 AI 应用 {webapp_id} 失败：{message}")
     if not isinstance(raw, dict):
@@ -17667,6 +17789,35 @@ def api_key_from_payload(payload, protocol: str = ""):
     explicit = str(getattr(payload, "api_key", "") or "").strip()
     provider_id = str(getattr(payload, "provider_id", "") or "").strip().lower()
     protocol = str(protocol or protocol_from_payload(payload) or "").strip().lower()
+    if provider_id == "ai-money":
+        auth_status = LAOHU_ACCOUNT_STATE.model_credential_status(
+            manual_key=lambda: manual_provider_env_key_value(provider_id),
+        )
+        if (not explicit or auth_status.get("bound") or auth_status.get("pinned")
+                or LAOHU_ACCOUNT_STATE.mode() == "account"):
+            # 先解析并固定本请求的真实身份，再校验它允许访问的目标，防止模式切换绕过检查。
+            credential = provider_env_key_value(provider_id)
+            resolved_status = LAOHU_ACCOUNT_STATE.model_credential_status(
+                manual_key=lambda: manual_provider_env_key_value(provider_id),
+            )
+            kind = resolved_status.get("credential_kind")
+            if credential and (not resolved_status.get("has_key") or kind not in {"account", "manual"}):
+                raise HTTPException(status_code=409, detail="无法确认本次 laohu 凭据身份，请重新查询原请求")
+            if kind == "account":
+                try:
+                    target = urllib.parse.urlsplit(str(getattr(payload, "base_url", "") or "").strip())
+                    valid_target = (
+                        target.scheme == "https" and target.hostname == "api.lao-hu.com"
+                        and target.username is None and target.password is None
+                        and target.port in (None, 443) and target.path.rstrip("/") in {"", "/v1"}
+                        and not target.query and not target.fragment
+                    )
+                except ValueError:
+                    valid_target = False
+                requested_protocol = str(getattr(payload, "protocol", "openai") or "openai").strip().lower()
+                if not valid_target or protocol != "openai" or requested_protocol != "openai":
+                    raise HTTPException(status_code=400, detail="laohu 登录账户仅支持官方 HTTPS API 地址与 OpenAI 协议")
+            return credential
     if explicit:
         return explicit
     if provider_id:
@@ -17835,7 +17986,15 @@ async def probe_volcengine_auto_detect(client, base_url: str, api_key: str):
     }
 
 def classify_upstream_model(mid):
-    lc = normalize_laohu_model_id(mid).lower()
+    normalized = normalize_laohu_model_id(mid)
+    lc = normalized.lower()
+    # Exact documented contracts override name guesses (e.g. custom-voice returns IDs).
+    from model_capabilities import _laohu_documented_profiles
+    documented = Path(BASE_DIR) / "data/model_capabilities/providers/ai-money.json"
+    profiles = _laohu_documented_profiles(str(documented), documented.stat().st_mtime_ns)
+    exact = next((p for p in profiles.get("models", []) if p.get("model_id") == normalized and p.get("version", 0) >= 3), None)
+    if exact and exact.get("node_type") in {"text_generation", "image_generation", "video_generation", "audio_generation"}:
+        return {"text_generation":"chat", "image_generation":"image", "video_generation":"video", "audio_generation":"audio"}[exact["node_type"]]
     if lc in {"laohu-upscaler", "minimax-h3"}:
         return "video"
     if lc.startswith("minmax-h3-context-ir-") or lc == "whisper-1" or lc == "midjourney-describe":
@@ -18341,6 +18500,7 @@ async def fetch_models_from_upstream(base_url: str, api_key: str, protocol: str 
         }
     return {
         "total": len(ids),
+        "source_models": [{k: row[k] for k in ("id", "object", "created", "owned_by", "supported_endpoint_types") if k in row} for row in (raw.get("data") or []) if isinstance(row, dict)] if isinstance(raw, dict) and isinstance(raw.get("data"), list) else [],
         "image_models": grouped["image"],
         "chat_models": grouped["chat"],
         "video_models": grouped["video"],
@@ -19117,7 +19277,7 @@ IMAGE_PARAM_RESOLUTIONS = [
 # --- Canvas Video ---
 
 VIDEO_URL_KEYS = (
-    "url", "video_url", "videoUrl", "mp4_url", "mp4Url",
+    "url", "video_url", "videoUrl", "mp4_url", "mp4Url", "result_url",
     "output", "output_url", "outputUrl", "download_url", "downloadUrl",
     "video", "src", "uri", "preview_url", "previewUrl", "path",
     "last_frame_url", "lastFrameUrl", "remixed_from_video_id",
@@ -20567,6 +20727,7 @@ def ai_money_text_specialist_url(provider, operation):
         "transcription": "/v1/audio/transcriptions",
         "prompt_enhancement": "/v1/video/generations",
         "image_description": "/v1/midjourney/generations/describe",
+        "asset_creation": "/v1/video/generations",
     }.get(str(operation or "").strip())
     if not path:
         raise HTTPException(status_code=400, detail=f"laohu 不支持文本专用操作：{operation}")
@@ -20618,6 +20779,26 @@ async def generate_ai_money_special_text(payload, provider, profile, platform_pa
             )
             response.raise_for_status()
             raw = response.json()
+        elif operation == "asset_creation":
+            body = {"model": payload.model, **platform_parameters}
+            if payload.message:
+                body["prompt"] = payload.message
+            if payload.images:
+                body["images" if payload.model == "kling-elements-advanced" else "image_urls"] = [await ai_money_upload_reference(client, provider, image, "image") for image in payload.images]
+            if payload.videos:
+                video_url = await ai_money_upload_reference(client, provider, payload.videos[0], "video")
+                if payload.model in {"kling-elements-advanced", "kling-lip-sync-identify-face"}:
+                    body.setdefault("metadata", {})["video_url"] = video_url
+                else:
+                    body["video_url"] = video_url
+            if payload.audios:
+                body["audio_url"] = await ai_money_upload_reference(client, provider, payload.audios[0], "audio")
+            response = await client.post(ai_money_text_specialist_url(provider, operation), headers=api_headers(provider=provider, model=payload.model), json=body)
+            response.raise_for_status()
+            raw = response.json()
+            task_id = extract_task_id(raw)
+            if task_id and not ai_money_special_text_value(raw, operation):
+                raw = await wait_for_ai_money_text_task(client, provider, task_id)
         elif operation == "image_description":
             if not payload.images:
                 raise HTTPException(status_code=400, detail="Midjourney Describe 需要连接一张图片素材。")
@@ -20667,13 +20848,13 @@ async def canvas_llm(payload: CanvasLLMRequest):
             payload.family_id,
             "text_generation",
             input_counts={
-                "text": 1,
+                "text": 1 if str(payload.message or "").strip() else 0,
                 "image": len(payload.images or []),
                 "video": len(payload.videos or []),
                 "audio": len(payload.audios or []),
             },
             input_roles=payload.input_roles or {
-                "prompt": 1,
+                "prompt": 1 if str(payload.message or "").strip() else 0,
                 "reference": len(payload.images or []),
                 "source_video": len(payload.videos or []),
                 "reference_audio": len(payload.audios or []),
@@ -20694,13 +20875,13 @@ async def canvas_llm(payload: CanvasLLMRequest):
             payload.family_id,
             "text_generation",
             input_counts={
-                "text": 1,
+                "text": 1 if str(payload.message or "").strip() else 0,
                 "image": len(payload.images or []),
                 "video": len(payload.videos or []),
                 "audio": len(payload.audios or []),
             },
             input_roles=payload.input_roles or {
-                "prompt": 1,
+                "prompt": 1 if str(payload.message or "").strip() else 0,
                 "reference": len(payload.images or []),
                 "source_video": len(payload.videos or []),
                 "reference_audio": len(payload.audios or []),
@@ -20719,13 +20900,13 @@ async def canvas_llm(payload: CanvasLLMRequest):
         payload.family_id,
         "text_generation",
         input_counts={
-            "text": 1,
+            "text": 1 if str(payload.message or "").strip() else 0,
             "image": len(payload.images or []),
             "video": len(payload.videos or []),
             "audio": len(payload.audios or []),
         },
         input_roles=payload.input_roles or {
-            "prompt": 1,
+            "prompt": 1 if str(payload.message or "").strip() else 0,
             "reference": len(payload.images or []),
             "source_video": len(payload.videos or []),
             "reference_audio": len(payload.audios or []),
@@ -20736,7 +20917,7 @@ async def canvas_llm(payload: CanvasLLMRequest):
     model = str(profile.get("model_id") or model)
     payload.model = model
     platform_parameters = MODEL_CAPABILITY_REGISTRY.platform_parameters(profile, payload.parameters)
-    if is_ai_money_provider(_provider) and str(profile.get("operation") or "") in {"transcription", "prompt_enhancement", "image_description"}:
+    if is_ai_money_provider(_provider) and str(profile.get("operation") or "") in {"transcription", "prompt_enhancement", "image_description", "asset_creation"}:
         return await generate_ai_money_special_text(payload, _provider, profile, platform_parameters)
     if payload.audios:
         raise HTTPException(status_code=400, detail="当前模型虽声明音频理解能力，但该平台的音频消息适配器尚未完成。")
@@ -20995,10 +21176,27 @@ STUDIO_ARTICLES = StudioArticleStore(
     register_managed_result=PROJECT_STORAGE.register_managed_result,
     find_shared_media_by_hash=studio_article_find_shared_media_by_hash,
 )
+def studio_music_save_score_source(source, format_name, project_id):
+    import mimetypes
+    mimetypes.add_type("text/x-abc", ".abc")
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    path = PROJECT_STORAGE.results_dir / "text" / "music" / f"{digest}.{format_name}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        # Content-addressed files are immutable, including across concurrent projects.
+        try:
+            with path.open("x", encoding="utf-8", newline="") as stream:
+                stream.write(source)
+        except FileExistsError:
+            pass
+    return PROJECT_STORAGE.register_managed_result(path, "score." + format_name, source_module="music", source_project_id=project_id)
+
+
 STUDIO_MUSIC = StudioMusicStore(
     STUDIO_PROJECTS,
     resolve_media_reference=studio_article_resolve_media,
     read_media_reference=studio_music_read_score_content,
+    save_score_source=studio_music_save_score_source,
 )
 
 
@@ -21011,6 +21209,11 @@ async def studio_shutdown():
 app.include_router(create_studio_projects_router(BASE_DIR, STUDIO_CANVAS_ADAPTER, store=STUDIO_PROJECTS))
 app.include_router(create_connection_router(STUDIO_PROJECTS.get))
 app.include_router(create_hypit_router(BASE_DIR, STUDIO_PROJECTS.get, HYPIT_RUNTIME, PROJECT_STORAGE.register_managed_result))
+app.include_router(create_laohu_account_router(
+    LAOHU_ACCOUNT_STATE,
+    has_manual_key=lambda: bool(manual_provider_env_key_value("ai-money")),
+    manual_key_preview=laohu_manual_key_preview,
+))
 
 
 async def studio_notify(canvas):
@@ -22022,7 +22225,10 @@ async def studio_collect(result, request, task):
 STUDIO_EXECUTION = StudioExecution(load_canvas=load_canvas, save_canvas=save_canvas, lock=CANVAS_LOCK,
                                    storage=PROJECT_STORAGE, preflight=studio_preflight, generate=studio_generate,
                                    collect=studio_collect, notify=studio_notify,
-                                   task_metadata=studio_hypit_task_metadata)
+                                   task_metadata=studio_hypit_task_metadata,
+                                   bind_execution_auth=laohu_bind_execution_auth,
+                                   execution_auth_scope=laohu_execution_auth_scope,
+                                   release_execution_auth=laohu_release_execution_auth)
 
 
 async def studio_app_preflight(canvas, node, request, request_id, *, record_run=True):
@@ -22414,6 +22620,12 @@ async def studio_hypit_collect_results(result, request, task):
     return await studio_collect(normalized, collector_request, task)
 
 
+def studio_node_result_snapshot(node):
+    """A single result version never embeds the owner's history collections."""
+    return copy.deepcopy({key: value for key, value in node.items()
+                          if key not in {"resultVersions", "creationTasks"}})
+
+
 async def studio_hypit_publish_node_result(canvas_snapshot, source_node, media, task):
     """只在原配方仍存在时把结果回填到对应节点历史；任务结果始终独立保留。"""
     if not isinstance(media, list) or not media:
@@ -22450,7 +22662,7 @@ async def studio_hypit_publish_node_result(canvas_snapshot, source_node, media, 
         signature = studio_stable(studio_node_recipe(node))
         result_id = f"{task.get('run_id')}:{node_id}"
         output_kind = str(media[0].get("kind") or "") if isinstance(media[0], dict) else ""
-        version = copy.deepcopy(node)
+        version = studio_node_result_snapshot(node)
         version.update({
             "id": result_id,
             "type": node.get("type"),
@@ -22464,7 +22676,13 @@ async def studio_hypit_publish_node_result(canvas_snapshot, source_node, media, 
             "sourceKind": "result",
             "creationSignature": signature,
         })
-        versions = node.setdefault("resultVersions", [copy.deepcopy(node)] if node.get("images") else [])
+        if "resultVersions" not in node:
+            node["resultVersions"] = [studio_node_result_snapshot(node)] if node.get("images") else []
+        versions = node["resultVersions"]
+        # Preserve every real version and its media/settings; older snapshots may
+        # carry redundant copies of the same owner histories from previous runs.
+        versions[:] = [studio_node_result_snapshot(item) if isinstance(item, dict)
+                       else copy.deepcopy(item) for item in versions]
         existing_index = next((index for index, item in enumerate(versions)
                                if isinstance(item, dict) and str(item.get("id") or "") == result_id), None)
         if existing_index is None:
@@ -22817,12 +23035,21 @@ async def studio_music_prepare_generation_request(*, canvas, purpose, slot, outp
     if "prompt" not in mapping:
         raise HTTPException(status_code=400, detail="所选模型没有已确认的 prompt 输入映射")
 
+    # Suno 同一端点以 custom=true 将 prompt 解释为歌词，风格参数名为 style。
+    # 只适配这一已确认契约，不把所有 operation=music 的背景音乐模型当作歌曲模型。
+    suno_song = (
+        purpose == "song" and model_request["provider_id"] == "ai-money"
+        and profile.get("model_id") == "suno-generation"
+        and bool(str(snapshot.get("lyrics") or "").strip())
+    )
+    song_model = str(profile.get("operation") or "") == "music_song" or suno_song
+    style_field = "style" if suno_song else "style_prompt"
     prompt = ""
     if purpose == "cover":
         prompt = str(snapshot.get("cover_prompt") or "").strip()
         if not prompt:
             raise HTTPException(status_code=400, detail="请先保存封面提示词")
-    elif str(profile.get("operation") or "") == "music_song":
+    elif song_model:
         prompt = str(snapshot.get("lyrics") or "").strip()
         if not prompt:
             raise HTTPException(status_code=400, detail="歌曲模型需要已保存的歌词")
@@ -22836,13 +23063,19 @@ async def studio_music_prepare_generation_request(*, canvas, purpose, slot, outp
         raise HTTPException(status_code=400, detail="所选音乐模型未声明受支持的歌曲生成操作")
 
     resolved_parameters = {}
+    if suno_song:
+        if (("custom" in user_parameters and user_parameters["custom"] is not True)
+                or ("instrumental" in user_parameters and user_parameters["instrumental"] is not False)):
+            raise HTTPException(status_code=400, detail="已保存歌词的 Suno 歌曲生成需要 custom=true、instrumental=false")
+        resolved_parameters.update(custom=True, instrumental=False)
     for field in ("title", "style_prompt", "notes"):
         value = str(snapshot.get(field) or "").strip()
-        if value and field in mapping and field in parameter_schema:
-            resolved_parameters[field] = value
-    if (purpose == "song" and str(profile.get("operation") or "") == "music_song"
+        target_field = style_field if field == "style_prompt" else field
+        if value and target_field in mapping and target_field in parameter_schema:
+            resolved_parameters[target_field] = value
+    if (purpose == "song" and song_model
             and str(snapshot.get("style_prompt") or "").strip()):
-        if "style_prompt" not in mapping or "style_prompt" not in parameter_schema:
+        if style_field not in mapping or style_field not in parameter_schema:
             raise HTTPException(status_code=400, detail="所选歌曲模型没有确认的 style_prompt 参数映射")
     try:
         if user_parameters:
@@ -22853,6 +23086,10 @@ async def studio_music_prepare_generation_request(*, canvas, purpose, slot, outp
             if not parameter_schema or set(resolved_parameters) - set(parameter_schema):
                 raise HTTPException(status_code=400, detail="音乐内容映射到模型未声明的参数")
             _validate_parameters(profile, resolved_parameters)
+        for key, value in {**resolved_parameters, **user_parameters}.items():
+            limit = parameter_schema[key].get("max_length")
+            if isinstance(value, str) and isinstance(limit, int) and len(value) > limit:
+                raise HTTPException(status_code=400, detail=f"音乐生成参数 {key} 长度不能超过 {limit} 个字符")
     except HTTPException:
         raise
     resolved_parameters.update(user_parameters)
@@ -22885,6 +23122,9 @@ HYPIT_FLOW_RUNNER = HypitFlowRunner(
     lock=CANVAS_LOCK,
     now_ms=now_ms,
     publish_node_result=studio_hypit_publish_node_result,
+    bind_execution_auth=laohu_bind_execution_auth,
+    execution_auth_scope=laohu_execution_auth_scope,
+    release_execution_auth=laohu_release_execution_auth,
 )
 
 
@@ -22902,6 +23142,9 @@ ARTICLE_FLOW_RUNNER = HypitFlowRunner(
     now_ms=now_ms,
     canvas_id=ARTICLE_SETTINGS_CANVAS_ID,
     module_id="article",
+    bind_execution_auth=laohu_bind_execution_auth,
+    execution_auth_scope=laohu_execution_auth_scope,
+    release_execution_auth=laohu_release_execution_auth,
 )
 
 ARTICLE_GENERATION_BRIDGE = StudioArticleGenerationBridge(
@@ -22928,6 +23171,9 @@ MUSIC_FLOW_RUNNER = HypitFlowRunner(
     now_ms=now_ms,
     canvas_id=MUSIC_SETTINGS_CANVAS_ID,
     module_id="music",
+    bind_execution_auth=laohu_bind_execution_auth,
+    execution_auth_scope=laohu_execution_auth_scope,
+    release_execution_auth=laohu_release_execution_auth,
 )
 
 MUSIC_GENERATION_BRIDGE = StudioMusicGenerationBridge(
@@ -22955,6 +23201,9 @@ SCRIPT_FLOW_RUNNER = HypitFlowRunner(
     publish_node_result=studio_hypit_publish_node_result,
     canvas_id=SCRIPT_SETTINGS_CANVAS_ID,
     module_id="script",
+    bind_execution_auth=laohu_bind_execution_auth,
+    execution_auth_scope=laohu_execution_auth_scope,
+    release_execution_auth=laohu_release_execution_auth,
 )
 
 NOVEL_FLOW_RUNNER = HypitFlowRunner(
@@ -22972,7 +23221,19 @@ NOVEL_FLOW_RUNNER = HypitFlowRunner(
     publish_node_result=studio_hypit_publish_node_result,
     canvas_id=NOVEL_SETTINGS_CANVAS_ID,
     module_id="novel",
+    bind_execution_auth=laohu_bind_execution_auth,
+    execution_auth_scope=laohu_execution_auth_scope,
+    release_execution_auth=laohu_release_execution_auth,
 )
+
+LAOHU_ACCOUNT_STATE.set_execution_hooks_ready(all(
+    callable(getattr(component, attribute, None))
+    for component in (
+        STUDIO_EXECUTION, HYPIT_FLOW_RUNNER, ARTICLE_FLOW_RUNNER,
+        MUSIC_FLOW_RUNNER, SCRIPT_FLOW_RUNNER, NOVEL_FLOW_RUNNER,
+    )
+    for attribute in ("bind_execution_auth", "execution_auth_scope", "release_execution_auth")
+))
 
 SCRIPT_GENERATION_BRIDGE = StudioManuscriptGenerationBridge(
     module="script", manuscript_store=STUDIO_MANUSCRIPTS, runner=SCRIPT_FLOW_RUNNER,

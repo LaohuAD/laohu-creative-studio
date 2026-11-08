@@ -3,7 +3,7 @@
   "provider_id": "ai-money",
   "provider_name": "laohu",
   "status": "maintained",
-  "updated_at": "2026-10-05",
+  "updated_at": "2026-11-06",
   "sources": [
     {
       "url": "https://api.lao-hu.com/v1/models",
@@ -24,6 +24,12 @@
       "url": "https://api.lao-hu.com/docs/llms.txt",
       "kind": "official_documented",
       "checked_at": "2026-10-05"
+    },
+    {
+      "url": "https://api.lao-hu.com/docs/llms.txt",
+      "kind": "official_documented",
+      "checked_at": "2026-11-06",
+      "sha256": "b66811ba3708dfdb51c43f33c158d2a8c4ffbcc60b234d8fda25dcaf393e1ad4"
     }
   ],
   "models": [
@@ -1940,56 +1946,6 @@
       }
     },
     {
-      "model_id": "deepseek/deepseek-v4.1-flash",
-      "family_id": "ai-money-deepseek-deepseek-v4-1-flash",
-      "family_name": "deepseek/deepseek-v4.1-flash",
-      "display_name": "deepseek/deepseek-v4.1-flash",
-      "variant_id": "default",
-      "node_type": "text_generation",
-      "operation": "chat",
-      "status": "confirmed",
-      "readiness": "ready",
-      "runnable": true,
-      "version": 1,
-      "evidence_level": "official_documented",
-      "sources": [
-        {
-          "url": "https://api.lao-hu.com/docs/llms.txt",
-          "kind": "official_documented",
-          "checked_at": "2026-09-23"
-        }
-      ],
-      "inputs": {
-        "prompt": {
-          "media_type": "text",
-          "role": "prompt",
-          "min": 1,
-          "max": 1
-        }
-      },
-      "parameters": {
-        "max_output_tokens": {
-          "level": "optional",
-          "type": "integer",
-          "min": 1
-        }
-      },
-      "request_mapping": {
-        "prompt": "messages",
-        "max_output_tokens": "max_tokens"
-      },
-      "output": {
-        "media_type": "text",
-        "role": "output",
-        "min": 1,
-        "max": 1,
-        "async": false
-      },
-      "platform": {
-        "endpoint": "/v1/chat/completions"
-      }
-    },
-    {
       "model_id": "deepseek/deepseek-v4-flash-vision-exp",
       "family_id": "ai-money-deepseek-deepseek-v4-flash-vision-exp",
       "family_name": "deepseek/deepseek-v4-flash-vision-exp",
@@ -2110,64 +2066,6 @@
       "family_id": "ai-money-qwen-qwen3-8-flash-next",
       "family_name": "qwen/qwen3.8-flash-next",
       "display_name": "qwen/qwen3.8-flash-next",
-      "variant_id": "default",
-      "node_type": "text_generation",
-      "operation": "chat",
-      "status": "confirmed",
-      "readiness": "ready",
-      "runnable": true,
-      "version": 2,
-      "evidence_level": "official_documented",
-      "sources": [
-        {
-          "url": "https://api.lao-hu.com/docs/llms.txt",
-          "kind": "official_documented",
-          "checked_at": "2026-09-12"
-        }
-      ],
-      "inputs": {
-        "prompt": {
-          "media_type": "text",
-          "role": "prompt",
-          "min": 1,
-          "max": 1
-        },
-        "reference": {
-          "media_type": "image",
-          "role": "reference",
-          "min": 0,
-          "max": 8,
-          "note": "官方确认视觉输入；当前画布文本适配器最多发送 8 张参考图。"
-        }
-      },
-      "parameters": {
-        "max_output_tokens": {
-          "level": "optional",
-          "type": "integer",
-          "min": 1
-        }
-      },
-      "request_mapping": {
-        "prompt": "messages",
-        "reference": "messages.content",
-        "max_output_tokens": "max_tokens"
-      },
-      "output": {
-        "media_type": "text",
-        "role": "output",
-        "min": 1,
-        "max": 1,
-        "async": false
-      },
-      "platform": {
-        "endpoint": "/v1/chat/completions"
-      }
-    },
-    {
-      "model_id": "laohu/g6-astra",
-      "family_id": "ai-money-laohu-g6-astra",
-      "family_name": "laohu/g6-astra",
-      "display_name": "laohu/g6-astra",
       "variant_id": "default",
       "node_type": "text_generation",
       "operation": "chat",
@@ -2560,167 +2458,6 @@
       },
       "platform": {
         "endpoint": "/v1/chat/completions"
-      }
-    },
-    {
-      "model_id": "MiniMax-H3",
-      "family_id": "ai-money-minimax-h3",
-      "family_name": "MiniMax-H3",
-      "display_name": "MiniMax-H3",
-      "variant_id": "default",
-      "node_type": "video_generation",
-      "operation": "text_or_reference_to_video",
-      "status": "confirmed",
-      "readiness": "ready",
-      "runnable": true,
-      "version": 2,
-      "evidence_level": "official_documented",
-      "sources": [
-        {
-          "url": "https://api.lao-hu.com/docs/llms.txt",
-          "kind": "official_documented",
-          "checked_at": "2026-09-12"
-        }
-      ],
-      "inputs": {
-        "prompt": {
-          "media_type": "text",
-          "role": "prompt",
-          "min": 1,
-          "max": 1,
-          "max_chars": 10000
-        },
-        "first_frame": {
-          "media_type": "image",
-          "role": "first_frame",
-          "min": 0,
-          "max": 1
-        },
-        "last_frame": {
-          "media_type": "image",
-          "role": "last_frame",
-          "min": 0,
-          "max": 1
-        },
-        "reference": {
-          "media_type": "image",
-          "role": "reference",
-          "min": 0,
-          "max": 9
-        },
-        "source_video": {
-          "media_type": "video",
-          "role": "source_video",
-          "min": 0,
-          "max": 3,
-          "min_duration_seconds": 2,
-          "max_duration_seconds": 15
-        },
-        "reference_audio": {
-          "media_type": "audio",
-          "role": "reference_audio",
-          "min": 0,
-          "max": 4
-        }
-      },
-      "parameters": {
-        "resolution": {
-          "level": "required",
-          "type": "enum",
-          "options": [
-            "480P",
-            "768P"
-          ],
-          "default": "480P"
-        },
-        "duration": {
-          "level": "required",
-          "type": "integer",
-          "min": 4,
-          "max": 60,
-          "default": 5
-        },
-        "aspect_ratio": {
-          "level": "required",
-          "type": "enum",
-          "options": [
-            "1:1",
-            "2:3",
-            "3:2",
-            "3:4",
-            "4:3",
-            "9:16",
-            "16:9",
-            "21:9",
-            "adaptive"
-          ],
-          "default": "16:9"
-        },
-        "audio_role": {
-          "level": "advanced",
-          "type": "enum",
-          "options": [
-            "reference_audio",
-            "drive_audio"
-          ],
-          "label": "首条音频用途",
-          "label_en": "First audio role"
-        },
-        "audio_mode": {
-          "level": "advanced",
-          "type": "enum",
-          "options": [
-            "lock_source",
-            "remix_source",
-            "reference_only",
-            "native"
-          ],
-          "label": "音轨模式",
-          "label_en": "Audio mode"
-        },
-        "denoise_strength": {
-          "level": "advanced",
-          "type": "number",
-          "min": 0,
-          "max": 1
-        },
-        "add_drive_as_reference": {
-          "level": "advanced",
-          "type": "boolean"
-        },
-        "start_time_seconds": {
-          "level": "advanced",
-          "type": "number",
-          "min": 0,
-          "label": "参考视频起点",
-          "label_en": "Reference video start"
-        }
-      },
-      "request_mapping": {
-        "prompt": "content",
-        "reference": "content",
-        "first_frame": "content",
-        "last_frame": "content",
-        "source_video": "content",
-        "reference_audio": "content",
-        "resolution": "resolution",
-        "duration": "duration",
-        "aspect_ratio": "ratio",
-        "audio_role": "audio_role",
-        "audio_mode": "audio_control.mode",
-        "denoise_strength": "audio_control.denoise_strength",
-        "add_drive_as_reference": "audio_control.add_drive_as_reference",
-        "start_time_seconds": "start_time_seconds"
-      },
-      "output": {
-        "media_type": "video",
-        "role": "output",
-        "min": 1,
-        "max": 1,
-        "async": true
-      },
-      "platform": {
-        "endpoint": "/v2/video_generation"
       }
     },
     {
@@ -4012,6 +3749,5839 @@
       "platform": {
         "endpoint": "/v1/image/generations"
       }
+    },
+    {
+      "model_id": "laohu-image-nb-2.1",
+      "family_id": "ai-money-nano-banana",
+      "family_name": "Nano Banana",
+      "display_name": "laohu-image-nb-2.1",
+      "variant_id": "laohu-image-nb-2.1",
+      "variant_name": "laohu-image-nb-2.1",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 5,
+          "max_chars": 5000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 14
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ],
+          "default": "1k"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9"
+          ],
+          "default": "auto"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "size",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-image-nb-2.1-lowprice",
+      "family_id": "ai-money-nano-banana",
+      "family_name": "Nano Banana",
+      "display_name": "laohu-image-nb-2.1-lowprice",
+      "variant_id": "laohu-image-nb-2.1-lowprice",
+      "variant_name": "laohu-image-nb-2.1-lowprice",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1,
+          "max_chars": 5000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 14
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ],
+          "default": "1k"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9",
+            "1:4",
+            "4:1",
+            "1:8",
+            "8:1"
+          ],
+          "default": "auto"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "size",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-image-nb-pro-lowprice",
+      "family_id": "ai-money-nano-banana",
+      "family_name": "Nano Banana",
+      "display_name": "laohu-image-nb-pro-lowprice",
+      "variant_id": "laohu-image-nb-pro-lowprice",
+      "variant_name": "laohu-image-nb-pro-lowprice",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1,
+          "max_chars": 5000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 14
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ],
+          "default": "1k"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9"
+          ],
+          "default": "auto"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "size",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-image-g-v2.6-lowprice",
+      "family_id": "ai-money-gpt-image",
+      "family_name": "GPT Image",
+      "display_name": "laohu-image-g-v2.6-lowprice",
+      "variant_id": "laohu-image-g-v2.6-lowprice",
+      "variant_name": "2.6 · 低价版",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 2
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "count": "n",
+        "aspect_ratio": "size"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      },
+      "notes": "静态图模式；GIF/SVG 的分帧/矢量结果控件未接入，不能当作已验证模式。",
+      "variant_name_en": "2.6 · Lowprice"
+    },
+    {
+      "model_id": "laohu-image-g-v2.6-flare",
+      "family_id": "ai-money-gpt-image",
+      "family_name": "GPT Image",
+      "display_name": "laohu-image-g-v2.6-flare",
+      "variant_id": "laohu-image-g-v2.6-flare",
+      "variant_name": "2.6 · Flare",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1,
+          "max_chars": 32000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 16
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9"
+          ]
+        },
+        "quality": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "complexity": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "output_format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "count": "n",
+        "aspect_ratio": "size",
+        "quality": "quality",
+        "complexity": "complexity",
+        "output_format": "output_format"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      },
+      "notes": "静态图模式；GIF/SVG 的分帧/矢量结果控件未接入，不能当作已验证模式。",
+      "variant_name_en": "2.6 · Flare"
+    },
+    {
+      "model_id": "laohu-image-g-v2.6-sunburst",
+      "family_id": "ai-money-gpt-image",
+      "family_name": "GPT Image",
+      "display_name": "laohu-image-g-v2.6-sunburst",
+      "variant_id": "laohu-image-g-v2.6-sunburst",
+      "variant_name": "2.6 · Sunburst",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1,
+          "max_chars": 32000
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 16
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 4
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9"
+          ]
+        },
+        "quality": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "complexity": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "output_format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "count": "n",
+        "aspect_ratio": "size",
+        "quality": "quality",
+        "complexity": "complexity",
+        "output_format": "output_format"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      },
+      "notes": "静态图模式；GIF/SVG 的分帧/矢量结果控件未接入，不能当作已验证模式。",
+      "variant_name_en": "2.6 · Sunburst"
+    },
+    {
+      "model_id": "flux-3-image",
+      "family_id": "ai-money-flux-3-image",
+      "family_name": "FLUX 3 Image",
+      "display_name": "flux-3-image",
+      "variant_id": "flux-3-image",
+      "variant_name": "flux-3-image",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 10,
+          "max_bytes": 10485760
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "768sq",
+            "1k",
+            "1.5k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "string",
+          "label": "画幅",
+          "label_en": "Aspect ratio",
+          "description": "auto 或平台文档支持的画幅"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        },
+        "grounding": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "label": "检索增强",
+          "label_en": "Grounding"
+        },
+        "safety_tolerance": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 4,
+          "label": "安全容忍度",
+          "label_en": "Safety tolerance"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "aspect_ratio",
+        "count": "n",
+        "grounding": "grounding",
+        "safety_tolerance": "safety_tolerance"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "flux-3-image-t2i",
+      "family_id": "ai-money-flux-3-image",
+      "family_name": "FLUX 3 Image",
+      "display_name": "flux-3-image-t2i",
+      "variant_id": "flux-3-image-t2i",
+      "variant_name": "flux-3-image-t2i",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "768sq",
+            "1k",
+            "1.5k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "string",
+          "label": "画幅",
+          "label_en": "Aspect ratio",
+          "description": "auto 或平台文档支持的画幅"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        },
+        "grounding": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "label": "检索增强",
+          "label_en": "Grounding"
+        },
+        "safety_tolerance": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 4,
+          "label": "安全容忍度",
+          "label_en": "Safety tolerance"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "aspect_ratio",
+        "count": "n",
+        "grounding": "grounding",
+        "safety_tolerance": "safety_tolerance"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "flux-3-image-i2i",
+      "family_id": "ai-money-flux-3-image",
+      "family_name": "FLUX 3 Image",
+      "display_name": "flux-3-image-i2i",
+      "variant_id": "flux-3-image-i2i",
+      "variant_name": "flux-3-image-i2i",
+      "node_type": "image_generation",
+      "operation": "image_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 10,
+          "max_bytes": 10485760
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "768sq",
+            "1k",
+            "1.5k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "string",
+          "label": "画幅",
+          "label_en": "Aspect ratio",
+          "description": "auto 或平台文档支持的画幅"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        },
+        "grounding": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "label": "检索增强",
+          "label_en": "Grounding"
+        },
+        "safety_tolerance": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 4,
+          "label": "安全容忍度",
+          "label_en": "Safety tolerance"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "aspect_ratio",
+        "count": "n",
+        "grounding": "grounding",
+        "safety_tolerance": "safety_tolerance"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "flux-3-image-klein-t2i",
+      "family_id": "ai-money-flux-3-image",
+      "family_name": "FLUX 3 Image",
+      "display_name": "flux-3-image-klein-t2i",
+      "variant_id": "flux-3-image-klein-t2i",
+      "variant_name": "flux-3-image-klein-t2i",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "768sq",
+            "1k",
+            "1.5k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "string",
+          "label": "画幅",
+          "label_en": "Aspect ratio",
+          "description": "auto 或平台文档支持的画幅"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        },
+        "steps": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 16
+        },
+        "output_format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "aspect_ratio",
+        "count": "n",
+        "seed": "seed",
+        "steps": "metadata.steps",
+        "output_format": "output_format"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "flux-3-image-klein-i2i",
+      "family_id": "ai-money-flux-3-image",
+      "family_name": "FLUX 3 Image",
+      "display_name": "flux-3-image-klein-i2i",
+      "variant_id": "flux-3-image-klein-i2i",
+      "variant_name": "flux-3-image-klein-i2i",
+      "node_type": "image_generation",
+      "operation": "image_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 10,
+          "max_bytes": 10485760
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "768sq",
+            "1k",
+            "1.5k",
+            "2k",
+            "4k"
+          ]
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "string",
+          "label": "画幅",
+          "label_en": "Aspect ratio",
+          "description": "auto 或平台文档支持的画幅"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        },
+        "steps": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 16
+        },
+        "output_format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "jpeg",
+            "png"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "resolution": "resolution",
+        "aspect_ratio": "aspect_ratio",
+        "count": "n",
+        "seed": "seed",
+        "steps": "metadata.steps",
+        "output_format": "output_format"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "krea-v3-t2i",
+      "family_id": "ai-money-krea-v3",
+      "family_name": "Krea V3",
+      "display_name": "krea-v3-t2i",
+      "variant_id": "krea-v3-t2i",
+      "variant_name": "krea-v3-t2i",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        }
+      },
+      "parameters": {
+        "size": {
+          "level": "advanced",
+          "type": "string",
+          "label": "像素尺寸",
+          "label_en": "Pixel size"
+        },
+        "model_variant": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "berry",
+            "jam"
+          ],
+          "label": "模型版本",
+          "label_en": "Model variant"
+        },
+        "reasoning_level": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "low",
+            "medium"
+          ],
+          "label": "推理程度",
+          "label_en": "Reasoning level"
+        },
+        "output_format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpeg"
+          ]
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "size": "size",
+        "model_variant": "metadata.model_variant",
+        "reasoning_level": "metadata.reasoning_level",
+        "output_format": "output_format",
+        "seed": "seed"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "krea-v3-i2i",
+      "family_id": "ai-money-krea-v3",
+      "family_name": "Krea V3",
+      "display_name": "krea-v3-i2i",
+      "variant_id": "krea-v3-i2i",
+      "variant_name": "krea-v3-i2i",
+      "node_type": "image_generation",
+      "operation": "image_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 8,
+          "max_bytes": 31457280
+        }
+      },
+      "parameters": {
+        "size": {
+          "level": "advanced",
+          "type": "string",
+          "label": "像素尺寸",
+          "label_en": "Pixel size"
+        },
+        "model_variant": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "berry",
+            "jam"
+          ],
+          "label": "模型版本",
+          "label_en": "Model variant"
+        },
+        "reasoning_level": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "low",
+            "medium"
+          ],
+          "label": "推理程度",
+          "label_en": "Reasoning level"
+        },
+        "output_format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "png",
+            "jpeg"
+          ]
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "size": "size",
+        "model_variant": "metadata.model_variant",
+        "reasoning_level": "metadata.reasoning_level",
+        "output_format": "output_format",
+        "seed": "seed"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-image-muse",
+      "family_id": "ai-money-muse-image",
+      "family_name": "Muse Image",
+      "display_name": "laohu-image-muse",
+      "variant_id": "laohu-image-muse",
+      "variant_name": "laohu-image-muse",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 9,
+          "max_total_bytes": 11534336
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4",
+            "3:2",
+            "2:3"
+          ]
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "size",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-image-hy-v3.5-preview",
+      "family_id": "ai-money-hy-image-3-5-preview",
+      "family_name": "HY Image 3.5 Preview",
+      "display_name": "laohu-image-hy-v3.5-preview",
+      "variant_id": "laohu-image-hy-v3.5-preview",
+      "variant_name": "laohu-image-hy-v3.5-preview",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 5
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "4:5",
+            "5:4",
+            "9:16",
+            "16:9",
+            "21:9"
+          ]
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k",
+            "4k"
+          ],
+          "default": "1k"
+        },
+        "width": {
+          "level": "optional",
+          "type": "integer",
+          "min": 256,
+          "max": 8192
+        },
+        "height": {
+          "level": "optional",
+          "type": "integer",
+          "min": 256,
+          "max": 8192
+        },
+        "negative_prompt": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 9007199254740991
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "size",
+        "resolution": "resolution",
+        "width": "width",
+        "height": "height",
+        "negative_prompt": "negative_prompt",
+        "seed": "seed",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "mai-image-2-6",
+      "family_id": "ai-money-mai-image-2-6",
+      "family_name": "MAI Image 2.6",
+      "display_name": "mai-image-2-6",
+      "variant_id": "mai-image-2-6",
+      "variant_name": "mai-image-2-6",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 5
+        }
+      },
+      "parameters": {
+        "size": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k"
+          ],
+          "default": "1k"
+        },
+        "width": {
+          "level": "optional",
+          "type": "integer",
+          "min": 768,
+          "max": 3072
+        },
+        "height": {
+          "level": "optional",
+          "type": "integer",
+          "min": 768,
+          "max": 3072
+        },
+        "web_grounding": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "label": "联网检索",
+          "label_en": "Web grounding"
+        },
+        "auto_aspect_ratio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "label": "自动画幅",
+          "label_en": "Automatic aspect ratio"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "size": "size",
+        "resolution": "resolution",
+        "width": "width",
+        "height": "height",
+        "web_grounding": "web_grounding",
+        "auto_aspect_ratio": "auto_aspect_ratio",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "mai-image-2-6-flash",
+      "family_id": "ai-money-mai-image-2-6",
+      "family_name": "MAI Image 2.6",
+      "display_name": "mai-image-2-6-flash",
+      "variant_id": "mai-image-2-6-flash",
+      "variant_name": "mai-image-2-6-flash",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 5
+        }
+      },
+      "parameters": {
+        "size": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1k",
+            "2k"
+          ],
+          "default": "1k"
+        },
+        "width": {
+          "level": "optional",
+          "type": "integer",
+          "min": 768,
+          "max": 3072
+        },
+        "height": {
+          "level": "optional",
+          "type": "integer",
+          "min": 768,
+          "max": 3072
+        },
+        "web_grounding": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "label": "联网检索",
+          "label_en": "Web grounding"
+        },
+        "auto_aspect_ratio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "label": "自动画幅",
+          "label_en": "Automatic aspect ratio"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "size": "size",
+        "resolution": "resolution",
+        "width": "width",
+        "height": "height",
+        "web_grounding": "web_grounding",
+        "auto_aspect_ratio": "auto_aspect_ratio",
+        "count": "n"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "moss-image",
+      "family_id": "ai-money-moss-image",
+      "family_name": "Moss Image",
+      "display_name": "moss-image",
+      "variant_id": "moss-image",
+      "variant_name": "moss-image",
+      "node_type": "image_generation",
+      "operation": "text_or_reference_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "9:16",
+            "16:9",
+            "21:9"
+          ],
+          "default": "9:16"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "metadata.ratio"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "z-image-t2i",
+      "family_id": "ai-money-z-image",
+      "family_name": "Z Image",
+      "display_name": "z-image-t2i",
+      "variant_id": "z-image-t2i",
+      "variant_name": "z-image-t2i",
+      "node_type": "image_generation",
+      "operation": "text_to_image",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1
+        }
+      },
+      "parameters": {
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "9:16",
+            "16:9",
+            "21:9"
+          ],
+          "default": "1:1"
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 9007199254740991
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "aspect_ratio": "metadata.ratio",
+        "seed": "metadata.seed"
+      },
+      "output": {
+        "media_type": "image",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/image/generations"
+      }
+    },
+    {
+      "model_id": "laohu-op-5.5",
+      "family_id": "ai-money-claude-opus-5-5",
+      "family_name": "Claude Opus 5.5",
+      "display_name": "laohu-op-5.5",
+      "variant_id": "laohu-op-5.5",
+      "variant_name": "laohu-op-5.5",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/gm-4-argon",
+      "family_id": "ai-money-gemini-4-argon",
+      "family_name": "Gemini 4 Argon",
+      "display_name": "laohu/gm-4-argon",
+      "variant_id": "laohu/gm-4-argon",
+      "variant_name": "laohu/gm-4-argon",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "qwen/qwen3.8-omni-flash",
+      "family_id": "ai-money-qwen-3-8-omni-flash",
+      "family_name": "Qwen 3.8 Omni Flash",
+      "display_name": "qwen/qwen3.8-omni-flash",
+      "variant_id": "qwen/qwen3.8-omni-flash",
+      "variant_name": "qwen/qwen3.8-omni-flash",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 0,
+          "max": 3
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens",
+        "source_video": "messages.content"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      },
+      "notes": "当前消息适配器支持文本/图片与视频抽帧；原生音频输入仍待协议核验。"
+    },
+    {
+      "model_id": "deepseek/deepseek-v4.1-flash",
+      "family_id": "ai-money-deepseek-v4-1",
+      "family_name": "DeepSeek V4.1",
+      "display_name": "deepseek/deepseek-v4.1-flash",
+      "variant_id": "deepseek/deepseek-v4.1-flash",
+      "variant_name": "deepseek/deepseek-v4.1-flash",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g6-sol",
+      "family_id": "ai-money-gpt-6",
+      "family_name": "GPT 6",
+      "display_name": "laohu/g6-sol",
+      "variant_id": "laohu/g6-sol",
+      "variant_name": "laohu/g6-sol",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g6-luna",
+      "family_id": "ai-money-gpt-6",
+      "family_name": "GPT 6",
+      "display_name": "laohu/g6-luna",
+      "variant_id": "laohu/g6-luna",
+      "variant_name": "laohu/g6-luna",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu/g6-astra",
+      "family_id": "ai-money-gpt-6",
+      "family_name": "GPT 6",
+      "display_name": "laohu/g6-astra",
+      "variant_id": "laohu/g6-astra",
+      "variant_name": "laohu/g6-astra",
+      "node_type": "text_generation",
+      "operation": "chat",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 8
+        }
+      },
+      "parameters": {
+        "max_output_tokens": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1
+        }
+      },
+      "request_mapping": {
+        "prompt": "messages",
+        "reference": "messages.content",
+        "max_output_tokens": "max_tokens"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": false
+      },
+      "platform": {
+        "endpoint": "/v1/chat/completions"
+      }
+    },
+    {
+      "model_id": "laohu-hk-5.5",
+      "family_id": "ai-money-laohu-hk-5-5",
+      "family_name": "laohu-hk-5.5",
+      "display_name": "laohu-hk-5.5",
+      "variant_id": "laohu-hk-5.5",
+      "variant_name": "laohu-hk-5.5",
+      "node_type": "text_generation",
+      "operation": "unconfirmed",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "catalog_only",
+      "readiness": "needs_profile",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/v1/models",
+          "kind": "catalog_only",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {},
+      "parameters": {},
+      "request_mapping": {},
+      "output": {},
+      "platform": {},
+      "notes": "实时目录存在；官方 llms.txt 未提供该别名的请求与能力契约。"
+    },
+    {
+      "model_id": "laohu-sn-5.5",
+      "family_id": "ai-money-laohu-sn-5-5",
+      "family_name": "laohu-sn-5.5",
+      "display_name": "laohu-sn-5.5",
+      "variant_id": "laohu-sn-5.5",
+      "variant_name": "laohu-sn-5.5",
+      "node_type": "text_generation",
+      "operation": "unconfirmed",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "catalog_only",
+      "readiness": "needs_profile",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/v1/models",
+          "kind": "catalog_only",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {},
+      "parameters": {},
+      "request_mapping": {},
+      "output": {},
+      "platform": {},
+      "notes": "实时目录存在；官方 llms.txt 未提供该别名的请求与能力契约。"
+    },
+    {
+      "model_id": "laohu/motion-video",
+      "family_id": "ai-money-motion-video",
+      "family_name": "Motion Video",
+      "display_name": "laohu/motion-video",
+      "variant_id": "laohu/motion-video",
+      "variant_name": "laohu/motion-video",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            15,
+            30,
+            45,
+            60
+          ],
+          "default": 15
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "16:9",
+            "9:16",
+            "1:1"
+          ],
+          "default": "16:9"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "720p",
+            "1080p"
+          ],
+          "default": "720p"
+        },
+        "template_id": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "hype-kinetic",
+            "cyber-glitch",
+            "blueprint-tech",
+            "synthwave",
+            "swiss-minimal",
+            "code-cinema",
+            "data-story",
+            "chalk-hand",
+            "voxel-world",
+            "cinematic-trailer"
+          ],
+          "label": "动效模板",
+          "label_en": "Motion template"
+        },
+        "title": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "subtitle": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "signature": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "language": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "zh-CN",
+            "en-US"
+          ]
+        },
+        "music": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "none"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "resolution": "resolution",
+        "template_id": "motion.template_id",
+        "title": "motion.title",
+        "subtitle": "motion.subtitle",
+        "signature": "motion.signature",
+        "language": "motion.language",
+        "music": "motion.music"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "laohu/motion-video-pro",
+      "family_id": "ai-money-motion-video",
+      "family_name": "Motion Video",
+      "display_name": "laohu/motion-video-pro",
+      "variant_id": "laohu/motion-video-pro",
+      "variant_name": "laohu/motion-video-pro",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            15,
+            30,
+            45,
+            60
+          ],
+          "default": 15
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "16:9",
+            "9:16",
+            "1:1"
+          ],
+          "default": "16:9"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "720p",
+            "1080p"
+          ],
+          "default": "720p"
+        },
+        "template_id": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "hype-kinetic",
+            "cyber-glitch",
+            "blueprint-tech",
+            "synthwave",
+            "swiss-minimal",
+            "code-cinema",
+            "data-story",
+            "chalk-hand",
+            "voxel-world",
+            "cinematic-trailer"
+          ],
+          "label": "动效模板",
+          "label_en": "Motion template"
+        },
+        "title": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "subtitle": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "signature": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "language": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "zh-CN",
+            "en-US"
+          ]
+        },
+        "music": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "none"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "resolution": "resolution",
+        "template_id": "motion.template_id",
+        "title": "motion.title",
+        "subtitle": "motion.subtitle",
+        "signature": "motion.signature",
+        "language": "motion.language",
+        "music": "motion.music"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "laohu-video-muse",
+      "family_id": "ai-money-muse-video",
+      "family_name": "Muse Video",
+      "display_name": "laohu-video-muse",
+      "variant_id": "laohu-video-muse",
+      "variant_name": "laohu-video-muse",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 9,
+          "max_total_bytes": 11534336
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            10
+          ],
+          "default": 10
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "720p"
+          ],
+          "default": "720p"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "auto",
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4",
+            "3:2",
+            "2:3"
+          ],
+          "default": "auto"
+        },
+        "count": {
+          "level": "optional",
+          "type": "integer",
+          "min": 1,
+          "max": 1,
+          "default": 1
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            true
+          ],
+          "default": true
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "duration": "duration",
+        "resolution": "resolution",
+        "aspect_ratio": "size",
+        "count": "n",
+        "generate_audio": "audio"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "Topaz-Upscale-LowPirce",
+      "family_id": "ai-money-topaz",
+      "family_name": "Topaz",
+      "display_name": "Topaz-Upscale-LowPirce",
+      "variant_id": "Topaz-Upscale-LowPirce",
+      "variant_name": "Topaz-Upscale-LowPirce",
+      "node_type": "video_generation",
+      "operation": "video_upscale",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "720p",
+            "1080p",
+            "2K",
+            "4K"
+          ],
+          "default": "1080p"
+        },
+        "quality": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "Ultra",
+            "Max",
+            "High",
+            "Medium",
+            "Low"
+          ],
+          "label": "模型",
+          "label_en": "Model",
+          "default": "Max"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "source_video": "metadata.video_url",
+        "resolution": "metadata.resolution",
+        "quality": "metadata.quality"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "wan-3.0-t2v",
+      "family_id": "ai-money-wan-3-0",
+      "family_name": "Wan 3.0",
+      "display_name": "wan-3.0-t2v",
+      "variant_id": "wan-3.0-t2v",
+      "variant_name": "wan-3.0-t2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 20000
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 2,
+          "max": 30,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ]
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480P",
+            "720P",
+            "1080P"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "seconds",
+        "aspect_ratio": "metadata.ratio",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "wan-3.0-prime-t2v",
+      "family_id": "ai-money-wan-3-0",
+      "family_name": "Wan 3.0",
+      "display_name": "wan-3.0-prime-t2v",
+      "variant_id": "wan-3.0-prime-t2v",
+      "variant_name": "wan-3.0-prime-t2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 20000
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 2,
+          "max": 30,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ]
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480P",
+            "720P",
+            "1080P"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "seconds",
+        "aspect_ratio": "metadata.ratio",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "wan-3.0-global-t2v",
+      "family_id": "ai-money-wan-3-0",
+      "family_name": "Wan 3.0",
+      "display_name": "wan-3.0-global-t2v",
+      "variant_id": "wan-3.0-global-t2v",
+      "variant_name": "wan-3.0-global-t2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 20000
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 2,
+          "max": 30,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ]
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480P",
+            "720P",
+            "1080P"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "seconds",
+        "aspect_ratio": "metadata.ratio",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "wan-3.0-global-prime-t2v",
+      "family_id": "ai-money-wan-3-0",
+      "family_name": "Wan 3.0",
+      "display_name": "wan-3.0-global-prime-t2v",
+      "variant_id": "wan-3.0-global-prime-t2v",
+      "variant_name": "wan-3.0-global-prime-t2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 20000
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 2,
+          "max": 30,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16"
+          ]
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480P",
+            "720P",
+            "1080P"
+          ]
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "seed": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 2147483647
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "seconds",
+        "aspect_ratio": "metadata.ratio",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "seed": "metadata.seed"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "vidu-q4-preview-r2v",
+      "family_id": "ai-money-vidu-q4",
+      "family_name": "Vidu Q4",
+      "display_name": "vidu-q4-preview-r2v",
+      "variant_id": "vidu-q4-preview-r2v",
+      "variant_name": "vidu-q4-preview-r2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 15
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 0,
+          "max": 3
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 3,
+          "max": 16,
+          "default": 5
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "540p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k"
+          ],
+          "default": "720p"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "is_rec": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "watermark": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ],
+          "default": "16:9"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "reference_audio": "metadata.audio_urls",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "is_rec": "metadata.is_rec",
+        "watermark": "metadata.watermark",
+        "aspect_ratio": "metadata.ratio"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "vidu-q4-preview-i2v",
+      "family_id": "ai-money-vidu-q4",
+      "family_name": "Vidu Q4",
+      "display_name": "vidu-q4-preview-i2v",
+      "variant_id": "vidu-q4-preview-i2v",
+      "variant_name": "vidu-q4-preview-i2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 3,
+          "max": 16,
+          "default": 5
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "540p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k"
+          ],
+          "default": "720p"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "is_rec": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "watermark": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "reference_audio": "metadata.audio_urls",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "is_rec": "metadata.is_rec",
+        "watermark": "metadata.watermark"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "vidu-q4-preview-global-r2v",
+      "family_id": "ai-money-vidu-q4",
+      "family_name": "Vidu Q4",
+      "display_name": "vidu-q4-preview-global-r2v",
+      "variant_id": "vidu-q4-preview-global-r2v",
+      "variant_name": "vidu-q4-preview-global-r2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 15
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 0,
+          "max": 3
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 3,
+          "max": 16,
+          "default": 5
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "540p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k"
+          ],
+          "default": "720p"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "is_rec": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "watermark": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:3",
+            "3:4"
+          ],
+          "default": "16:9"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "reference_audio": "metadata.audio_urls",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "is_rec": "metadata.is_rec",
+        "watermark": "metadata.watermark",
+        "aspect_ratio": "metadata.ratio"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "vidu-q4-preview-global-i2v",
+      "family_id": "ai-money-vidu-q4",
+      "family_name": "Vidu Q4",
+      "display_name": "vidu-q4-preview-global-i2v",
+      "variant_id": "vidu-q4-preview-global-i2v",
+      "variant_name": "vidu-q4-preview-global-i2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 3,
+          "max": 16,
+          "default": 5
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "540p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k"
+          ],
+          "default": "720p"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "is_rec": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true
+        },
+        "watermark": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "reference_audio": "metadata.audio_urls",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "generate_audio": "metadata.generate_audio",
+        "is_rec": "metadata.is_rec",
+        "watermark": "metadata.watermark"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-v4-t2v",
+      "family_id": "ai-money-kling-4",
+      "family_name": "Kling 4",
+      "display_name": "kling-v4-t2v",
+      "variant_id": "kling-v4-t2v",
+      "variant_name": "kling-v4-t2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 3,
+          "max": 30,
+          "default": 5
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "720p",
+            "1080p"
+          ]
+        },
+        "watermark": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "21:9",
+            "16:9",
+            "1:1",
+            "9:16"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "image_urls",
+        "source_video": "video_urls",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "watermark": "metadata.watermark",
+        "aspect_ratio": "metadata.ratio"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-v4-i2v",
+      "family_id": "ai-money-kling-4",
+      "family_name": "Kling 4",
+      "display_name": "kling-v4-i2v",
+      "variant_id": "kling-v4-i2v",
+      "variant_name": "kling-v4-i2v",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 2,
+          "max_bytes": 31457280
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 3,
+          "max": 30,
+          "default": 5
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "720p",
+            "1080p"
+          ]
+        },
+        "watermark": {
+          "level": "optional",
+          "type": "boolean"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "image_urls",
+        "source_video": "video_urls",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "watermark": "metadata.watermark",
+        "aspect_ratio": "metadata.ratio"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-v4-omni",
+      "family_id": "ai-money-kling-4",
+      "family_name": "Kling 4",
+      "display_name": "kling-v4-omni",
+      "variant_id": "kling-v4-omni",
+      "variant_name": "kling-v4-omni",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 10,
+          "max_bytes": 31457280
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 0,
+          "max": 5,
+          "max_bytes": 314572800,
+          "max_total_duration_seconds": 30
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 3,
+          "max": 30,
+          "default": 5
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "720p",
+            "1080p"
+          ]
+        },
+        "watermark": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "21:9",
+            "16:9",
+            "1:1",
+            "9:16"
+          ]
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "image_urls",
+        "source_video": "video_urls",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "watermark": "metadata.watermark",
+        "aspect_ratio": "metadata.ratio"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-v4-custom-element",
+      "family_id": "ai-money-kling-4",
+      "family_name": "Kling 4",
+      "display_name": "kling-v4-custom-element",
+      "variant_id": "kling-v4-custom-element",
+      "variant_name": "kling-v4-custom-element",
+      "node_type": "text_generation",
+      "operation": "asset_creation",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 4,
+          "max_bytes": 10485760
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 0,
+          "max": 1,
+          "min_duration_seconds": 3,
+          "max_duration_seconds": 8,
+          "max_bytes": 209715200
+        }
+      },
+      "parameters": {
+        "element_name": {
+          "level": "required",
+          "type": "string",
+          "label": "主体名称",
+          "label_en": "Element name"
+        },
+        "reference_type": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "image_refer",
+            "video_refer"
+          ],
+          "default": "image_refer",
+          "label": "参考类型",
+          "label_en": "Reference type"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "image_urls",
+        "source_video": "video_url",
+        "reference_audio": "audio_url",
+        "voice_name": "metadata.voiceName",
+        "element_name": "metadata.elementName",
+        "reference_type": "metadata.referenceType"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-v4-custom-voice",
+      "family_id": "ai-money-kling-4",
+      "family_name": "Kling 4",
+      "display_name": "kling-v4-custom-voice",
+      "variant_id": "kling-v4-custom-voice",
+      "variant_name": "kling-v4-custom-voice",
+      "node_type": "text_generation",
+      "operation": "asset_creation",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 0,
+          "max": 1
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 1,
+          "max": 1,
+          "max_bytes": 10485760
+        }
+      },
+      "parameters": {
+        "voice_name": {
+          "level": "required",
+          "type": "string",
+          "label": "音色名称",
+          "label_en": "Voice name"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "image_urls",
+        "source_video": "video_url",
+        "reference_audio": "audio_url",
+        "voice_name": "metadata.voiceName",
+        "element_name": "metadata.elementName",
+        "reference_type": "metadata.referenceType"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "doubao-seed-tts-2.0",
+      "family_id": "ai-money-doubao-seed-tts-2-0",
+      "family_name": "Doubao Seed TTS 2.0",
+      "display_name": "doubao-seed-tts-2.0",
+      "variant_id": "doubao-seed-tts-2.0",
+      "variant_name": "doubao-seed-tts-2.0",
+      "node_type": "audio_generation",
+      "operation": "text_to_speech",
+      "status": "confirmed",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "ready",
+      "runnable": true,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "min_chars": 1,
+          "max_chars": 10000
+        }
+      },
+      "parameters": {
+        "speaker": {
+          "level": "required",
+          "type": "string"
+        },
+        "voice_model": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "seed-tts-2.0-standard",
+            "seed-tts-2.0-expressive"
+          ],
+          "label": "合成模型",
+          "label_en": "Synthesis model"
+        },
+        "format": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "mp3",
+            "pcm",
+            "ogg_opus",
+            "wav"
+          ],
+          "default": "mp3"
+        },
+        "sample_rate": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "8000",
+            "16000",
+            "22050",
+            "24000",
+            "32000",
+            "44100",
+            "48000"
+          ],
+          "default": "24000"
+        },
+        "speech_rate": {
+          "level": "optional",
+          "type": "integer",
+          "min": -50,
+          "max": 100,
+          "default": 0
+        },
+        "loudness_rate": {
+          "level": "optional",
+          "type": "integer",
+          "min": -50,
+          "max": 100,
+          "default": 0
+        },
+        "pitch": {
+          "level": "optional",
+          "type": "integer",
+          "min": -12,
+          "max": 12,
+          "default": 0
+        },
+        "silence_duration": {
+          "level": "optional",
+          "type": "integer",
+          "min": 0,
+          "max": 30000,
+          "label": "末尾静音（毫秒）",
+          "label_en": "Trailing silence (ms)"
+        },
+        "context_texts": {
+          "level": "advanced",
+          "type": "string",
+          "label": "语音指令",
+          "label_en": "Voice instructions"
+        },
+        "ssml": {
+          "level": "advanced",
+          "type": "string"
+        },
+        "latex_parser": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "v2"
+          ]
+        },
+        "enable_subtitle": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "disable_markdown_filter": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "disable_emoji_filter": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "enable_latex_tn": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "aigc_watermark": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "disable_default_bit_rate": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "tone_fidelity": {
+          "level": "optional",
+          "type": "boolean"
+        },
+        "aigc_metadata_enable": {
+          "level": "optional",
+          "type": "boolean"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "speaker": "metadata.speaker",
+        "voice_model": "metadata.voice_model",
+        "format": "metadata.format",
+        "sample_rate": "metadata.sample_rate",
+        "speech_rate": "metadata.speech_rate",
+        "loudness_rate": "metadata.loudness_rate",
+        "pitch": "metadata.pitch",
+        "silence_duration": "metadata.silence_duration",
+        "context_texts": "metadata.context_texts",
+        "ssml": "metadata.ssml",
+        "latex_parser": "metadata.latex_parser",
+        "enable_subtitle": "metadata.enable_subtitle",
+        "disable_markdown_filter": "metadata.disable_markdown_filter",
+        "disable_emoji_filter": "metadata.disable_emoji_filter",
+        "enable_latex_tn": "metadata.enable_latex_tn",
+        "aigc_watermark": "metadata.aigc_watermark",
+        "disable_default_bit_rate": "metadata.disable_default_bit_rate",
+        "tone_fidelity": "metadata.tone_fidelity",
+        "aigc_metadata_enable": "metadata.aigc_metadata_enable"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/audio/generations"
+      }
+    },
+    {
+      "model_id": "MiniMax-H3",
+      "family_id": "ai-money-minimax-h3",
+      "family_name": "MiniMax-H3",
+      "display_name": "MiniMax-H3",
+      "variant_id": "default",
+      "node_type": "video_generation",
+      "operation": "text_or_reference_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1,
+          "max_chars": 10000
+        },
+        "first_frame": {
+          "media_type": "image",
+          "role": "first_frame",
+          "min": 0,
+          "max": 1
+        },
+        "last_frame": {
+          "media_type": "image",
+          "role": "last_frame",
+          "min": 0,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 9
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 0,
+          "max": 3,
+          "min_duration_seconds": 2,
+          "max_duration_seconds": 15
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "role": "reference_audio",
+          "min": 0,
+          "max": 4
+        }
+      },
+      "parameters": {
+        "resolution": {
+          "level": "required",
+          "type": "enum",
+          "options": [
+            "480P",
+            "768P",
+            "1080P"
+          ],
+          "default": "480P"
+        },
+        "duration": {
+          "level": "required",
+          "type": "integer",
+          "min": 4,
+          "max": 60,
+          "default": 5
+        },
+        "aspect_ratio": {
+          "level": "required",
+          "type": "enum",
+          "options": [
+            "1:1",
+            "2:3",
+            "3:2",
+            "3:4",
+            "4:3",
+            "9:16",
+            "16:9",
+            "21:9",
+            "adaptive"
+          ],
+          "default": "16:9"
+        },
+        "audio_role": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "reference_audio",
+            "drive_audio"
+          ],
+          "label": "首条音频用途",
+          "label_en": "First audio role"
+        },
+        "audio_mode": {
+          "level": "advanced",
+          "type": "enum",
+          "options": [
+            "lock_source",
+            "remix_source",
+            "reference_only",
+            "native"
+          ],
+          "label": "音轨模式",
+          "label_en": "Audio mode"
+        },
+        "denoise_strength": {
+          "level": "advanced",
+          "type": "number",
+          "min": 0,
+          "max": 1
+        },
+        "add_drive_as_reference": {
+          "level": "advanced",
+          "type": "boolean"
+        },
+        "start_time_seconds": {
+          "level": "advanced",
+          "type": "number",
+          "min": 0,
+          "label": "参考视频起点",
+          "label_en": "Reference video start"
+        }
+      },
+      "request_mapping": {
+        "prompt": "content",
+        "reference": "content",
+        "first_frame": "content",
+        "last_frame": "content",
+        "source_video": "content",
+        "reference_audio": "content",
+        "resolution": "resolution",
+        "duration": "duration",
+        "aspect_ratio": "ratio",
+        "audio_role": "audio_role",
+        "audio_mode": "audio_control.mode",
+        "denoise_strength": "audio_control.denoise_strength",
+        "add_drive_as_reference": "audio_control.add_drive_as_reference",
+        "start_time_seconds": "start_time_seconds"
+      },
+      "output": {
+        "media_type": "video",
+        "role": "output",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v2/video_generation"
+      }
+    },
+    {
+      "model_id": "hitem3d-v2-multi-image-to-3d",
+      "family_id": "ai-money-hitem3d-v2-multi-image-to-3d",
+      "family_name": "hitem3d-v2-multi-image-to-3d",
+      "display_name": "hitem3d-v2-multi-image-to-3d",
+      "variant_id": "hitem3d-v2-multi-image-to-3d",
+      "variant_name": "hitem3d-v2-multi-image-to-3d",
+      "node_type": "3d_generation",
+      "operation": "3d_generation",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "notes": "画布尚无3D文件输出宿主；保留目录记录，不伪装图片或视频。"
+    },
+    {
+      "model_id": "hitem3d-v2-image-to-3d",
+      "family_id": "ai-money-hitem3d-v2-image-to-3d",
+      "family_name": "hitem3d-v2-image-to-3d",
+      "display_name": "hitem3d-v2-image-to-3d",
+      "variant_id": "hitem3d-v2-image-to-3d",
+      "variant_name": "hitem3d-v2-image-to-3d",
+      "node_type": "3d_generation",
+      "operation": "3d_generation",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "notes": "画布尚无3D文件输出宿主；保留目录记录，不伪装图片或视频。"
+    },
+    {
+      "model_id": "meshy-6-global-text-to-3d",
+      "family_id": "ai-money-meshy-6-global-text-to-3d",
+      "family_name": "meshy-6-global-text-to-3d",
+      "display_name": "meshy-6-global-text-to-3d",
+      "variant_id": "meshy-6-global-text-to-3d",
+      "variant_name": "meshy-6-global-text-to-3d",
+      "node_type": "3d_generation",
+      "operation": "3d_generation",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "notes": "画布尚无3D文件输出宿主；保留目录记录，不伪装图片或视频。"
+    },
+    {
+      "model_id": "hitem3d-portrait-v2.1-multi-image-to-3d",
+      "family_id": "ai-money-hitem3d-portrait-v2-1-multi-image-to-3d",
+      "family_name": "hitem3d-portrait-v2.1-multi-image-to-3d",
+      "display_name": "hitem3d-portrait-v2.1-multi-image-to-3d",
+      "variant_id": "hitem3d-portrait-v2.1-multi-image-to-3d",
+      "variant_name": "hitem3d-portrait-v2.1-multi-image-to-3d",
+      "node_type": "3d_generation",
+      "operation": "3d_generation",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "notes": "画布尚无3D文件输出宿主；保留目录记录，不伪装图片或视频。"
+    },
+    {
+      "model_id": "hitem3d-portrait-v2.1-image-to-3d",
+      "family_id": "ai-money-hitem3d-portrait-v2-1-image-to-3d",
+      "family_name": "hitem3d-portrait-v2.1-image-to-3d",
+      "display_name": "hitem3d-portrait-v2.1-image-to-3d",
+      "variant_id": "hitem3d-portrait-v2.1-image-to-3d",
+      "variant_name": "hitem3d-portrait-v2.1-image-to-3d",
+      "node_type": "3d_generation",
+      "operation": "3d_generation",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "notes": "画布尚无3D文件输出宿主；保留目录记录，不伪装图片或视频。"
+    },
+    {
+      "model_id": "meshy-6-global-image-to-3d",
+      "family_id": "ai-money-meshy-6-global-image-to-3d",
+      "family_name": "meshy-6-global-image-to-3d",
+      "display_name": "meshy-6-global-image-to-3d",
+      "variant_id": "meshy-6-global-image-to-3d",
+      "variant_name": "meshy-6-global-image-to-3d",
+      "node_type": "3d_generation",
+      "operation": "3d_generation",
+      "status": "pending",
+      "version": 3,
+      "evidence_level": "official_documented",
+      "readiness": "adapter_missing",
+      "runnable": false,
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "prompt": "prompt"
+      },
+      "output": {
+        "media_type": "file",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/3d/generations"
+      },
+      "notes": "画布尚无3D文件输出宿主；保留目录记录，不伪装图片或视频。"
+    },
+    {
+      "model_id": "kling-lip-sync-tts",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-lip-sync-tts",
+      "variant_id": "kling-lip-sync-tts",
+      "node_type": "audio_generation",
+      "operation": "text_to_speech",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "voice_id": {
+          "level": "required",
+          "type": "string",
+          "label": "音色 ID",
+          "label_en": "Voice ID"
+        },
+        "voice_language": {
+          "level": "advanced",
+          "type": "string",
+          "label": "合成语言",
+          "label_en": "Voice language"
+        },
+        "voice_speed": {
+          "level": "optional",
+          "type": "number",
+          "min": 0.8,
+          "max": 2,
+          "label": "语速",
+          "label_en": "Voice speed"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "voice_id": "metadata.voiceId",
+        "voice_language": "metadata.voiceLanguage",
+        "voice_speed": "metadata.voiceSpeed"
+      },
+      "output": {
+        "media_type": "audio",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/audio/generations"
+      }
+    },
+    {
+      "model_id": "kling-v3.0-std-motion",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-v3.0-std-motion",
+      "variant_id": "kling-v3.0-std-motion",
+      "node_type": "video_generation",
+      "operation": "motion_transfer",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 1
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "character_orientation": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "image",
+            "video"
+          ],
+          "label": "主体朝向",
+          "label_en": "Character orientation"
+        },
+        "keep_original_sound": {
+          "level": "optional",
+          "type": "boolean",
+          "label": "保留原声",
+          "label_en": "Keep original sound"
+        }
+      },
+      "request_mapping": {
+        "reference": "images",
+        "source_video": "metadata.video_url",
+        "character_orientation": "metadata.characterOrientation",
+        "keep_original_sound": "metadata.keepOriginalSound"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-v3.0-pro-motion",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-v3.0-pro-motion",
+      "variant_id": "kling-v3.0-pro-motion",
+      "node_type": "video_generation",
+      "operation": "motion_transfer",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 1
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "character_orientation": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "image",
+            "video"
+          ],
+          "label": "主体朝向",
+          "label_en": "Character orientation"
+        },
+        "keep_original_sound": {
+          "level": "optional",
+          "type": "boolean",
+          "label": "保留原声",
+          "label_en": "Keep original sound"
+        }
+      },
+      "request_mapping": {
+        "reference": "images",
+        "source_video": "metadata.video_url",
+        "character_orientation": "metadata.characterOrientation",
+        "keep_original_sound": "metadata.keepOriginalSound"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-v3.0-4k-motion",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-v3.0-4k-motion",
+      "variant_id": "kling-v3.0-4k-motion",
+      "node_type": "video_generation",
+      "operation": "motion_transfer",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 1,
+          "max": 1
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "character_orientation": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "image",
+            "video"
+          ],
+          "label": "主体朝向",
+          "label_en": "Character orientation"
+        },
+        "keep_original_sound": {
+          "level": "optional",
+          "type": "boolean",
+          "label": "保留原声",
+          "label_en": "Keep original sound"
+        }
+      },
+      "request_mapping": {
+        "reference": "images",
+        "source_video": "metadata.video_url",
+        "character_orientation": "metadata.characterOrientation",
+        "keep_original_sound": "metadata.keepOriginalSound"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-o3-std-edit",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-o3-std-edit",
+      "variant_id": "kling-o3-std-edit",
+      "node_type": "video_generation",
+      "operation": "video_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 4
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "keep_original_sound": {
+          "level": "optional",
+          "type": "boolean",
+          "label": "保留原声",
+          "label_en": "Keep original sound"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "source_video": "metadata.video_url",
+        "keep_original_sound": "metadata.keepOriginalSound"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-o3-pro-edit",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-o3-pro-edit",
+      "variant_id": "kling-o3-pro-edit",
+      "node_type": "video_generation",
+      "operation": "video_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 4
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {
+        "keep_original_sound": {
+          "level": "optional",
+          "type": "boolean",
+          "label": "保留原声",
+          "label_en": "Keep original sound"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "source_video": "metadata.video_url",
+        "keep_original_sound": "metadata.keepOriginalSound"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-lip-sync-identify-face",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-lip-sync-identify-face",
+      "variant_id": "kling-lip-sync-identify-face",
+      "node_type": "text_generation",
+      "operation": "asset_creation",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 1,
+          "max": 1
+        }
+      },
+      "parameters": {},
+      "request_mapping": {
+        "source_video": "metadata.video_url"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "kling-elements-advanced",
+      "family_id": "ai-money-kling",
+      "family_name": "Kling",
+      "display_name": "kling-elements-advanced",
+      "variant_id": "kling-elements-advanced",
+      "node_type": "text_generation",
+      "operation": "asset_creation",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ],
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "role": "prompt",
+          "min": 1,
+          "max": 1
+        },
+        "reference": {
+          "media_type": "image",
+          "role": "reference",
+          "min": 0,
+          "max": 4
+        },
+        "source_video": {
+          "media_type": "video",
+          "role": "source_video",
+          "min": 0,
+          "max": 1,
+          "min_duration_seconds": 3,
+          "max_duration_seconds": 8
+        }
+      },
+      "parameters": {
+        "element_name": {
+          "level": "required",
+          "type": "string",
+          "label": "主体名称",
+          "label_en": "Element name"
+        },
+        "reference_type": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "image_refer",
+            "video_refer"
+          ],
+          "default": "image_refer",
+          "label": "参考类型",
+          "label_en": "Reference type"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "images",
+        "source_video": "metadata.video_url",
+        "element_name": "metadata.elementName",
+        "reference_type": "metadata.referenceType"
+      },
+      "output": {
+        "media_type": "text",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/video/generations"
+      }
+    },
+    {
+      "model_id": "seedance-2.5-standard-t2v",
+      "family_id": "ai-money-seedance-2-5",
+      "family_name": "Seedance 2.5",
+      "display_name": "seedance-2.5-standard-t2v",
+      "variant_id": "text_to_video",
+      "node_type": "video_generation",
+      "operation": "text_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k",
+            "native1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9"
+          ],
+          "default": "16:9",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "return_last_frame": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "source_field": "metadata.return_last_frame"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "return_last_frame": "metadata.return_last_frame"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      },
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ]
+    },
+    {
+      "model_id": "seedance-2.5-standard-i2v",
+      "family_id": "ai-money-seedance-2-5",
+      "family_name": "Seedance 2.5",
+      "display_name": "seedance-2.5-standard-i2v",
+      "variant_id": "image_to_video",
+      "node_type": "video_generation",
+      "operation": "image_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 1,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k",
+            "native1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9"
+          ],
+          "default": "adaptive",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "return_last_frame": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "source_field": "metadata.return_last_frame"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "last_frame": "images",
+        "first_frame": "images",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "return_last_frame": "metadata.return_last_frame"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      },
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ]
+    },
+    {
+      "model_id": "seedance-2.5-standard-multi",
+      "family_id": "ai-money-seedance-2-5",
+      "family_name": "Seedance 2.5",
+      "display_name": "seedance-2.5-standard-multi",
+      "variant_id": "multimodal_to_video",
+      "node_type": "video_generation",
+      "operation": "multimodal_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 30,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 10,
+          "role": "source_video",
+          "min_duration_seconds": 2,
+          "max_duration_seconds": 30,
+          "max_total_duration_seconds": 30
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 10,
+          "role": "reference_audio",
+          "min_duration_seconds": 2,
+          "max_duration_seconds": 30,
+          "max_total_duration_seconds": 30
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k",
+            "native1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9"
+          ],
+          "default": "16:9",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "return_last_frame": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "source_field": "metadata.return_last_frame"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "metadata.content",
+        "source_video": "metadata.content",
+        "reference_audio": "metadata.content",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "return_last_frame": "metadata.return_last_frame"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      },
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ]
+    },
+    {
+      "model_id": "seedance-2.5-global-standard-t2v",
+      "family_id": "ai-money-seedance-2-5",
+      "family_name": "Seedance 2.5",
+      "display_name": "seedance-2.5-global-standard-t2v",
+      "variant_id": "text_to_video",
+      "node_type": "video_generation",
+      "operation": "text_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k",
+            "native1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9"
+          ],
+          "default": "16:9",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "return_last_frame": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "source_field": "metadata.return_last_frame"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "return_last_frame": "metadata.return_last_frame"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      },
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ]
+    },
+    {
+      "model_id": "seedance-2.5-global-standard-i2v",
+      "family_id": "ai-money-seedance-2-5",
+      "family_name": "Seedance 2.5",
+      "display_name": "seedance-2.5-global-standard-i2v",
+      "variant_id": "image_to_video",
+      "node_type": "video_generation",
+      "operation": "image_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "first_frame": {
+          "media_type": "image",
+          "min": 1,
+          "max": 1,
+          "role": "first_frame"
+        },
+        "last_frame": {
+          "media_type": "image",
+          "min": 0,
+          "max": 1,
+          "role": "last_frame"
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k",
+            "native1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9"
+          ],
+          "default": "adaptive",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "return_last_frame": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "source_field": "metadata.return_last_frame"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "last_frame": "images",
+        "first_frame": "images",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "return_last_frame": "metadata.return_last_frame"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      },
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ]
+    },
+    {
+      "model_id": "seedance-2.5-global-standard-multi",
+      "family_id": "ai-money-seedance-2-5",
+      "family_name": "Seedance 2.5",
+      "display_name": "seedance-2.5-global-standard-multi",
+      "variant_id": "multimodal_to_video",
+      "node_type": "video_generation",
+      "operation": "multimodal_to_video",
+      "status": "confirmed",
+      "readiness": "ready",
+      "runnable": true,
+      "version": 3,
+      "evidence_level": "official_documented",
+      "inputs": {
+        "prompt": {
+          "media_type": "text",
+          "min": 1,
+          "max": 1,
+          "role": "prompt"
+        },
+        "reference": {
+          "media_type": "image",
+          "min": 0,
+          "max": 30,
+          "role": "reference"
+        },
+        "source_video": {
+          "media_type": "video",
+          "min": 0,
+          "max": 10,
+          "role": "source_video",
+          "min_duration_seconds": 2,
+          "max_duration_seconds": 30,
+          "max_total_duration_seconds": 30
+        },
+        "reference_audio": {
+          "media_type": "audio",
+          "min": 0,
+          "max": 10,
+          "role": "reference_audio",
+          "min_duration_seconds": 2,
+          "max_duration_seconds": 30,
+          "max_total_duration_seconds": 30
+        }
+      },
+      "parameters": {
+        "duration": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            -1,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30
+          ],
+          "default": 5,
+          "source_field": "seconds"
+        },
+        "resolution": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "480p",
+            "720p",
+            "1080p",
+            "2k",
+            "4k",
+            "native1080p"
+          ],
+          "default": "720p",
+          "source_field": "metadata.resolution"
+        },
+        "aspect_ratio": {
+          "level": "optional",
+          "type": "enum",
+          "options": [
+            "adaptive",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+            "21:9"
+          ],
+          "default": "16:9",
+          "source_field": "metadata.ratio"
+        },
+        "generate_audio": {
+          "level": "optional",
+          "type": "boolean",
+          "default": true,
+          "source_field": "metadata.generate_audio"
+        },
+        "return_last_frame": {
+          "level": "optional",
+          "type": "boolean",
+          "default": false,
+          "source_field": "metadata.return_last_frame"
+        }
+      },
+      "request_mapping": {
+        "prompt": "prompt",
+        "reference": "metadata.content",
+        "source_video": "metadata.content",
+        "reference_audio": "metadata.content",
+        "duration": "seconds",
+        "resolution": "metadata.resolution",
+        "aspect_ratio": "metadata.ratio",
+        "generate_audio": "metadata.generate_audio",
+        "return_last_frame": "metadata.return_last_frame"
+      },
+      "output": {
+        "media_type": "video",
+        "min": 1,
+        "max": 1,
+        "async": true
+      },
+      "platform": {
+        "endpoint": "/v1/videos"
+      },
+      "sources": [
+        {
+          "url": "https://api.lao-hu.com/docs/llms.txt",
+          "kind": "official_documented",
+          "checked_at": "2026-11-06"
+        }
+      ]
     }
   ]
 }

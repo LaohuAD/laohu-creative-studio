@@ -803,3 +803,60 @@ class StudioMusicIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class MusicEditingTests(StudioMusicIntegrationTests):
+    def test_autosave_archives_once_and_restore_is_field_local(self):
+        store = self._music_store()
+        pid = self.project['id']
+        def save(**fields):
+            return store.put(pid, MusicPutRequest(expected_revision=store.get(pid)['revision'], **fields))
+        first = save(lyrics='original', style_prompt='warm')
+        save(lyrics='draft one', archive=False)
+        draft = save(lyrics='draft two', archive=False)
+        self.assertEqual(len(draft['field_versions']['lyrics']), 1)
+        final = save(archive_fields=['lyrics'])
+        self.assertEqual([v['content'] for v in final['field_versions']['lyrics']], ['original', 'draft two'])
+        version = first['field_versions']['lyrics'][0]['id']
+        restored = store.restore(pid, 'lyrics', version, final['revision'])
+        self.assertEqual(restored['lyrics'], 'original')
+        self.assertEqual(restored['style_prompt'], 'warm')
+        self.assertEqual(len(restored['field_versions']['lyrics']), 2)
+        with self.assertRaises(HTTPException) as error:
+            store.restore(pid, 'lyrics', version, final['revision'])
+        self.assertEqual(error.exception.status_code, 409)
+
+    def test_direct_title_edit_clears_old_selection(self):
+        store = self._music_store(); pid = self.project['id']
+        value = store.put(pid, MusicPutRequest(expected_revision=1, title_candidates={'a':{'title':'old'}}, selected_title_candidate_id='a'))
+        value = store.put(pid, MusicPutRequest(expected_revision=value['revision'], title='new'))
+        self.assertEqual(value['title'], 'new')
+        self.assertIsNone(value['selected_title_candidate_id'])
+
+    def test_score_edit_preserves_old_file_and_invalid_draft(self):
+        import mimetypes
+        mimetypes.add_type('text/x-abc', '.abc')
+        original = 'X:1\nM:4/4\nL:1/32\nQ:1/4=88\nV: Vocal\nV: Ins\nK:G\nV: Vocal\n"G"B8d8c8A8|\nV: Ins\nZ|\n'
+        path = self.storage.results_dir / 'original.abc'
+        path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(original.encode("utf-8"))
+        original_ref = self.storage.register_managed_result(path, 'original.abc')
+        def write(source, format_name, project_id):
+            import hashlib
+            target = self.storage.results_dir / (hashlib.sha256(source.encode()).hexdigest()+'.'+format_name)
+            target.write_bytes(source.encode("utf-8"))
+            return self.storage.register_managed_result(target, target.name)
+        store = StudioMusicStore(self.project_store, self._resolve_media, self._read_media, write)
+        pid = self.project['id']
+        attached = store.put(pid, MusicPutRequest(expected_revision=1, score_refs=[{'result_id':original_ref['id'],'format':'abc'}]))
+        old_id = attached['score_refs'][0]['id']
+        invalid = store.put(pid, MusicPutRequest(expected_revision=attached['revision'], archive=False, score_edit={'reference_id':old_id,'source':'X:'}))
+        self.assertEqual(invalid['score_drafts'][old_id], 'X:')
+        failed = store.put(pid, MusicPutRequest(expected_revision=invalid['revision'], archive_fields=['scores']))
+        self.assertTrue(failed['score_draft_error'])
+        self.assertEqual(len(failed['score_refs']),1)
+        edited = original.replace('B8d8c8A8', 'B8d8e8A8')
+        saved = store.put(pid, MusicPutRequest(expected_revision=failed['revision'], score_edit={'reference_id':old_id,'source':edited}))
+        self.assertEqual(len(saved['score_refs']),2)
+        self.assertNotEqual(saved['selected_score_ref_id'],old_id)
+        self.assertEqual(path.read_text(),original)
+        self.assertEqual(saved['score_drafts'],{})
+        self.assertEqual(self._read_media('',saved['score_refs'][-1]['result_id']).decode(),edited)

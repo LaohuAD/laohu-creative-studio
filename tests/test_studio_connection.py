@@ -212,8 +212,11 @@ class StudioArticleConnectionTests(unittest.TestCase):
 
     def test_catalog_templates_keep_the_original_full_gallery_structure(self):
         catalog = json.loads((ROOT / "static" / "article-templates" / "catalog.json").read_text(encoding="utf-8"))
+        originals = [item for item in catalog["templates"] if item["id"] in TEMPLATE_STRUCTURE_BASELINES]
+        self.assertEqual({item["id"] for item in originals}, set(TEMPLATE_STRUCTURE_BASELINES))
         signatures = set()
-        for item in catalog["templates"]:
+        # 六套原画廊仍逐项锁定；新阅读主题由独立迁入回归覆盖。
+        for item in originals:
             path = ROOT / "static" / item["preview_url"].removeprefix("/static/")
             preview = path.read_text(encoding="utf-8")
             signature = _TemplateStructureSignature()
@@ -228,8 +231,8 @@ class StudioArticleConnectionTests(unittest.TestCase):
     def test_catalog_examples_replace_gallery_copy_and_preserve_license(self):
         catalog_path = ROOT / "static" / "article-templates" / "catalog.json"
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-        self.assertEqual(len(catalog["templates"]), 6)
-        self.assertEqual(len({item["id"] for item in catalog["templates"]}), 6)
+        self.assertEqual(len(catalog["templates"]), 11)
+        self.assertEqual(len({item["id"] for item in catalog["templates"]}), 11)
         self.assertEqual(catalog["source_repository"], "https://github.com/LaohuAD/laohu-creative-skills.git")
         fingerprints = catalog["source_fingerprints"]
         self.assertRegex(fingerprints["theme_index"], r"^[a-f0-9]{64}$")
@@ -237,7 +240,7 @@ class StudioArticleConnectionTests(unittest.TestCase):
         self.assertEqual(set(fingerprints["themes"]), {item["id"] for item in catalog["templates"]})
 
         shared_copy = (
-            "我是老胡", "老胡画梦枋", "Hypit", "老胡造梦技能",
+            "我是老胡", "老胡画梦枋", "视频克隆", "老胡造梦技能",
             "画布", "公众号", "标题", "封面", "正文", "作品",
         )
         reference_copy = (
@@ -258,6 +261,8 @@ class StudioArticleConnectionTests(unittest.TestCase):
         }
         all_visible = []
         for item in catalog["templates"]:
+            if item["id"] not in TEMPLATE_STRUCTURE_BASELINES:
+                continue  # WeDraft 的原创预览与 MIT 归属在专门测试中核对。
             self.assertTrue(item["name"] and item["name_en"])
             self.assertTrue(item["description"] and item["description_en"])
             self.assertRegex(item["color"], r"^#[A-Fa-f0-9]{6}$")
@@ -311,6 +316,49 @@ class StudioConnectionTests(unittest.TestCase):
 
         self.app.include_router(create_connection_router(get_project))
         self.client = TestClient(self.app, base_url="http://studio.test:8123", client=("127.0.0.1", 42001))
+
+    def test_all_project_guides_resolve_capabilities_without_changing_project_scope(self):
+        scopes = {
+            "canvas": ("canvas-work", ("text", "image", "video", "voice", "audio", "music")),
+            "hypit": ("hypit-settings", ("text", "image", "video", "audio", "music", "voice")),
+            "article": ("article-settings", ("text", "image", "video", "audio", "music", "voice")),
+            "music": ("music-settings", ("music", "image")),
+            "script": ("script-settings", ("text",)),
+            "novel": ("novel-settings", ("text",)),
+        }
+        for module, (graph_id, slots) in scopes.items():
+            for lang in ("zh", "en"):
+                with self.subTest(module=module, lang=lang):
+                    response = self.client.get(
+                        f"/api/studio/projects/{module}-work/connection?module={module}&lang={lang}"
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    connected = response.json()
+                    self.assertEqual(connected["module"], module)
+                    self.assertEqual(connected["project_id"], f"{module}-work")
+                    document = self.client.get(connected["document_url"])
+                    self.assertEqual(document.status_code, 200)
+                    usage = document.text.split("## Calling AI capabilities" if lang == "en" else "## 怎么调用 AI 能力")[1]
+                    purposes = usage.splitlines()[2]
+                    self.assertEqual(re.findall(r"`(text|image|video|voice|audio|music)`", purposes), list(slots))
+                    for path in (
+                        "/openapi.json", f"/api/canvases/{graph_id}",
+                        f"/api/agent/canvases/{graph_id}/nodes", f"/api/agent/canvases/{graph_id}/commands",
+                    ):
+                        self.assertIn("http://studio.test:8123" + path, usage)
+                    self.assertIn('action:"run_node"', usage)
+                    self.assertIn("task_ids", usage)
+                    self.assertIn("return the result only" if lang == "en" and module == "hypit" else
+                                  "shared results" if lang == "en" else "共享结果", usage)
+                    self.assertIn("locked materials" if lang == "en" else "锁定素材", usage)
+                    self.assertIn("never generate" if lang == "en" else "均不生成", usage)
+                    if module in {"article", "music", "script", "novel"}:
+                        collection = {"article": "articles", "music": "music", "script": "scripts", "novel": "novels"}[module]
+                        self.assertIn(f"/api/studio/{collection}/{module}-work/generations", usage)
+                    if module == "hypit":
+                        self.assertIn("Video Cloning" if lang == "en" else "视频克隆", connected["text"])
+                        self.assertIn("/api/hypit/settings-canvas", document.text)
+                        self.assertNotIn("不要把工作流当作模型", document.text)
 
     def test_script_and_novel_preparation_and_connection_docs_use_the_requested_module_and_origin(self):
         for module, route, title in (
