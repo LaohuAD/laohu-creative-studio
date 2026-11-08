@@ -108,7 +108,11 @@ class ThemeUiScaleBrowserTests(unittest.TestCase):
                     return
                 super().do_GET()
 
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        class FixtureServer(ThreadingHTTPServer):
+            # 页面并行加载多份资源；线程化不扩大默认仅 5 个连接的监听队列。
+            request_queue_size = 128
+
+        cls.server = FixtureServer(("127.0.0.1", 0), Handler)
         cls.http_port = cls.server.server_address[1]
         cls.server_thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.server_thread.start()
