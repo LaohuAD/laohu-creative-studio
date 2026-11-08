@@ -109,7 +109,7 @@ class LaohuTextToolEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_face_identification_accepts_media_only_and_returns_text(self):
         provider={'id':'ai-money','name':'laohu','base_url':'https://api.lao-hu.com','enabled':True,'chat_models':['kling-lip-sync-identify-face'],'image_models':[],'video_models':[],'audio_models':[]}
         payload=main.CanvasLLMRequest(provider='ai-money',model='kling-lip-sync-identify-face',message='',videos=['https://example.com/video.mp4'])
-        with patch.object(main,'get_api_provider',return_value=provider),patch.object(main,'load_api_providers',return_value=[provider]),patch.object(main,'generate_ai_money_special_text',AsyncMock(return_value={'text':'{"faces": []}'})) as submit:
+        with patch.object(main,'get_api_provider',return_value=provider),patch.object(main,'load_api_providers',return_value=[provider]),patch.object(main,'provider_env_key_value',return_value='fixture-laohu-key'),patch.object(main,'generate_ai_money_special_text',AsyncMock(return_value={'text':'{"faces": []}'})) as submit:
             result=await main.canvas_llm(payload)
         self.assertIn('faces',result['text'])
         self.assertEqual(submit.call_args.args[2]['operation'],'asset_creation')

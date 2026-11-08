@@ -837,12 +837,12 @@ class MusicEditingTests(StudioMusicIntegrationTests):
         mimetypes.add_type('text/x-abc', '.abc')
         original = 'X:1\nM:4/4\nL:1/32\nQ:1/4=88\nV: Vocal\nV: Ins\nK:G\nV: Vocal\n"G"B8d8c8A8|\nV: Ins\nZ|\n'
         path = self.storage.results_dir / 'original.abc'
-        path.parent.mkdir(parents=True, exist_ok=True); path.write_text(original)
+        path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(original.encode("utf-8"))
         original_ref = self.storage.register_managed_result(path, 'original.abc')
         def write(source, format_name, project_id):
             import hashlib
             target = self.storage.results_dir / (hashlib.sha256(source.encode()).hexdigest()+'.'+format_name)
-            target.write_text(source)
+            target.write_bytes(source.encode("utf-8"))
             return self.storage.register_managed_result(target, target.name)
         store = StudioMusicStore(self.project_store, self._resolve_media, self._read_media, write)
         pid = self.project['id']

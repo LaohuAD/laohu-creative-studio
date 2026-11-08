@@ -372,8 +372,13 @@ class LaohuAccountApiTests(unittest.IsolatedAsyncioTestCase):
         expected_challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
         self.assertEqual(query["code_challenge"], [expected_challenge])
         self.assertEqual(session["mode"], "manual")
-        self.assertEqual((self.root / "API" / ".laohu-login-app.json").stat().st_mode & 0o777, 0o600)
-        self.assertEqual((self.root / "API" / ".laohu-account-session.json").stat().st_mode & 0o777, 0o600)
+        for filename in (".laohu-login-app.json", ".laohu-account-session.json"):
+            path = self.root / "API" / filename
+            self.assertTrue(path.is_file())
+            self.assertFalse(path.is_symlink())
+            self.assertTrue(os.access(path, os.R_OK | os.W_OK))
+            if os.name == "posix":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertNotIn("test-client-secret", json.dumps(body))
         self.assertEqual(self.requests, [])
 
