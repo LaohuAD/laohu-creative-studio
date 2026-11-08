@@ -1142,16 +1142,26 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.assertEqual(self.evaluate("nodes.find(node=>node.id==='text-run').runSettings.textSystemPrompt"), "新系统提示\n第二行",
                          "重绘前输入必须通过原系统提示词保存链路进入节点设置")
 
-        self.evaluate("document.querySelector('[data-canvas-text-expand=system]').click(); true")
-        self.wait_for(lambda: self.evaluate("document.getElementById('canvasTextFieldDialog')?.open"),
-                      "系统提示词不能在语言重绘后再次放大")
-        self.evaluate("""(()=>{const editor=document.querySelector('[data-text-system-prompt]');
+        self.wait_for(lambda: self.evaluate("new Promise(resolve=>{const button=document.querySelector('#dynamicParams [data-canvas-text-expand=system]');requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(Boolean(button&&button.isConnected&&button===document.querySelector('#dynamicParams [data-canvas-text-expand=system]')&&canvasExpandedTextField===null&&!canvasTextFieldDeferredParamsRender&&document.querySelectorAll('#dynamicParams [data-text-system-prompt]').length===1))))})"),
+                      "开始 IME 回归前系统提示词行尚未稳定")
+        # 同一浏览器轮次建立真实 composition 前提，避免 CDP 往返间的普通重绘先收起编辑框。
+        self.evaluate("""(()=>{
+          document.querySelector('#dynamicParams [data-canvas-text-expand=system]').click();
+          const editor=document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]');
+          if(!editor || !document.getElementById('canvasTextFieldDialog').open || canvasExpandedTextField?.editor!==editor)
+            throw new Error('IME 回归未能展开原系统提示词输入框');
+          window.__composeEditor=editor;
           editor.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));
           window.__composeCheck={state:!!canvasExpandedTextField,same:canvasExpandedTextField?.editor===editor,composing:canvasExpandedTextField?.composing};
+          requestAnimationFrame(()=>renderDynamicParams());
           window.dispatchEvent(new Event('studio-lang-change'));return true;})()""")
-        composing_state = self.evaluate("JSON.stringify({composeCheck:window.__composeCheck,open:document.getElementById('canvasTextFieldDialog').open,host:!!document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]'),composing:canvasExpandedTextField?.composing,closeRequested:canvasExpandedTextField?.closeRequested,deferred:canvasTextFieldDeferredParamsRender,systemCount:document.querySelectorAll('[data-text-system-prompt]').length})")
-        self.assertTrue(json.loads(composing_state)["open"] and json.loads(composing_state)["host"],
+        composing_state = self.evaluate("JSON.stringify({composeCheck:window.__composeCheck,open:document.getElementById('canvasTextFieldDialog').open,host:!!document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]'),sameEditor:canvasExpandedTextField?.editor===window.__composeEditor,composing:canvasExpandedTextField?.composing,closeRequested:canvasExpandedTextField?.closeRequested,deferred:canvasTextFieldDeferredParamsRender,systemCount:document.querySelectorAll('[data-text-system-prompt]').length})")
+        observed = json.loads(composing_state)
+        self.assertEqual(observed["composeCheck"], {"state": True, "same": True, "composing": True},
+                         f"IME 回归必须先在真实放大编辑框中开始输入：{composing_state}")
+        self.assertTrue(observed["open"] and observed["host"] and observed["sameEditor"] and observed["composing"] and observed["deferred"],
                         f"IME composing 时应延后参数重绘，不能夺走当前编辑框：{composing_state}")
+        self.assertEqual(observed["systemCount"], 1, composing_state)
         self.evaluate("document.querySelector('[data-text-system-prompt]').dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'字'})); true")
         self.wait_for(lambda: self.evaluate("!document.getElementById('canvasTextFieldDialog')?.open && document.querySelectorAll('#dynamicParams [data-text-system-prompt]').length===1 && !document.getElementById('canvasTextFieldHost').querySelector('[data-text-system-prompt]')"),
                       "compositionend 后应安全收起并只保留一个系统提示词输入框")
