@@ -33,3 +33,5 @@ tests/.pytest_cache/
 .pytest_cache/
 .coverage
 htmlcov/
+# 本机 laohu OAuth 应用与账户会话秘密（不得进入版本库）
+/API/.laohu-*.json

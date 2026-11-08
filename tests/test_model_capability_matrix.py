@@ -75,6 +75,10 @@ def _profile_fixture(profile):
             role = str(spec.get("role") or key)
             input_roles[role] = input_roles.get(role, 0) + 1
             break
+    if profile.get('model_id') in {'kling-elements-advanced', 'kling-v4-custom-element'}:
+        input_counts['reference'] = 2
+        input_roles['reference'] = 2
+        inputs['reference'] = ['asset://front', 'asset://side']
     parameters = {
         key: _sample_value(spec)
         for key, spec in (profile.get("parameters") or {}).items()
@@ -246,13 +250,13 @@ class ConfiguredModelCapabilityMatrixTests(ConfiguredProvidersMixin, unittest.Te
                     self.assertEqual(dry_run["result_contract"]["media_type"], expected_output, profile.get("model_id"))
         self.assertGreater(ready_count, 0)
 
-    def test_unfinished_models_are_visible_but_fail_closed(self):
+    def test_lip_sync_tts_is_ready_but_rejects_wrong_inputs_and_missing_voice(self):
         provider = next(item for item in main.load_api_providers() if item.get("id") == "ai-money")
         catalog = main.MODEL_CAPABILITY_REGISTRY.build_catalog([provider])
         models = catalog["providers"][0]["models"]
         lip_sync = next(item for item in models if item.get("model_id") == "kling-lip-sync-tts")
-        self.assertEqual(lip_sync["readiness"], "adapter_missing")
-        self.assertFalse(lip_sync["runnable"])
+        self.assertEqual(lip_sync["readiness"], "ready")
+        self.assertTrue(lip_sync["runnable"])
         with self.assertRaises(main.ModelCapabilityError):
             main.MODEL_CAPABILITY_REGISTRY.validate_request(
                 [provider], "ai-money", "kling-lip-sync-tts", "audio_generation",

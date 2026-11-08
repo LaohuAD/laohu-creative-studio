@@ -159,6 +159,9 @@ class StudioMusicBrowserTests(unittest.TestCase):
                 if path == "/api/results/music-midi":
                     self.binary("audio/midi", cls.midi)
                     return
+                if path == "/api/results/music-abc":
+                    self.binary("text/x-abc", b'X:1\nM:4/4\nL:1/32\nQ:1/4=88\nV: Vocal\nV: Ins\nK:G\n% verse\nV: Vocal\n"G"B8d8c8A8|\nV: Ins\nZ|\n')
+                    return
                 if path == "/api/results/music-xml":
                     data = ("<?xml version='1.0'?><score-partwise><part-list><score-part id='P1'><part-name>Piano</part-name></score-part></part-list><part id='P1'><measure number='1'><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note></measure></part></score-partwise>").encode()
                     self.binary("application/vnd.recordare.musicxml+xml", data)
@@ -248,7 +251,9 @@ class StudioMusicBrowserTests(unittest.TestCase):
             "notes": "收尾保留钢琴尾音。", "cover_prompt": "夜雨街道上的暖色窗灯，歌曲封面。", "source_sha256": "sha256-fixture",
             "title_candidates": {"title-a": {"title": "雨落归途"}, "title-b": {"title": "雨夜来信"}},
             "selected_title_candidate_id": "title-a", "source_versions": [],
+            "field_versions": {"title":[{"id":"t1","number":1,"content":"雨落归途"},{"id":"t2","number":2,"content":"雨夜来信"}], "lyrics":[], "style_prompt":[], "notes":[]}, "selected_score_ref_id":"score-midi",
             "score_refs": [
+                {"id":"score-abc","result_id":"music-abc","format":"abc","url":"/api/results/music-abc","name":"score.abc","mime":"text/x-abc"},
                 {"id": "score-midi", "result_id": "music-midi", "format": "midi", "url": "/api/results/music-midi", "name": "旋律草稿.mid", "mime": "audio/midi"},
                 {"id": "score-xml", "result_id": "music-xml", "format": "musicxml", "url": "/api/results/music-xml", "name": "钢琴谱.musicxml", "mime": "application/vnd.recordare.musicxml+xml"},
                 {"id": "score-bad-xml", "result_id": "music-bad-xml", "format": "musicxml", "url": "/api/results/music-bad-xml", "name": "损坏样本.musicxml", "mime": "application/vnd.recordare.musicxml+xml"},
@@ -306,7 +311,7 @@ class StudioMusicBrowserTests(unittest.TestCase):
         url = f"http://127.0.0.1:{self.port}/static/music.html?id={PROJECT_ID}"
         browser.cdp("Page.navigate", {"url": url})
         browser.wait_for_document(url)
-        ready = browser.evaluate("(async()=>{for(let i=0;i<160;i++){if(document.getElementById('musicCurrentTitle')?.textContent==='雨落归途')return true;await new Promise(r=>setTimeout(r,25));}return false;})()")
+        ready = browser.evaluate("(async()=>{for(let i=0;i<160;i++){if(document.getElementById('musicCurrentTitle')?.value==='雨落归途')return true;await new Promise(r=>setTimeout(r,25));}return false;})()")
         self.assertTrue(ready, browser.evaluate("({title:document.title, status:document.querySelector('#musicStatus')?.textContent,errors:window.__brandBrowserDiagnostics?.errors})"))
         browser.evaluate("StudioI18n?.set?.('zh')")
 
@@ -328,6 +333,7 @@ class StudioMusicBrowserTests(unittest.TestCase):
         return self.browser.evaluate(f"(async()=>{{const end=Date.now()+{int(timeout*1000)};while(Date.now()<end){{if({expression})return true;await new Promise(r=>setTimeout(r,25));}}return false;}})()")
 
     def click_real(self, selector):
+        self.browser.evaluate(f"document.querySelector({json.dumps(selector)}).scrollIntoView({{block:'center'}})")
         rect = self.browser.evaluate(f"(()=>{{const r=document.querySelector({json.dumps(selector)}).getBoundingClientRect();return {{x:r.left+r.width/2,y:r.top+r.height/2}};}})()")
         self.browser.cdp("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": rect["x"], "y": rect["y"]})
         self.browser.cdp("Input.dispatchMouseEvent", {"type": "mousePressed", "x": rect["x"], "y": rect["y"], "button": "left", "clickCount": 1})
@@ -363,29 +369,29 @@ class StudioMusicBrowserTests(unittest.TestCase):
         self.reset_fixture()
         self.open_project_list("hypit")
         self.assertEqual(browser.evaluate("document.body.dataset.studioModule"), "hypit")
-        self.assertEqual(browser.evaluate("StudioI18n.t('nav.hypit')"), "Hypit克隆")
-        self.assertEqual(browser.evaluate("document.querySelector('#studioProjectListTitle').textContent"), "Hypit克隆项目")
-        self.assertEqual(browser.evaluate("document.title"), "Hypit克隆")
+        self.assertEqual(browser.evaluate("StudioI18n.t('nav.hypit')"), "视频克隆")
+        self.assertEqual(browser.evaluate("document.querySelector('#studioProjectListTitle').textContent"), "视频克隆项目")
+        self.assertEqual(browser.evaluate("document.title"), "视频克隆")
         self.assertIn("hypit", self.project_list_calls)
         browser.evaluate("StudioI18n.set('en')")
-        self.assertTrue(self.wait_for("document.querySelector('#studioProjectListTitle').textContent === 'Hypit Clone projects'"))
-        self.assertEqual(browser.evaluate("StudioI18n.t('nav.hypit')"), "Hypit Clone")
+        self.assertTrue(self.wait_for("document.querySelector('#studioProjectListTitle').textContent === 'Video Cloning projects'"))
+        self.assertEqual(browser.evaluate("StudioI18n.t('nav.hypit')"), "Video Cloning")
         self.assertEqual(browser.evaluate("document.body.dataset.studioModule"), "hypit")
 
         browser.cdp("Page.navigate", {"url":f"http://127.0.0.1:{self.port}/static/api-settings.html"})
         browser.wait_for_document(f"http://127.0.0.1:{self.port}/static/api-settings.html")
         browser.evaluate("StudioI18n.set('zh')")
-        self.assertTrue(self.wait_for("document.querySelector('#hypitSettingsNav .provider-name')?.textContent === 'Hypit克隆'"))
+        self.assertTrue(self.wait_for("document.querySelector('#hypitSettingsNav .provider-name')?.textContent === '视频克隆'"))
         browser.evaluate("StudioI18n.set('en')")
-        self.assertTrue(self.wait_for("document.querySelector('#hypitSettingsNav .provider-name')?.textContent === 'Hypit Clone'"))
+        self.assertTrue(self.wait_for("document.querySelector('#hypitSettingsNav .provider-name')?.textContent === 'Video Cloning'"))
 
         browser.cdp("Page.navigate", {"url":f"http://127.0.0.1:{self.port}/static/index.html"})
         browser.wait_for_document(f"http://127.0.0.1:{self.port}/static/index.html")
         browser.evaluate("StudioI18n.set('zh')")
         hypit_nav_text = "[...document.querySelectorAll('.nav-item')].find(el=>el.getAttribute('onclick')?.includes(\"'hypit'\"))?.querySelector('.nav-text')?.textContent"
-        self.assertTrue(self.wait_for(f"{hypit_nav_text} === 'Hypit克隆'"))
+        self.assertTrue(self.wait_for(f"{hypit_nav_text} === '视频克隆'"))
         browser.evaluate("StudioI18n.set('en')")
-        self.assertTrue(self.wait_for(f"{hypit_nav_text} === 'Hypit Clone'"))
+        self.assertTrue(self.wait_for(f"{hypit_nav_text} === 'Video Cloning'"))
         self.assertTrue(zh_screenshot.is_file() and zh_screenshot.stat().st_size > 1000, str(zh_screenshot))
         self.assertTrue(en_screenshot.is_file() and en_screenshot.stat().st_size > 1000, str(en_screenshot))
 
@@ -409,63 +415,25 @@ class StudioMusicBrowserTests(unittest.TestCase):
         self.assertEqual(self.unexpected_posts, [])
 
     def test_375px_locales_themes_and_safe_candidate_rendering(self):
-        self.reset_fixture()
-        self.open_page(375)
-        browser = self.browser
-        for appearance in ("light", "dark"):
+        self.reset_fixture(); self.open_page(375); browser=self.browser
+        for appearance in ('light','dark'):
             browser.evaluate(f"StudioTheme.set({json.dumps(appearance)})")
-            if appearance == "dark":
-                self.assertTrue(self.wait_for("getComputedStyle(document.querySelector('#musicThemeButton')).backgroundColor === getComputedStyle(document.querySelector('.music-panel')).backgroundColor && getComputedStyle(document.querySelector('#musicThemeButton')).color === getComputedStyle(document.body).color", timeout=2))
-            for language in ("zh", "en"):
+            for language in ('zh','en'):
                 browser.evaluate(f"StudioI18n.set({json.dumps(language)})")
-                report = browser.evaluate("""(() => ({
-                    viewport:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth,
-                    appearance:document.documentElement.dataset.studioAppearance,
-                    title:document.querySelector('#musicCurrentTitle')?.textContent,
-                    candidates:[...document.querySelectorAll('.music-title-choice')].length,
-                    injected:!!document.querySelector('#musicTitleChoices img'),
-                    textFont:getComputedStyle(document.querySelector('#musicLyrics')).fontSize,
-                    controlFont:getComputedStyle(document.querySelector('#musicGenerateButton')).fontSize,
-                    miniFont:getComputedStyle(document.querySelector('#musicMiniCurrent')).fontSize,
-                    buttonBg:getComputedStyle(document.querySelector('#musicThemeButton')).backgroundColor,
-                    surfaceBg:getComputedStyle(document.querySelector('.music-panel')).backgroundColor,
-                    buttonColor:getComputedStyle(document.querySelector('#musicThemeButton')).color,
-                    bodyColor:getComputedStyle(document.body).color,
-                    selectedBg:getComputedStyle(document.querySelector('.music-title-choice[aria-pressed=true]')).backgroundColor,
-                    primaryBg:getComputedStyle(document.querySelector('#musicGenerateButton')).backgroundColor,
-                    selectedColor:getComputedStyle(document.querySelector('.music-title-choice[aria-pressed=true]')).color,
-                    primaryColor:getComputedStyle(document.querySelector('#musicGenerateButton')).color,
-                    titleRect:(()=>{const r=document.querySelector('#musicProjectName').getBoundingClientRect();return {left:r.left,right:r.right}})(),
-                    actionRect:(()=>{const r=document.querySelector('.music-toolbar-actions').getBoundingClientRect();return {left:r.left,right:r.right}})()
-                }))()""")
-                self.assertEqual(report["viewport"], 375, report)
-                self.assertLessEqual(report["scroll"], report["viewport"], report)
-                self.assertEqual(report["appearance"], appearance, report)
-                self.assertEqual(report["candidates"], 2, report)
-                self.assertFalse(report["injected"], report)
-                self.assertGreaterEqual(float(report["textFont"].removesuffix("px")), 13, report)
-                self.assertGreaterEqual(float(report["controlFont"].removesuffix("px")), 12, report)
-                self.assertGreaterEqual(float(report["miniFont"].removesuffix("px")), 11, report)
-                if appearance == "dark":
-                    self.assertEqual(report["buttonBg"], report["surfaceBg"], report)
-                    self.assertEqual(report["buttonColor"], report["bodyColor"], report)
-                self.assertEqual(report["selectedBg"], report["primaryBg"], report)
-                self.assertEqual(report["selectedColor"], report["primaryColor"], report)
-                self.assertLess(report["titleRect"]["right"], report["actionRect"]["left"], report)
-                image = browser.cdp("Page.captureScreenshot", {"format": "png", "fromSurface": True}).get("data")
-                path = self.cache / f"music-375-{appearance}-{language}.png"
-                path.write_bytes(base64.b64decode(image))
+                report=browser.evaluate("({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,editor:document.querySelector('#musicLyrics').tagName,buttons:document.querySelectorAll('[data-copy]').length,generate:!!document.querySelector('#musicGenerateButton'),errors:window.__brandBrowserDiagnostics?.errors})")
+                self.assertLessEqual(report['scroll'], report['width'], report)
+                self.assertEqual(report['editor'], 'TEXTAREA', report)
+                self.assertGreaterEqual(report['buttons'], 3, report)
+                self.assertFalse(report['generate'], report)
+                image=browser.cdp('Page.captureScreenshot', {'format':'png','fromSurface':True})['data']
+                (self.cache/f'music-editable-375-{appearance}-{language}.png').write_bytes(base64.b64decode(image))
         self.open_page(1440)
-        browser.evaluate("StudioTheme.set('dark');StudioI18n.set('zh')")
-        self.assertTrue(self.wait_for("getComputedStyle(document.querySelector('#musicThemeButton')).backgroundColor === getComputedStyle(document.querySelector('.music-panel')).backgroundColor && getComputedStyle(document.querySelector('#musicThemeButton')).color === getComputedStyle(document.body).color", timeout=2))
-        desktop = browser.evaluate("({viewport:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,columns:getComputedStyle(document.querySelector('.music-layout')).gridTemplateColumns})")
-        self.assertLessEqual(desktop["scroll"], desktop["viewport"], desktop)
-        desktop_image = browser.cdp("Page.captureScreenshot", {"format": "png", "fromSurface": True}).get("data")
-        (self.cache / "music-desktop-dark-zh.png").write_bytes(base64.b64decode(desktop_image))
+        image=browser.cdp('Page.captureScreenshot', {'format':'png','fromSurface':True})['data']
+        (self.cache/'music-editable-desktop.png').write_bytes(base64.b64decode(image))
         with self.lock:
-            type(self).project["title_candidates"]["title-xss"] = {"title": "<img src=x onerror=window.__musicXss=1>"}
+            type(self).project['field_versions']['title'].append({'id':'xss','number':3,'content':'<img src=x onerror=window.__musicXss=1>'})
         browser.evaluate("document.querySelector('#musicRefreshButton').click()")
-        self.assertTrue(self.wait_for("[...document.querySelectorAll('.music-title-choice')].some(node=>node.textContent.includes('<img src=x'))"))
+        self.assertTrue(self.wait_for("document.querySelector('#musicTitleChoices').textContent.includes('<img src=x')"))
         self.assertFalse(browser.evaluate("window.__musicXss === 1 || !!document.querySelector('#musicTitleChoices img')"))
 
     def test_real_wav_playback_timeupdate_static_lyrics_and_view_does_not_adopt(self):
@@ -473,12 +441,12 @@ class StudioMusicBrowserTests(unittest.TestCase):
         self.open_page(375)
         browser = self.browser
         browser.evaluate("window.__musicTimeUpdates=0;document.getElementById('musicAudioElement').addEventListener('timeupdate',()=>window.__musicTimeUpdates++);")
-        self.click_real('[data-audio-action="play"][data-audio-id="audio-one"]')
+        browser.evaluate("document.querySelector('#musicAudioList details').open=true");self.click_real('[data-audio-action="play"][data-audio-id="audio-one"]')
         playing = self.wait_for("document.getElementById('musicAudioElement').currentTime > 0.65 && window.__musicTimeUpdates >= 2", timeout=6)
         self.assertTrue(playing, browser.evaluate("({time:document.getElementById('musicAudioElement').currentTime, paused:document.getElementById('musicAudioElement').paused, events:window.__musicTimeUpdates, error:document.querySelector('#musicStatus')?.textContent})"))
         browser.evaluate("document.getElementById('musicOpenPlayer').click()")
         self.assertTrue(self.wait_for("document.querySelector('[data-lyric-index=\"1\"]')?.classList.contains('active')"))
-        player = browser.evaluate("({open:document.getElementById('musicPlayerDialog').open, lyrics:[...document.querySelectorAll('.music-lyric-line')].map(x=>({text:x.textContent,active:x.classList.contains('active')})),selected:document.querySelector('[data-audio-id=\"audio-one\"]').dataset.selected})")
+        player = browser.evaluate("({open:document.getElementById('musicPlayerDialog').open, lyrics:[...document.querySelectorAll('.music-lyric-line')].map(x=>({text:x.textContent,active:x.classList.contains('active')})),selected:document.querySelector('[data-audio-select=\"audio-one\"]').dataset.selected})")
         self.assertTrue(player["open"], player)
         self.assertEqual(player["lyrics"][-1], {"text": "灯火照着归途", "active": True}, player)
         self.assertEqual(player["selected"], "false", player)
@@ -492,62 +460,61 @@ class StudioMusicBrowserTests(unittest.TestCase):
         external = browser.evaluate("({disabled:document.querySelector('[data-audio-action=play][data-audio-id=audio-external]').disabled, src:document.getElementById('musicAudioElement').src})")
         self.assertTrue(external["disabled"], external)
 
-    def test_dynamic_input_mapping_uses_projection_and_is_sent_only_for_this_request(self):
-        self.reset_fixture()
-        self.open_page(375)
-        browser = self.browser
-        browser.evaluate("document.querySelector('#musicGenerateButton').click()")
-        self.assertTrue(self.wait_for("document.querySelector('#musicMappingDialog')?.open"), browser.evaluate("document.querySelector('#musicStatus')?.textContent"))
-        options = browser.evaluate("[...document.querySelectorAll('#musicMappingFields select')].map(s=>({role:s.dataset.mappingSelect,required:s.dataset.required,fields:[...s.options].slice(1).map(o=>({key:o.dataset.targetFieldKey,node:o.dataset.nodeId,label:o.textContent}))}))")
-        mapping_view = browser.evaluate("({viewport:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,rect:(()=>{const r=document.querySelector('#musicMappingDialog').getBoundingClientRect();return{x:r.left,right:r.right,width:r.width}})()})")
-        self.assertLessEqual(mapping_view["scroll"], mapping_view["viewport"], mapping_view)
-        mapping_image = browser.cdp("Page.captureScreenshot", {"format": "png", "fromSurface": True}).get("data")
-        (self.cache / "music-mapping-375-zh.png").write_bytes(base64.b64decode(mapping_image))
-        self.assertEqual({row["role"] for row in options}, {"title", "lyrics", "style_prompt", "notes", "reference_audio"}, options)
-        self.assertTrue(all(choice["node"] == "dynamic-music" for row in options for choice in row["fields"]), options)
-        browser.evaluate("""(() => {
-          const choose=(role,key)=>{const select=document.querySelector(`[data-mapping-select="${role}"]`);const option=[...select.options].find(item=>item.dataset.targetFieldKey===key);if(!option)throw Error(`missing ${role}/${key}`);select.value=option.value;};
-          choose('lyrics','lyrics_text');choose('style_prompt','style_text');choose('reference_audio','reference_audio');
-          return true;
-        })()""")
-        browser.evaluate("document.getElementById('musicMappingSubmit').click()")
-        self.assertTrue(self.wait_for("window.__brandBrowserDiagnostics.apiFetches.some(item=>item.path.endsWith('/generations')&&item.state==='complete')"))
-        self.assertTrue(self.wait_for("document.querySelector('#musicStatus')?.textContent.includes('音频已关联')", timeout=5))
-        self.assertEqual(len(self.posts), 1, self.posts)
-        request = self.posts[0]
-        self.assertEqual(request["purpose"], "song")
-        self.assertEqual(request["slot"], "music")
-        self.assertEqual(request["output_node_id"], "music-output")
-        self.assertEqual(request["request"]["input_fields"], {
-            "lyrics": {"node_id": "dynamic-music", "targetFieldKey": "lyrics_text"},
-            "style_prompt": {"node_id": "dynamic-music", "targetFieldKey": "style_text"},
-            "reference_audio": {"node_id": "dynamic-music", "targetFieldKey": "reference_audio"},
-        })
-        operation_key = json.dumps(f"studio_music_operation_v1:{PROJECT_ID}:song")
-        operation = browser.evaluate(f"JSON.parse(localStorage.getItem({operation_key}))")
-        self.assertEqual(operation["request"], {}, "已确认 run_id 后，浏览器仍持久保存了字段映射")
-        self.assertTrue(self.generations)
+    def test_edit_autosave_preserves_draft_across_refresh_and_never_generates(self):
+        self.reset_fixture(); self.open_page(); browser=self.browser
+        browser.evaluate("localStorage.removeItem('studio_music_draft_v2:music-browser-fixture');document.querySelector('#musicLyrics').focus();document.querySelector('#musicLyrics').value='new lyrics\\n第二行';document.querySelector('#musicLyrics').dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('#musicRefreshButton').click()")
+        self.assertTrue(self.wait_for("document.querySelector('#musicSaveStatus').textContent.includes('已保存')"))
+        self.assertEqual(self.project['lyrics'], 'new lyrics\n第二行')
+        browser.evaluate("document.querySelector('#musicTabStyle').click()")
+        self.assertTrue(self.wait_for("!document.querySelector('#musicPanelStyle').hidden"))
+        self.assertEqual(browser.evaluate("document.querySelector('#musicStyle').value"), STYLE)
+        self.assertFalse(self.posts)
+        self.assertTrue(any(item.get('archive') is False for item in self.puts))
+        self.assertTrue(any('lyrics' in item.get('archive_fields',[]) for item in self.puts))
 
-    def test_selection_is_explicit_and_midi_musicxml_are_parsed_from_managed_bytes(self):
-        self.reset_fixture()
-        self.open_page(1200)
-        browser = self.browser
-        midi = self.wait_for("document.querySelector('.music-piano-roll') && document.querySelector('.music-score-note')?.textContent.includes('1')")
-        self.assertTrue(midi, browser.evaluate("document.querySelector('#musicScoreViewer')?.textContent"))
+    def test_score_source_is_editable_and_selection_is_independent_of_playback(self):
+        self.reset_fixture(); self.open_page(1200); browser=self.browser
+        browser.evaluate("document.querySelector('#musicTabScores').click()")
+        self.assertTrue(self.wait_for("document.querySelector('.music-piano-roll')"))
         browser.evaluate("document.querySelector('[data-score-id=score-xml]').click()")
-        self.assertTrue(self.wait_for("document.querySelector('#musicScoreViewer .music-score-table tbody tr')"))
-        rows = browser.evaluate("[...document.querySelectorAll('#musicScoreViewer .music-score-table tbody tr')].map(row=>[...row.children].map(cell=>cell.textContent))")
-        self.assertIn("C4", str(rows), rows)
+        self.assertTrue(self.wait_for("document.querySelector('#musicScoreSource')?.value.includes('score-partwise')"))
+        self.assertFalse(browser.evaluate("!!document.querySelector('.music-score-table')"))
         browser.evaluate("document.querySelector('[data-score-id=score-bad-xml]').click()")
-        self.assertTrue(self.wait_for("document.querySelector('#musicScoreViewer .music-empty-inline')?.textContent.includes('无法读取')"))
-        bad = browser.evaluate("({raw:document.querySelector('#musicScoreViewer .music-score-source')?.textContent||'', injected:!!document.querySelector('#musicScoreViewer script')})")
-        self.assertIn("DOCTYPE", bad["raw"], bad)
-        self.assertFalse(bad["injected"], bad)
-        browser.evaluate("document.querySelector('[data-audio-action=select][data-audio-id=audio-one]').click()")
-        self.assertTrue(self.wait_for("document.querySelector('[data-audio-action=select][data-audio-id=audio-one][aria-pressed=true]')"))
-        self.assertEqual(len(self.puts), 1, self.puts)
-        self.assertEqual(self.puts[0].get("selected_audio_variant_id"), "audio-one")
+        self.assertTrue(self.wait_for("document.querySelector('#musicScoreSource')?.value.includes('DOCTYPE')"))
+        self.assertFalse(browser.evaluate("!!document.querySelector('#musicScoreViewer script')"))
+        browser.evaluate("document.querySelector('[data-audio-select=audio-one]').click()")
+        self.assertTrue(self.wait_for("document.querySelector('[data-audio-select=audio-one][aria-pressed=true]')"))
+        self.assertTrue(browser.evaluate("document.querySelector('#musicAudioElement').paused"))
+        self.assertFalse(self.posts)
+
+    def test_abc_copies_exact_source_instead_of_note_table(self):
+        self.reset_fixture();self.open_page();browser=self.browser
+        browser.evaluate("document.querySelector('#musicTabScores').click()")
+        self.assertTrue(self.wait_for("!document.querySelector('#musicPanelScores').hidden"))
+        browser.evaluate("document.querySelector('[data-score-id=score-abc]').click()")
+        self.assertTrue(self.wait_for("document.querySelector('#musicScoreSource')?.value.includes('V: Vocal')"))
+        source=browser.evaluate("document.querySelector('#musicScoreSource').value")
+        browser.evaluate("window.__copiedMusic=null;Object.defineProperty(navigator.clipboard,'writeText',{configurable:true,value:async value=>{window.__copiedMusic=value}});document.querySelector('[data-copy=musicScoreSource]').click()")
+        self.assertTrue(self.wait_for("window.__copiedMusic!==null"))
+        self.assertEqual(browser.evaluate("window.__copiedMusic"),source)
+        self.assertIn('"G"B8d8c8A8|',source)
+        self.assertFalse(browser.evaluate("!!document.querySelector('.music-score-table')"))
+        self.assertFalse(self.posts)
+
+    def test_conflicting_refresh_keeps_both_texts_until_explicit_resolution(self):
+        self.reset_fixture();self.open_page();browser=self.browser
+        browser.evaluate("document.querySelector('#musicLyrics').focus();document.querySelector('#musicLyrics').value='my draft';document.querySelector('#musicLyrics').dispatchEvent(new Event('input',{bubbles:true}))")
+        with self.lock:
+            type(self).project['lyrics']='remote text';type(self).project['revision']+=1
+        browser.evaluate("document.querySelector('#musicRefreshButton').click()")
+        self.assertTrue(self.wait_for("document.querySelector('#musicConflictDialog').open"))
+        self.assertEqual(browser.evaluate("document.querySelector('#musicLyrics').value"),'my draft')
+        self.assertEqual(browser.evaluate("document.querySelector('#musicConflictLatest').value"),'remote text')
+        self.assertEqual(self.project['lyrics'],'remote text')
+        browser.evaluate("document.querySelector('#musicKeepMine').click()")
+        self.assertTrue(self.wait_for("document.querySelector('#musicSaveStatus').textContent==='已保存'"))
+        self.assertEqual(self.project['lyrics'],'my draft')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

@@ -38,6 +38,42 @@ def comfy_fields():
 
 
 class RequestProjectionTests(unittest.TestCase):
+    def test_runninghub_local_defaults_and_explicit_clear_are_distinct(self):
+        fields = [
+            {'nodeId': '2', 'fieldName': 'audio', 'fieldType': 'AUDIO', 'fieldValue': 'provider-default.wav'},
+            {'nodeId': '6', 'fieldName': 'value', 'fieldType': 'STRING', 'fieldValue': '参考台词'},
+            {'nodeId': '7', 'fieldName': 'value', 'fieldType': 'STRING', 'fieldValue': '默认待生成台词'},
+        ]
+        node = {'id': 'app', 'type': 'smart-ai-app', 'promptDraftText': '不得自动补入清空字段',
+                'runSettings': {'rhAppId': 'fixture-app', 'rhFields': fields, 'rhParams': {}}, 'images': []}
+        canvas = {'id': 'fixture', 'nodes': [node], 'connections': []}
+        default_request = request_for(canvas, node)
+        self.assertEqual(default_request['app_field_values'], {
+            '2::audio': 'provider-default.wav', '6::value': '参考台词', '7::value': '默认待生成台词',
+        })
+        node['runSettings']['rhParams'] = {key: {'value': ''} for key in ('2::audio', '6::value', '7::value')}
+        cleared = request_for(canvas, node)
+        self.assertEqual(cleared['app_field_values'], {'2::audio': '', '6::value': '', '7::value': ''})
+        self.assertEqual([entry['fieldValue'] for entry in cleared['node_info_list']], ['', '', ''])
+        fields[0]['required'] = True
+        with self.assertRaisesRegex(ValueError, '必填'):
+            request_for(canvas, node)
+
+    def test_runninghub_exact_connection_overrides_local_value_but_empty_source_does_not_fall_back(self):
+        field = {'nodeId': '7', 'fieldName': 'value', 'fieldType': 'STRING', 'fieldValue': '应用默认'}
+        source = {'id': 'speech', 'type': 'smart-material', 'sourceKind': 'input',
+                  'images': [{'kind': 'text', 'text': '本次台词', 'content': '本次台词'}]}
+        node = {'id': 'app', 'type': 'smart-ai-app', 'runSettings': {
+            'rhAppId': 'fixture-app', 'rhFields': [field], 'rhParams': {'7::value': {'value': '节点内台词'}},
+        }, 'images': []}
+        canvas = {'id': 'fixture', 'nodes': [source, node], 'connections': [
+            {'from': 'speech', 'to': 'app', 'kind': 'input', 'targetFieldKey': '7::value'},
+        ]}
+        self.assertEqual(request_for(canvas, node)['app_field_values']['7::value'], '本次台词')
+        source['images'][0].update(text='', content='')
+        with self.assertRaisesRegex(ValueError, '已连接.*内容'):
+            request_for(canvas, node)
+
     def test_runninghub_region_is_preserved_for_regular_model_requests(self):
         canvas = {
             'id': 'project',
@@ -140,6 +176,44 @@ class RequestProjectionTests(unittest.TestCase):
 
 
 class AppExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runninghub_submission_callback_accepts_sync_and_async_without_resubmitting(self):
+        for asynchronous in (False, True):
+            service = await self._service()
+            received = []
+            def sync_submitted(task_id):
+                received.append(task_id)
+            async def async_submitted(task_id):
+                received.append(task_id)
+            request = {'kind':'ai_application', 'fields':[], 'platform_request':{}, 'references':[]}
+            result = await service._run_runninghub(request, async_submitted if asynchronous else sync_submitted)
+            self.assertEqual(received, ['rh-1'])
+            self.assertEqual(len(self.submissions), 1)
+            self.assertEqual([task_id for task_id, _ in self.queries], ['rh-1'])
+            self.assertTrue(result['images'])
+
+    async def test_provider_default_media_is_not_replaced_by_another_fields_upload(self):
+        service = await self._service()
+        uploaded = []
+        async def upload(ref, request):
+            uploaded.append(ref['url'])
+            return 'uploaded-reference.wav'
+        service.upload_runninghub_asset = upload
+        request = {'fields': [
+            {'nodeId':'2','fieldName':'audio','fieldType':'AUDIO'},
+            {'nodeId':'3','fieldName':'audio','fieldType':'AUDIO'},
+        ], 'app_field_values': {'2::audio':'provider-default.wav','3::audio':'/api/materials/reference'},
+            'node_info_list': [
+                {'nodeId':'2','fieldName':'audio','fieldValue':'provider-default.wav'},
+                {'nodeId':'3','fieldName':'audio','fieldValue':'/api/materials/reference'},
+            ], 'references':[{'kind':'audio','url':'/api/materials/reference','targetFieldKey':'3::audio'}],
+            'platform_request':{}}
+        prepared = await service._prepare_runninghub_request(request)
+        self.assertEqual(prepared['app_field_values'], {'2::audio':'provider-default.wav','3::audio':'uploaded-reference.wav'})
+        self.assertEqual(uploaded, ['/api/materials/reference'])
+        request['app_field_values']['2::audio'] = ''
+        cleared = await service._prepare_runninghub_request(request)
+        self.assertEqual(cleared['app_field_values']['2::audio'], '')
+
     def _canvas(self):
         return {
             'id': 'project',

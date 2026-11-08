@@ -11,6 +11,21 @@ from types import MappingProxyType
 from typing import Mapping
 
 
+STUDIO_CAPABILITY_LABELS = MappingProxyType({
+    "text": {"zh": "文本处理", "en": "Text Processing"},
+    "image": {"zh": "图片创作", "en": "Image Creation"},
+    "video": {"zh": "视频创作", "en": "Video Creation"},
+    "voice": {"zh": "配音", "en": "Voice-over"},
+    "audio": {"zh": "音效", "en": "Sound Effects"},
+    "music": {"zh": "音乐", "en": "Music"},
+})
+
+
+def studio_capability_label(slot: str) -> dict[str, str]:
+    """展示名称与稳定槽位键分开；返回副本供各模块安全使用。"""
+    return dict(STUDIO_CAPABILITY_LABELS[slot])
+
+
 @dataclass(frozen=True)
 class StudioModuleIdentity:
     module_id: str
@@ -53,16 +68,16 @@ _MODULES = {
     ),
     "hypit": StudioModuleIdentity(
         module_id="hypit",
-        label_zh="Hypit克隆",
-        label_en="Hypit Clone",
+        label_zh="视频克隆",
+        label_en="Video Cloning",
         project_module=True,
         connection_document=True,
         preparation_document=True,
         settings_canvas_id="hypit-settings",
         settings_project_id="__hypit_settings__",
         settings_canvas_url="/static/smart-canvas.html?id=hypit-settings&mode=hypit-settings",
-        settings_canvas_title_zh="Hypit 生成配置",
-        settings_canvas_title_en="Hypit generation settings",
+        settings_canvas_title_zh="视频克隆生成配置",
+        settings_canvas_title_en="Video Cloning generation settings",
         settings_canvas_kind="module-generation",
         settings_canvas_slots=("text", "image", "video", "audio", "music", "voice"),
     ),
@@ -165,6 +180,8 @@ __all__ = [
     "PROJECT_MODULE_IDS",
     "RESERVED_SETTINGS_CANVAS_IDS",
     "STUDIO_MODULES",
+    "STUDIO_CAPABILITY_LABELS",
+    "studio_capability_label",
     "StudioModuleIdentity",
     "settings_canvas_identity",
     "studio_module_identity",

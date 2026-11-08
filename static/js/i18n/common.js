@@ -60,7 +60,7 @@
         "nav.canvas": { zh: "画布", en: "Canvas" },
         "studio.productName": { zh: "老胡画梦枋", en: "Laohu Creative Studio" },
         "nav.assetManager": { zh: "素材库", en: "Assets" },
-        "nav.hypit": { zh: "Hypit克隆", en: "Hypit Clone" },
+        "nav.hypit": { zh: "视频克隆", en: "Video Cloning" },
         "nav.article": { zh: "公众号文章", en: "Articles" },
         "nav.music": { zh: "音乐创作", en: "Music Creation" },
         "bulk.manage": { zh: "管理", en: "Manage" },

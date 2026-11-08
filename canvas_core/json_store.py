@@ -25,13 +25,16 @@ def read_json(path, default=_MISSING):
         raise DataFileError(f'无法读取 {path.name}，原文件已保留，请检查磁盘或从备份恢复。') from exc
 
 
-def write_json(path, value):
+def write_json(path, value, *, compact=False):
     path = Path(path)
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with temporary.open('w', encoding='utf-8', newline='\n') as stream:
-            json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            if compact:
+                stream.write(json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False))
+            else:
+                json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
             stream.write('\n')
             stream.flush()
             os.fsync(stream.fileno())

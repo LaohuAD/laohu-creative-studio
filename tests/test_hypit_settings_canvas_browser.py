@@ -298,8 +298,15 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
             def do_POST(self):
                 path = urlsplit(self.path).path
                 length = int(self.headers.get("Content-Length", "0"))
-                body = json.loads(self.rfile.read(length) or b"{}")
+                raw = self.rfile.read(length)
                 cls.write_paths.append(path)
+                if path == "/api/ai/upload":
+                    self._json(200, {"files": [{"url": "/api/materials/fixture-upload", "assetId": "fixture-upload", "name": "reference.png", "kind": "image"}]})
+                    return
+                body = json.loads(raw or b"{}")
+                if path == "/api/canvas-text-results":
+                    self._json(200, {"id": "fixture-text-result", "url": "/api/results/fixture-text-result", "display_name": body.get("name", "文本输入.md")})
+                    return
                 if path == "/api/hypit/settings-canvas/test":
                     cls.test_posts.append(body)
                     run_id = f"fixture-run-{len(cls.test_posts)}"
@@ -1215,7 +1222,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                       "Hypit 专用输出端口没有按原共享画布数据加载")
         initial = self.frame_evaluate("JSON.stringify((()=>{const node=document.querySelector('.hypit-output-node[data-id=text-output]');const title=node?.querySelector('.hypit-output-title');const style=title&&getComputedStyle(title.closest('.node-head'));const button=document.getElementById('hypitOutputDrawerToggle');const r=button.getBoundingClientRect();return {title:title?.textContent.trim(),headerDisplay:style?.display,headerVisibility:style?.visibility,buttonLabel:button?.getAttribute('aria-label'),button:{left:r.left,right:r.right,top:r.top,bottom:r.bottom},viewport:{width:innerWidth,height:innerHeight}};})())")
         observed = json.loads(initial)
-        self.assertEqual(observed["title"], "文本输出", f"未选中的输出节点也须显示明确用途标题：{initial}")
+        self.assertEqual(observed["title"], "文本处理", f"未选中的输出节点也须显示明确用途标题：{initial}")
         self.assertNotEqual(observed["headerDisplay"], "none", f"输出标题必须常显：{initial}")
         self.assertEqual(observed["buttonLabel"], "添加输出端口", initial)
         button = observed["button"]
@@ -1311,7 +1318,7 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.assertEqual(observed["mode"], "hypit-settings", state)
         self.assertFalse(observed["hidden"], state)
         self.assertEqual(observed["label"], "添加输出端口", state)
-        self.assertEqual(observed["titleText"], "Hypit 流程设置", state)
+        self.assertEqual(observed["titleText"], "视频克隆流程设置", state)
         self.assertLess(observed["output"]["left"], observed["progress"]["left"], state)
         self.assertLess(abs((observed["output"]["top"] + observed["output"]["bottom"]) / 2 -
                             (observed["progress"]["top"] + observed["progress"]["bottom"]) / 2), 2, state)
@@ -1329,15 +1336,15 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
                       "六种用途输出节点没有完整加载")
         chinese = self.frame_evaluate("JSON.stringify({titles:Object.fromEntries([...document.querySelectorAll('.hypit-output-node')].map(node=>[node.dataset.hypitSlot,node.querySelector('.hypit-output-title')?.textContent.trim()])),menu:[...document.querySelectorAll('.hypit-output-drawer-list [data-hypit-slot]')].map(button=>button.querySelector('span')?.textContent.trim()),toggle:document.querySelector('#hypitOutputDrawerToggle span')?.textContent.trim(),drawer:document.querySelector('.hypit-output-drawer-head strong')?.textContent.trim(),help:document.querySelector('.hypit-output-drawer-head span')?.textContent.trim()})")
         observed_zh = json.loads(chinese)
-        self.assertEqual(observed_zh["titles"], {"text":"文本输出","image":"图片输出","video":"视频输出","audio":"音效输出","music":"音乐输出","voice":"语音输出"})
-        self.assertEqual(observed_zh["menu"], ["文本", "图片", "视频", "音效", "音乐", "语音"])
+        self.assertEqual(observed_zh["titles"], {"text":"文本处理","image":"图片创作","video":"视频创作","audio":"音效","music":"音乐","voice":"配音"})
+        self.assertEqual(observed_zh["menu"], ["文本处理", "图片创作", "视频创作", "音效", "音乐", "配音"])
         self.assertEqual(observed_zh["toggle"], "添加输出端口")
         self.assertIn("只添加", observed_zh["help"])
         self.frame_evaluate("window.StudioI18n.set('en'); true")
         english = self.frame_evaluate("JSON.stringify({titles:Object.fromEntries([...document.querySelectorAll('.hypit-output-node')].map(node=>[node.dataset.hypitSlot,node.querySelector('.hypit-output-title')?.textContent.trim()])),menu:[...document.querySelectorAll('.hypit-output-drawer-list [data-hypit-slot]')].map(button=>button.querySelector('span')?.textContent.trim()),toggle:document.querySelector('#hypitOutputDrawerToggle span')?.textContent.trim(),drawer:document.querySelector('.hypit-output-drawer-head strong')?.textContent.trim(),help:document.querySelector('.hypit-output-drawer-head span')?.textContent.trim()})")
         observed_en = json.loads(english)
-        self.assertEqual(observed_en["titles"], {"text":"Text output","image":"Image output","video":"Video output","audio":"Sound effects output","music":"Music output","voice":"Voice output"})
-        self.assertEqual(observed_en["menu"], ["Text", "Image", "Video", "Sound effects", "Music", "Voice"])
+        self.assertEqual(observed_en["titles"], {"text":"Text Processing","image":"Image Creation","video":"Video Creation","audio":"Sound Effects","music":"Music","voice":"Voice-over"})
+        self.assertEqual(observed_en["menu"], ["Text Processing", "Image Creation", "Video Creation", "Sound Effects", "Music", "Voice-over"])
         self.assertEqual(observed_en["toggle"], "Add output port")
         self.assertIn("only", observed_en["help"].lower())
         self.frame_evaluate("window.StudioI18n.set('zh'); true")
@@ -1358,6 +1365,145 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         reference = next(node for node in saved["nodes"] if node["id"] == "reference")
         self.assertIs(reference.get("hypitInputLocked"), True)
         self.assertEqual(self.write_paths, ["/api/canvases/hypit-settings"], "锁只改画布，不应触发模型配置或生成写入")
+
+    def test_material_menu_creates_lockable_editable_input_in_article_settings(self):
+        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=article-settings&mode=article-settings"})
+        self.wait_for(lambda: self.evaluate("typeof canvas!=='undefined' && canvas?.id==='article-settings' && typeof createNodeFromMenu==='function'"), "文章配置图未加载")
+        self.evaluate("openCreateMenu({clientX:350,clientY:200});document.querySelector('[data-create-type=material]').click();true")
+        self.wait_for(lambda: self.evaluate("!!document.querySelector('#smartTextEditorModal.open [data-text-editor-input]')"), "文本输入没有直接打开编辑器")
+        self.assertEqual(self.evaluate("document.querySelector('[data-text-editor-title]').textContent"), '素材')
+        self.assertTrue(self.evaluate("!!document.querySelector('#smartTextEditorModal [data-text-editor-upload]')"))
+        for width in (1440, 390):
+            self.cdp("Emulation.setDeviceMetricsOverride", {"width":width,"height":844,"deviceScaleFactor":1,"mobile":False})
+            for appearance in ('light', 'dark'):
+                self.evaluate(f"window.StudioTheme.set('{appearance}');true")
+                self.evaluate("new Promise(resolve=>setTimeout(resolve,200))")
+                self.assertTrue(self.evaluate("""(()=>{const modal=document.querySelector('#smartTextEditorModal.open');return [...modal.querySelectorAll('[data-text-editor-upload],[data-text-editor-save]')].every(b=>{const r=b.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&b.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))})})()"""), '上传和保存按钮被裁切或遮挡')
+                self.assertTrue(self.evaluate("document.elementFromPoint(innerWidth/2,45)?.closest('#smartTextEditorModal')!==null"), '工具栏穿透素材编辑弹层')
+                shot = self.cdp("Page.captureScreenshot", {"format":"png","captureBeyondViewport":False})
+                (type(self).cache / f"material-editor-{width}-{appearance}.png").write_bytes(base64.b64decode(shot['data']))
+        self.cdp("Emulation.clearDeviceMetricsOverride")
+        self.evaluate("window.StudioTheme.set('light');true")
+        self.evaluate("document.querySelector('[data-text-editor-input]').value='固定参考台词';document.querySelector('[data-text-editor-save]').click();true")
+        self.wait_for(lambda: self.evaluate("nodes.some(n=>n.type==='smart-material'&&n.images?.[0]?.text==='固定参考台词') && !document.getElementById('smartTextEditorModal').classList.contains('open')"), "文本输入没有保存为文字素材")
+        node_id = self.evaluate("nodes.find(n=>n.images?.[0]?.text==='固定参考台词').id")
+        self.evaluate(f"document.querySelector('.image-node[data-id={node_id}]').click();true")
+        self.wait_for(lambda: self.evaluate("!!document.querySelector('[data-hypit-input-lock]')"), "文字输入没有锁定按钮")
+        self.evaluate("document.querySelector('[data-hypit-input-lock]').click();true")
+        self.wait_for(lambda: any(n.get('id') == node_id and n.get('hypitInputLocked') is True for n in self.canvas['nodes']), "文字锁未保存到共享配置图")
+        self.evaluate(f"beginSmartInlineTextEdit({json.dumps(node_id)},0);document.querySelector('[data-text-editor-input]').value='手动修改参考台词';document.querySelector('[data-text-editor-save]').click();true")
+        self.wait_for(lambda: any(n.get('id') == node_id and n.get('hypitInputLocked') is True and n.get('images', [{}])[0].get('text') == '手动修改参考台词' for n in self.canvas['nodes']), "锁定错误地阻止了手动编辑，或手动保存丢失输入锁")
+        self.evaluate(f"document.querySelector('.image-node[data-id={node_id}]').click();window.StudioI18n.set('en');true")
+        self.wait_for(lambda: self.evaluate("document.querySelector('[data-hypit-input-lock]')?.getAttribute('aria-label')==='Input locked'"), "英文输入锁文案没有更新")
+        self.assertIn('Material', self.evaluate("document.querySelector('[data-create-type=material]').textContent"))
+        self.assertFalse(self.evaluate("!!document.querySelector('[data-create-type=text-input]')"))
+        self.evaluate("window.StudioI18n.set('zh');true")
+        shot = self.cdp("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
+        (type(self).cache / "text-input-locked-article.png").write_bytes(base64.b64decode(shot['data']))
+        self.assertTrue(all(path in {'/api/canvases/article-settings', '/api/canvas-text-results'} for path in self.write_paths), self.write_paths)
+        self.assertEqual(self.agent_command_posts, [])
+
+    def test_material_editor_upload_preserves_cancelled_draft_and_replaces_same_node(self):
+        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=article-settings&mode=article-settings"})
+        self.wait_for(lambda: self.evaluate("typeof canvas!=='undefined' && canvas?.id==='article-settings'"), "文章配置图未加载")
+        self.evaluate("createNodeFromMenu('material');document.querySelector('[data-text-editor-input]').value='上传前的文字草稿';true")
+        node_id = self.evaluate("smartTextEditorState.nodeId")
+        self.evaluate("document.querySelector('[data-text-editor-upload]').click();document.querySelector('[data-material-file-picker]').dispatchEvent(new Event('cancel'));true")
+        self.wait_for(lambda: self.evaluate("!smartTextEditorState.uploading"), "取消选择后未恢复编辑")
+        self.assertEqual(self.evaluate("document.querySelector('[data-text-editor-input]').value"), '上传前的文字草稿')
+        self.assertTrue(self.evaluate("!!document.querySelector('#smartTextEditorModal.open')"))
+        self.evaluate("window.materialUploadFetch=window.fetch;window.fetch=(url,options)=>url==='/api/ai/upload'?Promise.resolve(new Response('fixture upload failed',{status:503})):window.materialUploadFetch(url,options);document.querySelector('[data-text-editor-upload]').click();var picker=document.querySelector('[data-material-file-picker]');var dt=new DataTransfer();dt.items.add(new File(['fixture'],'reference.png',{type:'image/png'}));picker.files=dt.files;picker.dispatchEvent(new Event('change'));true")
+        self.wait_for(lambda: self.evaluate("smartTextEditorState && !smartTextEditorState.uploading"), '上传失败后没有恢复编辑')
+        self.assertEqual(self.evaluate("document.querySelector('[data-text-editor-input]').value"), '上传前的文字草稿')
+        self.assertFalse(self.evaluate("document.querySelector('[data-text-editor-input]').readOnly"))
+        self.evaluate("window.fetch=window.materialUploadFetch;true")
+        self.evaluate("document.querySelector('[data-text-editor-upload]').click();var picker=document.querySelector('[data-material-file-picker]');var dt=new DataTransfer();dt.items.add(new File([new Uint8Array([137,80,78,71])],'reference.png',{type:'image/png'}));picker.files=dt.files;picker.dispatchEvent(new Event('change'));true")
+        self.wait_for(lambda: self.evaluate("!document.querySelector('#smartTextEditorModal.open') && nodes.some(n=>n.images?.[0]?.assetId==='fixture-upload')"), "没有从编辑器上传并返回素材节点")
+        self.assertEqual(self.evaluate("nodes.length"), 1, '上传不得另建节点')
+        self.assertEqual(self.evaluate("nodes[0].id"), node_id)
+        self.assertEqual(self.evaluate("nodes[0].type"), 'smart-material')
+        self.assertEqual(self.evaluate("nodes[0].sourceKind"), 'input')
+        self.assertTrue(self.evaluate("nodes[0].resultVersions.some(v=>v.images?.[0]?.text==='上传前的文字草稿')"), '替换前草稿没有保留为版本')
+        self.assertEqual(self.write_paths.count('/api/ai/upload'), 1)
+        self.evaluate("createNodeFromMenu('material');document.querySelector('[data-creation-notes]').value='这张图的使用说明';document.querySelector('[data-text-editor-upload]').click();var picker=document.querySelector('[data-material-file-picker]');var dt=new DataTransfer();dt.items.add(new File(['fixture'],'reference.png',{type:'image/png'}));picker.files=dt.files;picker.dispatchEvent(new Event('change'));true")
+        self.wait_for(lambda: self.evaluate("!document.querySelector('#smartTextEditorModal.open') && nodes.length===2 && nodes[1].images?.[0]?.assetId==='fixture-upload'"), '空白文字不能阻止直接上传媒体')
+        self.assertEqual(self.evaluate("CanvasCreation.detailsMarkdown(nodes[1].creationDetails)"), '这张图的使用说明')
+        self.assertEqual(self.write_paths.count('/api/canvas-text-results'), 1, '空白文字不能伪造共享文本结果')
+        self.assertEqual(self.agent_command_posts, [])
+
+    def test_ai_app_inputs_show_connected_local_and_empty_and_persist_clears(self):
+        fields = [
+            {'nodeId':'2','fieldName':'audio','fieldType':'AUDIO','label':'参考音频','fieldValue':'provider-default.wav','enabled':True,'schemaOrder':0},
+            {'nodeId':'6','fieldName':'value','fieldType':'STRING','label':'参考音频台词','fieldValue':'固定参考台词','fieldData':['STRING'],'enabled':True,'schemaOrder':1},
+            {'nodeId':'7','fieldName':'value','fieldType':'STRING','label':'待生成台词','fieldValue':'应用默认台词','enabled':True,'schemaOrder':2},
+            {'nodeId':'11','fieldName':'mode','fieldType':'LIST','label':'模式','fieldValue':'a','fieldData':['a','b','c','d','e','f'],'enabled':True,'schemaOrder':3},
+            {'nodeId':'12','fieldName':'count','fieldType':'INT','label':'数量','fieldValue':3,'min':0,'max':10,'step':1,'enabled':True,'schemaOrder':4},
+            {'nodeId':'10','fieldName':'value','fieldType':'BOOLEAN','label':'情绪控制','fieldValue':False,'enabled':True,'schemaOrder':5},
+        ]
+        app = {'id':'fixture-app','appId':'fixture-app','title':'音色克隆测试','enabled':True,'fields':fields}
+        type(self).api_providers_payload = [{'id':'runninghub','enabled':True,'rh_region':'global','rh_apps':[app],
+            'rh_regions':{'global':{'enabled':True,'rh_apps':[app]},'cn':{'enabled':False,'rh_apps':[]}}}]
+        self.seed_canvas([
+            {'id':'speech','type':'smart-text-generator','title':'待生成台词来源','x':80,'y':80,'images':[], 'runSettings':{}},
+            {'id':'voice-app','type':'smart-ai-app','title':'音色克隆','x':480,'y':100,'images':[],
+             'runSettings':{'engine':'runninghub','rhRegion':'global','rhConfigKey':'app:fixture-app','rhAppId':'fixture-app','rhFields':fields}},
+        ], [{'from':'speech','to':'voice-app','kind':'input','targetFieldKey':'7::value'}])
+        self.open_hypit_canvas()
+        self.frame_evaluate("window.StudioI18n.set('zh');true")
+        self.frame_evaluate("document.querySelector('.image-node[data-id=voice-app]').click();true")
+        self.wait_for(lambda: self.frame_evaluate("document.querySelectorAll('[data-rh-field-row]').length===6"), "AI 应用没有显示六个真实字段")
+        observed = json.loads(self.frame_evaluate("JSON.stringify([...document.querySelectorAll('[data-rh-field-row]')].map(e=>({key:e.dataset.rhFieldRow,classes:e.className,text:e.textContent})))"))
+        self.assertIn('is-local', observed[0]['classes'])
+        self.assertIn('未连接时使用默认音频', observed[0]['text'])
+        self.assertIn('is-mapped', observed[2]['classes'], '外部节点尚未生成结果时，仍应显示真实连接关系')
+        self.assertIn('等待来源内容', observed[2]['text'])
+        self.assertEqual(self.frame_evaluate("document.querySelector('textarea[data-rh-param=\"6::value\"]').value"), '固定参考台词')
+        self.assertFalse(self.frame_evaluate("!!document.querySelector('[data-rh-field-upload=\"2::audio\"]')"), '已有媒体应先删除再显示上传入口')
+        self.assertEqual(self.frame_evaluate("document.querySelector('[data-rh-clear=\"2::audio\"]').textContent.trim()"), '', '清空应为标题栏图标')
+        self.assertEqual(self.frame_evaluate("document.querySelectorAll('[data-rh-field-row=\"10::value\"] .smart-popover').length"), 0, '二选一不应再套浮层')
+        self.frame_evaluate("(()=>{const list=document.querySelector('.rh-ai-app-param-list');list.scrollTop=list.scrollHeight;window.__aiAppStable={list,text:document.querySelector('textarea[data-rh-param=\"6::value\"]'),top:list.scrollTop};document.querySelector('[role=switch][data-capability-param=\"10::value\"]').click();return true;})()")
+        self.wait_for(lambda: any(n.get('id')=='voice-app' and n.get('runSettings',{}).get('rhParams',{}).get('10::value',{}).get('value') is True for n in self.canvas['nodes']), "原地选择没有保存布尔值")
+        self.assertTrue(self.frame_evaluate("window.__aiAppStable.list===document.querySelector('.rh-ai-app-param-list') && window.__aiAppStable.text===document.querySelector('textarea[data-rh-param=\"6::value\"]') && Math.abs(window.__aiAppStable.top-window.__aiAppStable.list.scrollTop)<2"), '选择不应重建字段或重置滚动')
+        self.frame_evaluate("(()=>{const select=document.querySelector('select[data-capability-param=\"11::mode\"]');select.value='c';select.dispatchEvent(new Event('change',{bubbles:true}));const count=document.querySelector('input[type=number][data-capability-param=\"12::count\"]');count.value='4';count.dispatchEvent(new Event('input',{bubbles:true}));return true;})()")
+        self.wait_for(lambda: any(n.get('id')=='voice-app' and n.get('runSettings',{}).get('rhParams',{}).get('11::mode',{}).get('value')=='c' and n.get('runSettings',{}).get('rhParams',{}).get('12::count',{}).get('value')==4 for n in self.canvas['nodes']), "枚举与数值未通过共享参数链保存精确值")
+        self.assertTrue(self.frame_evaluate("window.__aiAppStable.text===document.querySelector('textarea[data-rh-param=\"6::value\"]') && Math.abs(window.__aiAppStable.top-window.__aiAppStable.list.scrollTop)<2"), '其他参数输入也不应重建表单')
+        self.frame_evaluate("renderDynamicParams();true")
+        self.wait_for(lambda: self.frame_evaluate("Math.abs(window.__aiAppStable.top-document.querySelector('.rh-ai-app-param-list').scrollTop)<2"), lambda: '必要重绘也须保留字段列表滚动位置 '+self.frame_evaluate("JSON.stringify({before:window.__aiAppStable.top,after:document.querySelector('.rh-ai-app-param-list').scrollTop,max:document.querySelector('.rh-ai-app-param-list').scrollHeight-document.querySelector('.rh-ai-app-param-list').clientHeight})"))
+        style = json.loads(self.frame_evaluate("JSON.stringify((()=>{const e=document.querySelector('textarea[data-rh-param=\"6::value\"]'),s=getComputedStyle(e);return {radius:parseFloat(s.borderRadius),line:parseFloat(s.lineHeight),padding:parseFloat(s.paddingLeft)};})())"))
+        self.assertLessEqual(style['radius'], 12, style)
+        self.assertGreaterEqual(style['line'], 18, style)
+        self.assertGreaterEqual(style['padding'], 10, style)
+        self.frame_evaluate("document.querySelector('[data-rh-clear=\"2::audio\"]').click();true")
+        self.wait_for(lambda: self.frame_evaluate("document.querySelector('[data-rh-field-row=\"2::audio\"]').classList.contains('is-empty')"), "清空音频后没有变为无输入状态")
+        self.assertIn('当前没有音频', self.frame_evaluate("document.querySelector('[data-rh-field-row=\"2::audio\"]').textContent"))
+        self.assertTrue(self.frame_evaluate("!!document.querySelector('[data-rh-field-upload=\"2::audio\"]')"), '删除媒体后应就地出现上传入口')
+        self.wait_for(lambda: any(n.get('id')=='voice-app' and n.get('runSettings',{}).get('rhParams',{}).get('2::audio',{}).get('value')=='' for n in self.canvas['nodes']), "清空没有持久保存")
+        shot = self.cdp("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
+        (type(self).cache / "ai-app-input-states.png").write_bytes(base64.b64decode(shot['data']))
+        type(self).canvas_gets = 0
+        self.open_hypit_canvas()
+        self.frame_evaluate("document.querySelector('.image-node[data-id=voice-app]').click();true")
+        self.wait_for(lambda: self.frame_evaluate("!!document.querySelector('[data-rh-field-row=\"2::audio\"].is-empty')"), "重新打开后清空的默认音频被补回")
+        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.port}/static/smart-canvas.html?id=hypit-settings&mode=hypit-settings"})
+        self.wait_for(lambda: self.evaluate("!!document.querySelector('.image-node[data-id=voice-app]')"), "独立编辑器未加载同一应用")
+        self.evaluate("document.querySelector('.image-node[data-id=voice-app]').click();true")
+        self.addCleanup(lambda: self.cdp("Emulation.clearDeviceMetricsOverride"))
+        for width in (1440, 390):
+            self.cdp("Emulation.setDeviceMetricsOverride", {"width":width,"height":1000,"deviceScaleFactor":1,"mobile":False})
+            for appearance, language in (('light','zh'),('dark','en')):
+                self.evaluate(f"window.StudioTheme.set('{appearance}');window.StudioI18n.set('{language}');true")
+                self.wait_for(lambda: self.evaluate(f"innerWidth==={width} && document.querySelectorAll('[data-rh-field-row]').length===6"), "响应式输入区未就绪")
+                hit = json.loads(self.evaluate("JSON.stringify((()=>{const list=document.querySelector('.rh-ai-app-param-list');list.scrollTop=list.scrollHeight;const e=document.querySelector('[data-rh-clear=\"10::value\"]'),r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {ok:e.contains(hit),width:innerWidth,height:innerHeight,top:r.top,bottom:r.bottom,hit:hit?.className,composer:document.querySelector('.composer').getBoundingClientRect().bottom};})())"))
+                self.assertTrue(hit['ok'], hit)
+                sizes = json.loads(self.evaluate("JSON.stringify([...document.querySelectorAll('[data-rh-field-row]')].map(e=>({key:e.dataset.rhFieldRow,width:e.clientWidth,scroll:e.scrollWidth})))"))
+                self.assertTrue(all(row['width'] > 180 and row['scroll'] <= row['width'] + 1 for row in sizes), sizes)
+                shot = self.cdp("Page.captureScreenshot", {"format":"png","captureBeyondViewport":False})
+                (type(self).cache / f"ai-app-input-states-{width}-{appearance}-{language}.png").write_bytes(base64.b64decode(shot['data']))
+        self.evaluate("window.StudioTheme.set('light');window.StudioI18n.set('zh');true")
+        self.evaluate("document.querySelector('[data-rh-clear=\"12::count\"]').click();true")
+        self.wait_for(lambda: self.evaluate("document.querySelector('[data-rh-field-row=\"12::count\"]').classList.contains('is-empty') && document.querySelector('input[type=number][data-capability-param=\"12::count\"]').value===''"), "清空数值不应显示成有效的 0 或补回默认值")
+        self.assertEqual(self.agent_command_posts, [])
+        self.assertEqual(self.test_posts, [])
 
     def test_hypit_output_has_no_separate_test_button_or_submission(self):
         self.seed_canvas([
@@ -1400,8 +1546,9 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.assertTrue(task_id.startswith("studio_"), task_id)
         self.assertTrue(self.frame_evaluate("Boolean(hypitStoredRunRequestId('image-run'))"),
                         "排队期间必须保留同一个幂等 request_id，避免不确定重试重复提交")
-        self.assertTrue(self.frame_evaluate("document.getElementById('runBtn').disabled"),
-                        "服务端任务进行中时应阻止再次运行，避免重复提交")
+        self.assertFalse(self.frame_evaluate("document.getElementById('runBtn').disabled"),
+                         "运行中主按钮必须可用于停止任务")
+        self.assertEqual(self.frame_evaluate("document.getElementById('runBtn').dataset.runState"), "smart.cancelRun")
         self.assertEqual(self.frame_evaluate("document.querySelector('.hypit-output-node').dataset.hypitStatus"), "ready",
                          "命令已接收/任务排队不能提前显示绿色")
         self.frame_evaluate("runGeneration(); true")
@@ -1538,9 +1685,11 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         self.start_hypit_execution_node("image-run")
         self.wait_for(lambda: any(item.get("action") == "run_node" for item in self.agent_command_posts),
                       "无法为取消回归创建隔离 Studio task")
-        self.wait_for(lambda: bool(self.frame_evaluate("!!document.querySelector('.creation-task [data-cancel-run]')")),
-                      lambda: "共享任务状态没有显示普通取消入口：" + str(self.frame_evaluate("JSON.stringify({operation:hypitNodeRunOperations.has('image-run'),selectedId,nodes:nodes.map(n=>({id:n.id,creationId:n.creationId,creationTasks:n.creationTasks?.map(t=>({id:t.id,status:t.runStatus,pending:t.pending,creationId:t.creationId}))})),buttons:[...document.querySelectorAll('[data-cancel-run]')].map(b=>b.outerHTML),body:document.querySelector('.image-node[data-id=image-run]')?.innerHTML.slice(-1500)})")), timeout=3)
-        self.frame_evaluate("document.querySelector('.creation-task [data-cancel-run]').click(); true")
+        self.wait_for(lambda: self.frame_evaluate("document.getElementById('runBtn').dataset.runState==='smart.cancelRun' && !document.getElementById('runBtn').disabled"),
+                      "共享任务必须通过原运行按钮停止")
+        self.assertEqual(self.frame_evaluate("document.querySelectorAll('.creation-task [data-cancel-run]').length"), 0,
+                         "状态区域不再提供第二个停止入口")
+        self.frame_evaluate("document.getElementById('runBtn').click(); document.getElementById('runBtn').click(); true")
         self.wait_for(lambda: len(self.agent_cancel_posts) == 1, "取消没有进入共享 cancel_run 命令")
         cancel = self.agent_cancel_posts[0]
         run = next(item for item in self.agent_command_posts if item.get("action") == "run_node")
@@ -1550,6 +1699,15 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         time.sleep(0.15)
         self.assertEqual(len(self.agent_cancel_posts), 1, "重复点击不能重复发送取消命令")
         self.assertEqual(len([item for item in self.agent_command_posts if item.get("action") == "run_node"]), 1)
+        self.wait_for(lambda: self.frame_evaluate("document.getElementById('runBtn').dataset.runState==='smart.run' && !document.getElementById('runBtn').disabled"),
+                      "原任务停止结束后，主按钮必须恢复运行")
+        self.frame_evaluate("document.getElementById('runBtn').click(); true")
+        self.wait_for(lambda: len([item for item in self.agent_command_posts if item.get("action") == "run_node"]) == 2,
+                      "停止后明确点击运行应允许创建第二次任务")
+        self.wait_for(lambda: self.frame_evaluate("document.getElementById('runBtn').dataset.runState==='smart.cancelRun' && !document.getElementById('runBtn').disabled"),
+                      "第二次任务应再次切换为停止按钮")
+        self.frame_evaluate("document.getElementById('runBtn').click(); true")
+        self.wait_for(lambda: len(self.agent_cancel_posts) == 2, "第二次运行仍须复用同一停止入口")
         self.assertFalse(self.test_posts)
         self.assertFalse(any(path.startswith("/api/canvas-tasks/") for path in self.write_paths), self.write_paths)
 
@@ -1602,9 +1760,9 @@ class HypitSettingsCanvasBrowserTests(unittest.TestCase):
         state = json.loads(self.frame_evaluate("JSON.stringify(['output-red','output-yellow','output-green'].map(id=>{const node=document.querySelector(`.hypit-output-node[data-id=${JSON.stringify(id)}]`);const style=getComputedStyle(node);return {id,status:node.dataset.hypitStatus,border:style.borderTopColor,title:node.getAttribute('title'),label:node.getAttribute('aria-label'),selected:node.classList.contains('selected'),visibleCopy:node.querySelector('.hypit-output-status-copy')?.textContent||'',body:node.querySelector('.hypit-output-body')?.innerText||'',type:node.querySelector('.hypit-output-title')?.textContent.trim()||''};}))"))
         self.assertEqual([item["status"] for item in state], ["disconnected", "ready", "passed"], state)
         self.assertEqual([item["border"] for item in state], ["rgb(220, 38, 38)", "rgb(213, 155, 32)", "rgb(33, 131, 75)"], state)
-        self.assertEqual([item["type"] for item in state], ["文本输出", "图片输出", "视频输出"], state)
+        self.assertEqual([item["type"] for item in state], ["文本处理", "图片创作", "视频创作"], state)
         self.assertEqual([item["title"] for item in state], ["未连接", "待运行", "运行成功"], state)
-        self.assertEqual([item["label"] for item in state], ["文本输出 · 未连接", "图片输出 · 待运行", "视频输出 · 运行成功"], state)
+        self.assertEqual([item["label"] for item in state], ["文本处理 · 未连接", "图片创作 · 待运行", "视频创作 · 运行成功"], state)
         selected = next(item for item in state if item["id"] == "output-yellow")
         self.assertTrue(selected["selected"], f"测试应通过真实节点点击检查选中态：{state}")
         self.assertEqual(selected["border"], "rgb(213, 155, 32)", "选中态的焦点光晕不能覆盖用途状态边框")

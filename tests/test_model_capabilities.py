@@ -1634,8 +1634,9 @@ class ModelCapabilityTests(ConfiguredProvidersMixin, unittest.IsolatedAsyncioTes
         self.assertEqual(o2["readiness"], "ready")
         self.assertEqual(o2["request_mapping"]["prompt"], "metadata.lyrics")
         self.assertIn("melody_id", v9["parameters"])
-        self.assertEqual(lip_sync["readiness"], "adapter_missing")
-        self.assertFalse(lip_sync["runnable"])
+        self.assertEqual(lip_sync["readiness"], "ready")
+        self.assertTrue(lip_sync["runnable"])
+        self.assertEqual(lip_sync["request_mapping"]["voice_id"], "metadata.voiceId")
 
     def test_ai_money_dynamic_image_and_video_profiles_map_every_visible_parameter(self):
         providers = [next(item for item in main.load_api_providers() if item.get("id") == "ai-money")]

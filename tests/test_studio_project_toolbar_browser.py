@@ -111,7 +111,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
           search:document.getElementById('studioProjectSearch')?.getAttribute('aria-label'),
           controls:[...document.querySelectorAll('.studio-project-toolbar-actions button')].map(button=>button.innerText.trim())
         }))()""")
-        self.assertEqual(english["description"], "Manage Hypit video recreation projects, connect an external Agent and review the work.")
+        self.assertEqual(english["description"], "Manage video cloning projects, connect an external Agent and review the work.")
         self.assertEqual(english["search"], "Search projects")
         self.assertEqual(english["controls"], ["Prepare creative skills", "New project"])
 
@@ -120,11 +120,11 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
         expected_actions = ["open", "rename", "connect", "delete"]
         expected_descriptions = {
             "canvas": "整理素材、连接画布节点，逐步完成作品。",
-            "hypit": "管理 Hypit 视频复刻项目，连接外部 Agent，并查看制作内容与结果。",
+            "hypit": "管理视频克隆项目，连接外部 Agent，并查看制作内容与结果。",
         }
         expected_english = {
             "canvas": "Organise assets, connect canvas nodes and build each piece step by step.",
-            "hypit": "Manage Hypit video recreation projects, connect an external Agent and review the work.",
+            "hypit": "Manage video cloning projects, connect an external Agent and review the work.",
         }
         for module in ("canvas", "hypit"):
             for width in (1440, 1280, 390):
@@ -172,7 +172,7 @@ class StudioProjectToolbarBrowserTests(unittest.TestCase):
                     pitches:items.slice(1).map((node,index)=>node.getBoundingClientRect().top-items[index].getBoundingClientRect().top)
                   };
                 })()""")
-                self.assertEqual(report["labels"], ["画布", "Hypit克隆", "公众号文章", "音乐创作", "剧本创作", "小说创作", "素材库"], report)
+                self.assertEqual(report["labels"], ["画布", "视频克隆", "公众号文章", "音乐创作", "剧本创作", "小说创作", "素材库"], report)
                 self.assertTrue(all(height >= 44 for height in report["heights"]), report)
                 self.assertTrue(all(52 <= pitch <= 56 for pitch in report["pitches"]), report)
 

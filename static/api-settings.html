@@ -33,7 +33,7 @@
     <script src="/static/vendor/js/lucide.js?v=2026.08.17.1786430759"></script>
     <script src="/static/js/theme.js?v=2026.10.04.theme-1"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.08.17.1786430759">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.08.17.1787100747">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.10.28.10">
     <link rel="stylesheet" href="/static/css/studio-ui-polish.css?v=2026.08.17.1787804426">
     <link rel="stylesheet" href="/static/css/hypit-settings.css?v=2026.09.23.1">
     <link rel="stylesheet" href="/static/css/model-config-control.css?v=2026.09.23.1">
@@ -65,7 +65,7 @@
                         <button id="hypitSettingsNav" class="provider-card hypit-subnav-item" type="button" onclick="openHypitSettings()">
                             <span class="provider-mark hypit-logo-mark" aria-hidden="true">H</span>
                             <span class="provider-info">
-                                <span class="provider-name" data-i18n="hypit.navLabel">Hypit克隆</span>
+                                <span class="provider-name" data-i18n="hypit.navLabel">视频克隆</span>
                                 <span class="provider-meta" data-i18n="hypit.navMeta">生成模型</span>
                             </span>
                         </button>
@@ -157,8 +157,8 @@
                                 <span class="api-settings-boot-en">Settings could not be loaded. Check the local service and try again.</span>
                             </p>
                             <p class="api-settings-boot-empty" hidden>
-                    <span class="api-settings-boot-zh">设置已读取，目前没有平台连接。左侧的 CLI、AI 应用和 Hypit克隆入口仍可使用。</span>
-                    <span class="api-settings-boot-en">Settings loaded with no platform connections. The CLI, AI Apps, and Hypit Clone entries on the left remain available.</span>
+                    <span class="api-settings-boot-zh">设置已读取，目前没有平台连接。左侧的 CLI、AI 应用和视频克隆入口仍可使用。</span>
+                    <span class="api-settings-boot-en">Settings loaded with no platform connections. The CLI, AI Apps, and Video Cloning entries on the left remain available.</span>
                             </p>
                         </div>
                         <a id="apiSettingsBootRetry" class="api-settings-boot-retry" href="/static/api-settings.html" hidden>
@@ -177,6 +177,45 @@
                     </div>
 
                     <div id="providerSettingsView" hidden>
+                    <section id="laohuAccountCard" class="laohu-account-card" hidden aria-labelledby="laohuAccountTitle">
+                        <div class="laohu-account-head">
+                            <div class="laohu-account-brand">
+                                <span class="laohu-account-mark" aria-hidden="true"><i data-lucide="sparkles" class="w-4 h-4"></i></span>
+                                <div>
+                                    <h2 id="laohuAccountTitle" class="laohu-account-title" data-i18n="api.laohuAccountTitle">laohu 账户</h2>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="laohu-account-main">
+                            <div class="laohu-account-identity">
+                                <span id="laohuAccountConnection" class="laohu-account-connection" data-state="loading" role="status" aria-live="polite" data-i18n="api.laohuAccountLoading">正在读取账户状态…</span>
+                                <div id="laohuAccountProfile" class="laohu-account-profile" hidden>
+                                    <span class="laohu-account-username" id="laohuAccountUsername"></span>
+                                    <span class="laohu-account-balance"><span data-i18n="api.laohuAccountBalance">登录账户余额</span><strong id="laohuAccountBalance"></strong></span>
+                                </div>
+                                <p id="laohuAccountModeMessage" class="laohu-account-mode-message" role="status" aria-live="polite" hidden></p>
+                                <p id="laohuAccountMessage" class="laohu-account-message" role="status" aria-live="polite" hidden></p>
+                            </div>
+                            <div class="laohu-account-actions">
+                                <button id="laohuAccountLogin" class="action-btn primary-btn" type="button" data-i18n="api.laohuAccountLogin">登录 / 注册并连接</button>
+                                <button id="laohuAccountUseAccount" class="action-btn" type="button" hidden data-i18n="api.laohuUseAccountMode">切换到登录账户</button>
+                                <a id="laohuAccountWallet" class="action-btn primary-btn" href="https://api.lao-hu.com/wallet" target="_blank" rel="noopener noreferrer" data-i18n="api.laohuAccountRecharge">充值账户</a>
+                                <button id="laohuAccountRefresh" class="action-btn" type="button" data-i18n="api.laohuAccountRefresh">刷新账户</button>
+                                <button id="laohuAccountLogout" class="action-btn" type="button" hidden data-i18n="api.laohuAccountLogout">退出登录</button>
+                            </div>
+                        </div>
+                        <div class="laohu-account-links">
+                            <span hidden aria-hidden="true">
+                                <a id="laohuAccountSignIn" href="https://api.lao-hu.com/sign-in" target="_blank" rel="noopener noreferrer" data-i18n="api.laohuExternalSignIn">登录 laohu</a>
+                                <a id="laohuAccountSignUp" href="https://api.lao-hu.com/sign-up?aff=460d" target="_blank" rel="noopener noreferrer" data-i18n="api.laohuExternalSignUp">注册 laohu</a>
+                            </span>
+                            <a id="laohuAccountUsage" href="https://api.lao-hu.com/usage-logs" target="_blank" rel="noopener noreferrer" data-i18n="api.laohuAccountUsage">消费记录</a>
+                        </div>
+                        <div class="laohu-manual-key-section">
+                            <a id="laohuAccountConsole" class="laohu-account-console" href="https://api.lao-hu.com/keys" target="_blank" rel="noopener noreferrer"><span data-i18n="api.laohuAccountConsole">开发者控制台</span><i data-lucide="external-link" class="w-3 h-3" aria-hidden="true"></i></a>
+                            <div id="laohuManualKeySlot" class="laohu-manual-key-slot"></div>
+                        </div>
+                    </section>
                     <section id="providerOnboardingCard" class="provider-onboarding-card" hidden></section>
 
                     <section id="customProviderGuide" class="custom-provider-guide" hidden>
@@ -272,25 +311,21 @@
                                     </div>
                                     <span class="hint" data-i18n="api.rhRegionHint">两个站点可以分别启用和配置。</span>
                                 </div>
-                                <div class="ai-money-hint">
-                                    <span class="ms-line" data-i18n="api.aiMoneyUsage">laohu 使用 Bearer API Key，图片和视频任务会自动上传素材并轮询结果。</span>
-                                    <span class="ai-money-links">
-                                        <a href="https://api.lao-hu.com/sign-up?aff=460d" target="_blank" rel="noopener noreferrer"><i data-lucide="user-plus" class="w-3 h-3"></i><span data-i18n="api.aiMoneyRegister">注册并获取 Key</span></a>
-                                        <a href="https://api.lao-hu.com/" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3 h-3"></i><span data-i18n="api.aiMoneyDocs">打开 laohu</span></a>
-                                    </span>
-                                </div>
                             </div>
+                            <span id="apiKeyFieldAnchor" hidden></span>
                             <label class="field full api-key-field">
-                                <span class="label api-key-label">API Key</span>
+                                <span id="keyLabel" class="label api-key-label">API Key</span>
                                 <div class="key-panel api-standard-key-row">
-                                    <div class="key-input-line">
-                                        <div class="field-frame"><input id="keyInput" type="password"></div>
-                                        <div class="key-actions">
-                                            <button class="key-btn key-clear" type="button" onclick="clearKeyOnly()" title="清除 Key" data-i18n-title="api.clearKeyTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                    <div class="key-input-line laohu-key-entry-line">
+                                        <div class="field-frame"><input id="keyInput" type="text" readonly autocomplete="off" placeholder="未配置"></div>
+                                        <div class="key-actions laohu-key-actions">
+                                            <button id="laohuSaveKeyButton" class="action-btn primary-btn laohu-key-save" type="button" data-i18n="api.laohuUpdateKey">更新</button>
+                                            <button id="laohuCancelKeyButton" class="action-btn laohu-key-cancel" type="button" data-i18n="api.laohuCancelKeyEdit" hidden>取消</button>
+                                            <button class="key-btn key-clear laohu-key-clear" type="button" onclick="clearKeyOnly()" title="清除 Key" data-i18n-title="api.clearKeyTitle" hidden><i data-lucide="trash-2" class="w-4 h-4"></i><span data-i18n="api.clearKey">清除</span></button>
                                         </div>
                                     </div>
                                 </div>
-                                <span id="keyHint" class="hint"></span>
+                                <span id="keyHint" class="hint laohu-credential-status" aria-live="polite">未配置</span>
                                 <div class="volcengine-key-stack" hidden>
                                     <div class="rh-key-item">
                                         <div class="rh-key-head">
@@ -442,7 +477,7 @@
                     <section id="hypitSettingsBlock" class="hypit-settings-block" hidden>
                         <div class="hypit-settings-toolbar">
                             <div class="hypit-settings-heading">
-                                <div class="block-title" data-i18n="hypit.canvasTitle">Hypit 流程设置</div>
+                                <div class="block-title" data-i18n="hypit.canvasTitle">视频克隆流程设置</div>
                                 <div class="block-desc" data-i18n="hypit.canvasDescription">在画布中配置生成流程，将执行节点连接到对应输出端口。</div>
                             </div>
                             <div class="hypit-settings-toolbar-actions">
@@ -455,7 +490,7 @@
                             </div>
                         </div>
                         <div id="hypitSettingsStatus" class="hypit-settings-status" role="status" aria-live="polite"></div>
-                        <iframe id="hypitSettingsCanvasFrame" class="hypit-settings-canvas" title="Hypit 流程设置画布" data-i18n-title="hypit.canvasFrameTitle" loading="eager" hidden></iframe>
+                        <iframe id="hypitSettingsCanvasFrame" class="hypit-settings-canvas" title="视频克隆流程设置画布" data-i18n-title="hypit.canvasFrameTitle" loading="eager" hidden></iframe>
                     </section>
 
                     <section id="articleSettingsBlock" class="hypit-settings-block article-settings-block" hidden>
@@ -894,9 +929,10 @@
     <script src="/static/js/i18n/comfyui-settings.js?v=2026.08.17.1786430759"></script>
     <script src="/static/js/i18n/asset-manager.js?v=2026.08.17.1786459099"></script>
     <script src="/static/js/smart-node-contract.js?v=2026.08.17.1787802614"></script>
-    <script src="/static/js/i18n/api-settings.js?v=2026.08.17.1787068270"></script>
+    <script src="/static/js/i18n/api-settings.js?v=2026.10.28.10"></script>
     <script src="/static/js/settings-canvas-controller.js?v=2026.10.06.1"></script>
-    <script src="/static/js/api-settings.js?v=2026.10.06.1"></script>
+    <script src="/static/js/laohu-account.js?v=2026.10.28.10"></script>
+    <script src="/static/js/api-settings.js?v=2026.10.28.10"></script>
     <script src="/static/js/smart-model-capabilities.js?v=2026.09.19.1"></script>
     <script src="/static/js/model-config-core.js"></script>
     <script src="/static/js/model-config-control.js"></script>

@@ -41,6 +41,10 @@
     return data;
   }
   function labels(){
+    const moduleName=text('视频克隆','Video Cloning');
+    el('moduleName').textContent=moduleName;
+    document.title=moduleName+' | '+text('老胡画梦枋','Laohu Creative Studio');
+    el('nativeStudio').title=moduleName+' / '+text('老胡画梦枋','Laohu Creative Studio');
     const refreshLabel=text('刷新作品','Refresh work');
     const languageLabel=text('切换语言','Switch language');
     const themeLabel=text('切换主题','Switch theme');

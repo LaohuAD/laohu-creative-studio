@@ -218,6 +218,7 @@ class StudioArticleTests(unittest.TestCase):
                 )
                 self.assertEqual({item["id"] for item in catalog.json()["templates"]}, {
                     "moyu-green", "red-white", "graphite-minimal", "zen-whitespace", "moyu-ticket", "olive-journal",
+                    "wedraft-plain-paper", "wedraft-ink-journal", "wedraft-jade-notes", "wedraft-blueprint", "wedraft-cinnabar",
                 })
 
                 current = client.get(f"/api/studio/articles/{project['id']}")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import mimetypes
@@ -44,6 +45,11 @@ SENSITIVE_SNAPSHOT_KEYS = {
 
 class StorageError(RuntimeError):
     pass
+
+
+def _is_private_laohu_auth_file(path: str | os.PathLike[str]) -> bool:
+    normalized = Path(str(path).replace("\\", "/")).as_posix().casefold()
+    return normalized.startswith("api/.laohu-") and normalized.endswith(".json")
 
 
 def now_ms() -> int:
@@ -110,6 +116,7 @@ class ProjectStorage:
         self.canvas_task_index_path = self.indexes_dir / "canvas_tasks.json"
         self.manifest_path = self.data_dir / "storage_manifest.json"
         self._lock = threading.RLock()
+        self._canvas_task_read_cache = None
 
     def layout(self) -> dict[str, Path]:
         return {
@@ -157,7 +164,10 @@ class ProjectStorage:
 
     def _write_json(self, path: Path, value: Any) -> None:
         try:
-            write_json(path, value)
+            if path == self.canvas_task_index_path:
+                write_json(path, value, compact=True)
+            else:
+                write_json(path, value)
         except DataFileError as exc:
             raise StorageError(str(exc)) from exc
 
@@ -175,6 +185,8 @@ class ProjectStorage:
         value["version"] = SCHEMA_VERSION
         value["updated_at"] = now_ms()
         self._write_json(path, value)
+        if path == self.canvas_task_index_path:
+            self._canvas_task_read_cache = None
 
     @staticmethod
     def _snapshot_key(value: Any) -> str:
@@ -366,9 +378,21 @@ class ProjectStorage:
         if not task_id:
             return None
         with self._lock:
-            index = self._load_index(self.canvas_task_index_path)
-            item = next((entry for entry in index["items"] if entry.get("id") == task_id), None)
-            return dict(item) if item else None
+            try:
+                stat = self.canvas_task_index_path.stat()
+                signature = (stat.st_dev, stat.st_ino, stat.st_size,
+                             stat.st_mtime_ns, stat.st_ctime_ns)
+            except FileNotFoundError:
+                signature = None
+            if self._canvas_task_read_cache is None or self._canvas_task_read_cache[0] != signature:
+                index = self._load_index(self.canvas_task_index_path)
+                by_id = {}
+                for entry in index["items"]:
+                    by_id.setdefault(entry.get("id"), entry)
+                self._canvas_task_read_cache = (signature, by_id)
+            item = self._canvas_task_read_cache[1].get(task_id)
+            # Callers may edit nested private snapshots; never expose the cache.
+            return copy.deepcopy(item) if item else None
 
     def update_canvas_task(self, task_id: str, **changes: Any) -> dict[str, Any]:
         task_id = str(task_id or "").strip()
@@ -1369,6 +1393,8 @@ class ProjectStorage:
                     if self.backups_dir == path or self.backups_dir in path.parents:
                         continue
                     relative = path.relative_to(self.root).as_posix()
+                    if _is_private_laohu_auth_file(relative):
+                        continue
                     if relative in seen or relative.startswith(("__pycache__/", ".git/", ".superpowers/")):
                         continue
                     seen.add(relative)
@@ -1391,6 +1417,8 @@ class ProjectStorage:
                     raise StorageError("备份包包含不安全路径")
                 if not path.parts:
                     continue
+                if _is_private_laohu_auth_file(name):
+                    raise StorageError("备份包不能恢复本机专属的 laohu 登录凭据")
                 if path.parts[0] not in allowed_roots and name not in allowed_files:
                     raise StorageError(f"备份包包含未知路径：{name}")
             if "backup-manifest.json" not in {item.filename for item in members}:

@@ -1,26 +1,36 @@
 {
-  "version": "2026.10.06",
-  "updated_at": "2026-10-06T09:45:00+08:00",
+  "version": "2026.11.08",
+  "updated_at": "2026-11-08T11:59:53+08:00",
   "items": [
     {
-      "type": "feature",
-      "text": "新增公众号文章项目，集中管理原稿、标题与封面历史，并支持六种真实排版主题的预览、复制和下载。",
-      "text_en": "Add article projects to manage source text, title and cover history, with preview, copy and download across six distinct layouts."
+      "type": "improvement",
+      "text": "Hypit 模块更名为视频克隆，统一文本处理、图片创作、视频创作、配音、音效与音乐六种能力名称，并完善各项目的 Agent 接入说明。",
+      "text_en": "Rename Hypit to Video Cloning, unify six capability names, and document capability discovery, result-only runs, and project association for Agents."
     },
     {
       "type": "feature",
-      "text": "画布模型管理支持按精确运行选项启停候选，并为画布、Hypit 和文章流程提供共享配置画布。",
-      "text_en": "Canvas model management can enable or disable exact run options and provides shared configuration canvases for Canvas, Hypit and articles."
+      "text": "新增 laohu 账户连接与余额展示，支持登录账户和手动 Key 切换，并固定任务接受时的凭据身份。",
+      "text_en": "Add laohu account connection and balance display, switch between account and manual-key modes, and pin execution identity when a task is accepted."
     },
     {
       "type": "improvement",
-      "text": "新增五套完整主题，并将主题身份与浅色、深色及系统外观偏好分开保存。",
-      "text_en": "Add five complete themes and store theme identity separately from light, dark and system appearance preferences."
+      "text": "更新 laohu 模型目录与逐模型请求契约，保留待确认能力并加强参数和素材限制校验。",
+      "text_en": "Refresh the laohu model catalog and model-specific request contracts, retain unconfirmed capabilities, and strengthen parameter and media validation."
+    },
+    {
+      "type": "feature",
+      "text": "新增五套公众号文章排版主题，更新音乐作品编辑、乐谱与版本选择体验。",
+      "text_en": "Add five article layout themes and improve music editing, score content, and independent version selection."
     },
     {
       "type": "fix",
-      "text": "改进候选目录、配置画布状态同步、页面首屏加载及窄屏滚动，避免筛选或刷新中断当前选择。",
-      "text_en": "Improve candidate catalogs, configuration-canvas state sync, startup loading and narrow-screen scrolling so filtering or refresh does not interrupt current selections."
+      "text": "修复 AI 应用字段清空、连接状态和媒体输入映射，保持参数面板滚动与编辑焦点。",
+      "text_en": "Fix explicit empty values, connected-field states, and media mapping in AI applications while preserving parameter-panel scroll and editing focus."
+    },
+    {
+      "type": "fix",
+      "text": "限制结果历史快照嵌套，优化任务索引读取缓存，并保留任务恢复和并发修订保护。",
+      "text_en": "Limit nested result-history snapshots, cache task-index reads, and preserve task recovery and revision protection."
     }
   ]
 }

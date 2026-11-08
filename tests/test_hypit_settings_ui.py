@@ -44,8 +44,8 @@ class HypitSettingsUiTests(unittest.TestCase):
         canvas_page = CANVAS_PAGE.read_text(encoding="utf-8")
         self.assertIn('aria-label="添加输出端口"', canvas_page)
         self.assertIn('data-hypit-label-en="Add output port"', canvas_page)
-        self.assertIn('aria-label="Hypit 输出端口"', canvas_page)
-        self.assertIn('data-hypit-aria-label-en="Hypit output ports"', canvas_page)
+        self.assertIn('aria-label="视频克隆输出端口"', canvas_page)
+        self.assertIn('data-hypit-aria-label-en="Video Cloning output ports"', canvas_page)
         self.assertNotIn("添加用途输出", canvas_page)
         self.assertNotIn("Hypit 用途输出", canvas_page)
 

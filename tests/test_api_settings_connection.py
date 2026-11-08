@@ -299,6 +299,99 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.status_code, 502)
         self.assertIn("资料不完整", raised.exception.detail)
 
+    async def test_runninghub_app_info_reads_detail_when_demo_cannot_find_app(self):
+        app_id = "2118720065746071553"
+        field = {"nodeId": "2", "fieldName": "audio", "fieldType": "AUDIO",
+                 "fieldValue": "example.wav", "fieldData": '["COMBO", {"audio_upload": true}]'}
+        for region, host in (("global", "www.runninghub.ai"), ("cn", "www.runninghub.cn")):
+            with self.subTest(region=region):
+                demo = MagicMock(status_code=200)
+                demo.json.return_value = {"code": 901, "msg": "WEBAPP_NOT_EXISTS"}
+                detail = MagicMock(status_code=200)
+                detail.json.return_value = {"code": 0, "data": {
+                    "id": app_id, "name": "音色克隆应用", "inputNodes": [field],
+                    "publishAccess": {"granted": True, "needPassword": False},
+                    "workflowId": "private-workflow", "curl": "private-example", "owner": {"id": "private-owner"},
+                }}
+                client = MagicMock(get=AsyncMock(return_value=demo), post=AsyncMock(return_value=detail))
+                context = MagicMock(__aenter__=AsyncMock(return_value=client), __aexit__=AsyncMock(return_value=False))
+                with patch.object(main, "runninghub_provider", return_value={"id": "runninghub", "rh_region": region, "base_url": f"https://{host}"}), \
+                     patch.object(main, "runninghub_app_info_key_candidates", return_value=["fixture-key"]), \
+                     patch.object(main, "runninghub_app_headers", return_value={"Authorization": "Bearer fixture-key"}), \
+                     patch.object(main.httpx, "AsyncClient", return_value=context):
+                    result = await main.runninghub_app_info(app_id, region)
+
+                self.assertTrue(result["success"])
+                self.assertEqual(result["data"]["webappId"], app_id)
+                self.assertEqual(result["data"]["webappName"], "音色克隆应用")
+                self.assertEqual(result["data"]["nodeInfoList"], [field])
+                self.assertNotIn("workflowId", result["data"])
+                self.assertNotIn("owner", result["data"])
+                self.assertNotIn("curl", result["data"])
+                client.post.assert_awaited_once()
+                self.assertEqual(client.post.await_args.args[0], f"https://{host}/api/webapp/detail")
+                self.assertEqual(client.post.await_args.kwargs["json"]["webappId"], app_id)
+
+    async def test_runninghub_app_detail_fallback_rejects_wrong_private_or_incomplete_app(self):
+        app_id = "2118720065746071553"
+        valid = {"id": app_id, "name": "应用", "inputNodes": [{"nodeId": "2", "fieldName": "audio", "fieldType": "AUDIO"}]}
+        cases = (
+            ({**valid, "id": "another-app"}, 502),
+            ({**valid, "publishAccess": {"granted": False}}, 403),
+            ({**valid, "publishAccess": {"needPassword": True}}, 403),
+            ({**valid, "inputNodes": None}, 502),
+            ({**valid, "inputNodes": [{"fieldType": "AUDIO"}]}, 502),
+        )
+        for data, status in cases:
+            with self.subTest(data=data):
+                demo = MagicMock(status_code=200)
+                demo.json.return_value = {"code": 901, "msg": "WEBAPP_NOT_EXISTS"}
+                detail = MagicMock(status_code=200)
+                detail.json.return_value = {"code": 0, "data": data}
+                client = MagicMock(get=AsyncMock(return_value=demo), post=AsyncMock(return_value=detail))
+                context = MagicMock(__aenter__=AsyncMock(return_value=client), __aexit__=AsyncMock(return_value=False))
+                with patch.object(main, "runninghub_provider", return_value={"id": "runninghub", "base_url": "https://www.runninghub.ai"}), \
+                     patch.object(main, "runninghub_app_info_key_candidates", return_value=["fixture-key"]), \
+                     patch.object(main, "runninghub_app_headers", return_value={}), \
+                     patch.object(main.httpx, "AsyncClient", return_value=context):
+                    with self.assertRaises(main.HTTPException) as raised:
+                        await main.runninghub_app_info(app_id, "global")
+                self.assertEqual(raised.exception.status_code, status)
+
+    async def test_runninghub_app_info_does_not_use_detail_to_bypass_auth_error(self):
+        for status, code in ((401, 1602), (403, 901), (429, 901), (500, 901)):
+            with self.subTest(status=status, code=code):
+                response = MagicMock(status_code=status)
+                response.json.return_value = {"code": code, "msg": "API_KEY_INVALID" if code == 1602 else "WEBAPP_NOT_EXISTS"}
+                client = MagicMock(get=AsyncMock(return_value=response), post=AsyncMock())
+                context = MagicMock(__aenter__=AsyncMock(return_value=client), __aexit__=AsyncMock(return_value=False))
+                with patch.object(main, "runninghub_provider", return_value={"id": "runninghub", "base_url": "https://www.runninghub.ai"}), \
+                     patch.object(main, "runninghub_app_info_key_candidates", return_value=["fixture-key"]), \
+                     patch.object(main, "runninghub_app_headers", return_value={}), \
+                     patch.object(main.httpx, "AsyncClient", return_value=context):
+                    with self.assertRaises(main.HTTPException) as raised:
+                        await main.runninghub_app_info("missing-app", "global")
+                self.assertEqual(raised.exception.status_code, status)
+                client.post.assert_not_awaited()
+
+    async def test_runninghub_app_detail_fallback_preserves_upstream_errors(self):
+        for status, payload in ((200, {"code": 404, "msg": "NOT_FOUND"}), (403, {"code": 403, "msg": "FORBIDDEN"}), (503, {"message": "unavailable"})):
+            with self.subTest(status=status):
+                demo = MagicMock(status_code=200)
+                demo.json.return_value = {"code": "901", "msg": "WEBAPP_NOT_EXISTS"}
+                detail = MagicMock(status_code=status)
+                detail.json.return_value = payload
+                client = MagicMock(get=AsyncMock(return_value=demo), post=AsyncMock(return_value=detail))
+                context = MagicMock(__aenter__=AsyncMock(return_value=client), __aexit__=AsyncMock(return_value=False))
+                with patch.object(main, "runninghub_provider", return_value={"id": "runninghub", "base_url": "https://www.runninghub.ai"}), \
+                     patch.object(main, "runninghub_app_info_key_candidates", return_value=["fixture-key"]), \
+                     patch.object(main, "runninghub_app_headers", return_value={}), \
+                     patch.object(main.httpx, "AsyncClient", return_value=context):
+                    with self.assertRaises(main.HTTPException) as raised:
+                        await main.runninghub_app_info("missing-app", "global")
+                self.assertEqual(raised.exception.status_code, status if status >= 400 else 400)
+                self.assertIn(payload.get("msg") or payload["message"], raised.exception.detail)
+
     def test_jimeng_login_details_parse_complete_device_flow_output(self):
         verification_url = (
             "https://jimeng.jianying.com/ai-tool/cli-auth?"
@@ -1383,6 +1476,14 @@ class ApiSettingsConnectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(main.runninghub_wallet_key_env("cn"), "RUNNINGHUB_CN_WALLET_API_KEY")
         self.assertEqual(main.runninghub_api_key_env("global"), "RUNNINGHUB_GLOBAL_API_KEY")
         self.assertEqual(main.runninghub_wallet_key_env("global"), "RUNNINGHUB_GLOBAL_WALLET_API_KEY")
+
+    def test_runninghub_saved_replacement_survives_inherited_stale_reload_environment(self):
+        for region in ('global', 'cn'):
+            for wallet in (False, True):
+                name = main.runninghub_key_env(region, use_wallet=wallet)
+                with patch.object(main.os, 'getenv', return_value='stale-parent-key'), \
+                     patch.object(main, 'read_api_env_value', side_effect=lambda key: 'saved-new-key' if key == name else ''):
+                    self.assertEqual(main.runninghub_region_key_value(region, use_wallet=wallet), 'saved-new-key')
 
     def test_global_legacy_key_is_ignored_when_it_is_the_saved_cn_key(self):
         values = {

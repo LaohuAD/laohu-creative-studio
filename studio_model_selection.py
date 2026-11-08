@@ -63,6 +63,9 @@ MODEL_ID_RULES: List[Dict[str, Any]] = [
     {"family": "series-image-nano-banana", "label": {"zh": "Nano Banana", "en": "Nano Banana"}, "tokens": ["nano-banana", "nanobanana"], "node_types": ["image_generation"]},
     {"family": "series-image-gpt-image", "label": {"zh": "GPT Image", "en": "GPT Image"}, "model_ids": [
         "laohu-image-g-v2-lowprice",
+        "laohu-image-g-v2.6-flare",
+        "laohu-image-g-v2.6-lowprice",
+        "laohu-image-g-v2.6-sunburst",
         "laohu-image-g-v2.5-flare",
         "laohu-image-g-v2.5-lowprice",
         "laohu-image-g-v2.5-sunburst",

@@ -229,6 +229,7 @@ let createMenuGroupId = '';
 let createMenuConnection = null;
 let createMenuKeepOpenOnNextClick = false;
 let runningHubFieldPicker = null;
+const runningHubFieldUploads = new Map();
 let runningHubFieldPickerOpeningEvent = null;
 let runningHubFieldPickerOpeningStamp = null;
 let nodeClipboard = null;
@@ -3319,7 +3320,7 @@ function isHypitOutputNode(node){
     return Boolean(isSettingsCanvasMode && node?.type === 'smart-hypit-output' && HYPIT_OUTPUT_SLOTS.includes(node?.hypitSlot));
 }
 function hypitSlotName(slot){
-    const labels={text:['文本','Text'],image:['图片','Image'],video:['视频','Video'],audio:['音效','Sound effects'],music:['音乐','Music'],voice:['语音','Voice']};
+    const labels={text:['文本处理','Text Processing'],image:['图片创作','Image Creation'],video:['视频创作','Video Creation'],audio:['音效','Sound Effects'],music:['音乐','Music'],voice:['配音','Voice-over']};
     const pair=labels[slot]||['输出','Output'];
     return capabilityUiText(pair[0],pair[1]);
 }
@@ -3331,16 +3332,7 @@ function settingsCanvasModuleId(){
     return 'hypit';
 }
 function hypitSlotLabel(slot){
-    const labels={
-        text:['文本输出','Text output'],
-        image:['图片输出','Image output'],
-        video:['视频输出','Video output'],
-        audio:['音效输出','Sound effects output'],
-        music:['音乐输出','Music output'],
-        voice:['语音输出','Voice output'],
-    };
-    const pair=labels[slot]||['输出','Output'];
-    return capabilityUiText(pair[0],pair[1]);
+    return hypitSlotName(slot);
 }
 function hypitIncomingConnections(nodeId){
     return (canvas?.connections||[]).filter(edge=>edge?.to===nodeId && ['input','flow'].includes(edge.kind||'flow'));
@@ -3488,13 +3480,13 @@ function updateHypitModeUi(){
         isMusicSettingsMode?capabilityUiText('音乐生成配置','Music generation setup'):
         isScriptSettingsMode?capabilityUiText('剧本文本优化配置','Script text optimization setup'):
         isNovelSettingsMode?capabilityUiText('小说文本优化配置','Novel text optimization setup'):
-        capabilityUiText('Hypit 流程设置','Hypit flow settings');
+        capabilityUiText('视频克隆流程设置','Video Cloning flow settings');
     document.title=title?.textContent||document.title;
     const drawerTitle=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head strong');
     const drawerHelp=hypitOutputDrawer?.querySelector('.hypit-output-drawer-head span');
     if(drawerTitle)drawerTitle.textContent=capabilityUiText('输出端口',drawerTitle.dataset.hypitLabelEn||'Output ports');
     if(drawerHelp)drawerHelp.textContent=capabilityUiText('只添加对应输出端口；重复选择会定位已有端口',drawerHelp.dataset.hypitLabelEn||'Adds only this output port; selecting it again focuses the existing one.');
-    if(hypitOutputDrawer)hypitOutputDrawer.setAttribute('aria-label',capabilityUiText(isArticleSettingsMode?'文章输出端口':isMusicSettingsMode?'音乐输出端口':isTextOptimizationSettingsMode?'文本优化输出端口':'Hypit 输出端口',isArticleSettingsMode?'Article output ports':isMusicSettingsMode?'Music output ports':isTextOptimizationSettingsMode?'Text optimization output ports':(hypitOutputDrawer.dataset.hypitAriaLabelEn||'Hypit output ports')));
+    if(hypitOutputDrawer)hypitOutputDrawer.setAttribute('aria-label',capabilityUiText(isArticleSettingsMode?'文章输出端口':isMusicSettingsMode?'音乐输出端口':isTextOptimizationSettingsMode?'文本优化输出端口':'视频克隆输出端口',isArticleSettingsMode?'Article output ports':isMusicSettingsMode?'Music output ports':isTextOptimizationSettingsMode?'Text optimization output ports':(hypitOutputDrawer.dataset.hypitAriaLabelEn||'Video Cloning output ports')));
     const close=hypitOutputDrawer?.querySelector('[data-hypit-drawer-close]');if(close)close.setAttribute('aria-label',capabilityUiText('关闭',close.dataset.hypitLabelEn||'Close'));
     if(hypitOutputDrawerToggle){
         const label=isTextOptimizationSettingsMode
@@ -3668,7 +3660,7 @@ async function refreshHypitCanvasAfterAgentCommand(){
 async function refreshHypitCanvasProjectionAfterSave(){
     const response=await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`,{cache:'no-store'});
     const data=await response.json().catch(()=>({}));
-    if(!response.ok||!data.canvas)throw new Error(apiErrorMessage(data,canvasSyncText('无法更新 Hypit 输出状态','Could not refresh Hypit output status')));
+    if(!response.ok||!data.canvas)throw new Error(apiErrorMessage(data,canvasSyncText('无法更新视频克隆输出状态','Could not refresh Video Cloning output status')));
     const merged=applyMergedServerCanvas(data.canvas,{prompt:false,scheduleSave:false});
     if(!merged||merged.conflicts?.length)throw new Error(canvasSyncText('画布有并行修改，输出状态将在下一次同步后更新','The canvas has concurrent edits; output status will refresh after synchronization'));
     return true;
@@ -6178,8 +6170,10 @@ function setCapabilityParameter(profile, key, value){
         const storeKey=profile._externalEngine==='rh'?'rhParams':'comfyParams';
         settings[storeKey]=settings[storeKey] || {};
         const current=settings[storeKey][key];
-        settings[storeKey][key]=profile._externalEngine==='rh'?{...(current && typeof current==='object'?current:{}),value}:value;
-        persistActiveSmartSettings();scheduleSave();return;
+        settings[storeKey][key]=profile._externalEngine==='rh'?{...(current && typeof current==='object'?current:{}),value:value===CAPABILITY_PARAMETER_UNSET?'':value}:value;
+        persistActiveSmartSettings();scheduleSave();
+        if(profile._externalEngine==='rh') updateRhAiAppInputRowState(key);
+        return;
     }
     if(key === 'count' && value !== CAPABILITY_PARAMETER_UNSET && value !== undefined && value !== null && value !== ''){
         settings.count = Number(value) || 1;
@@ -7778,8 +7772,10 @@ function restoreOpenControl(state){
 function dynamicParamsScrollSnapshot(){
     if(!dynamicParams) return null;
     return {
+        subjectId:dynamicParams.dataset?.smartNodeId || '',
         top:dynamicParams.scrollTop || 0,
         left:dynamicParams.scrollLeft || 0,
+        appFields:[...dynamicParams.querySelectorAll('.rh-ai-app-param-list')].map(list => ({top:list.scrollTop || 0,left:list.scrollLeft || 0})),
         summaryGrids:[...dynamicParams.querySelectorAll('.capability-summary-grid')].map(grid => ({top:grid.scrollTop || 0, left:grid.scrollLeft || 0})),
         sizePickers:[...dynamicParams.querySelectorAll('.size-picker-control')].map(ctrl => ({
             key:controlTypeKey(ctrl),
@@ -7790,8 +7786,13 @@ function dynamicParamsScrollSnapshot(){
 function restoreDynamicParamsScroll(snapshot){
     if(!snapshot || !dynamicParams) return;
     const apply = () => {
+        if(snapshot.subjectId && dynamicParams.dataset?.smartNodeId!==snapshot.subjectId) return;
         dynamicParams.scrollTop = snapshot.top || 0;
         dynamicParams.scrollLeft = snapshot.left || 0;
+        [...dynamicParams.querySelectorAll('.rh-ai-app-param-list')].forEach((list,index) => {
+            const position=snapshot.appFields?.[index];
+            if(position){list.scrollTop=position.top;list.scrollLeft=position.left;}
+        });
         [...dynamicParams.querySelectorAll('.capability-summary-grid')].forEach((grid, index) => {
             const position = snapshot.summaryGrids?.[index];
             if(!position) return;
@@ -8023,7 +8024,11 @@ function renderDynamicParamsContent({preserveState=true}={}){
     requestAnimationFrame(() => restoreCapabilityPickerScroll(pickerScroll));
     requestAnimationFrame(() => {
         const active = activeComposerNode();
-        if(active && composer?.classList?.contains('open')) positionComposerForNode(active);
+        if(active && composer?.classList?.contains('open')){
+            positionComposerForNode(active);
+            // 面板尺寸改变会暂时夹紧 scrollTop；完成定位后恢复实际字段滚动。
+            if(scrollState?.appFields?.length) restoreDynamicParamsScroll(scrollState);
+        }
     });
 }
 function textGenerationRequestForNode(node=activeSettingsSubject()){
@@ -9150,6 +9155,7 @@ function rhFieldRole(field){
     return SMART_NODE_CONTRACT.runningHubTextFieldRole(field);
 }
 function rhExtractFieldOptions(field){
+    if(['STRING','TEXT'].includes(String(field?.fieldType || '').toUpperCase())) return null;
     const candidates = [field?.fieldData, field?.options, field?.list, field?.values, field?.enum, field?.choices, field?.items, field?.selectOptions, field?.dropdown];
     for(const candidate of candidates){
         if(!Array.isArray(candidate) || !candidate.length) continue;
@@ -9220,7 +9226,7 @@ function rhParamValue(field, media=null, sourceSettings=settings, fields=null, r
         const upstreamItem = media?.[kind]?.[idx];
         const up = kind === 'text' ? SMART_NODE_CONTRACT.textContentForMediaItem(upstreamItem) : upstreamItem?.url || '';
         if(up) return up;
-        return '';
+        return param?.value ?? (rhCurrentKind(sourceSettings) === 'workflow' ? '' : rhDefaultValue(field));
     }
     if(rhRandomEnabled(field) && smartRhRandomActiveFor(sourceSettings, key)){
         if(randomValues[key] === undefined) randomValues[key] = smartRhRandomValue(field);
@@ -9679,7 +9685,7 @@ async function rhBuildNodeInfoList(media, sourceSettings=settings, randomValues=
         const key = rhParamKey(field.nodeId, field.fieldName);
         if(mode === 'workflow' && field.sourceFromUpstream === false && !['image','video','audio'].includes(kind)) continue;
         if(mode === 'workflow' && !Object.prototype.hasOwnProperty.call(explicitParams, key) && rhLooksLikeComplexDefault(field) && !['image','video','audio'].includes(kind) && rhFieldRole(field) !== 'prompt') continue;
-        if(['text','image','video','audio'].includes(kind)){
+        if(mode === 'workflow' && ['text','image','video','audio'].includes(kind)){
             const idx = indexes[key] || 0;
             const input = media?.boundByField?.[key] || media?.[kind]?.[idx];
             const hasValue = kind === 'text' ? Boolean(SMART_NODE_CONTRACT.textContentForMediaItem(input)) : Boolean(input?.url);
@@ -9690,6 +9696,7 @@ async function rhBuildNodeInfoList(media, sourceSettings=settings, randomValues=
         }
         let value = rhParamValue(field, media, sourceSettings, fields, randomValues);
         if(field.required === true && !String(value ?? '').trim()) throw new Error(`RunningHub AI 应用缺少必填输入：${rhRequiredLabel(field)}`);
+        if(!String(value ?? '').trim() && !Object.prototype.hasOwnProperty.call(explicitParams,key)) continue;
         if(['image','video','audio'].includes(kind)) value = await rhUploadValueIfNeeded(value, sourceSettings);
         value = SMART_NODE_CONTRACT.runningHubCoerceFieldValue(field, value);
         result.push({nodeId:field.nodeId, fieldName:field.fieldName, fieldValue:value});
@@ -9697,22 +9704,39 @@ async function rhBuildNodeInfoList(media, sourceSettings=settings, randomValues=
     return result;
 }
 function renderRhAiAppFieldRow(field, fields=rhActiveFields(), refs=rhConnectedMediaRefs()){
-    const kind = rhFieldKind(field);
     const inputKind = rhInputFieldKind(field);
-    if(!['text','image','video','audio'].includes(inputKind)) return renderRhSettingField(field);
     const mediaFields = fields.filter(item => ['text','image','video','audio'].includes(rhInputFieldKind(item)));
     const key = rhParamKey(field.nodeId, field.fieldName);
-    const bound = SMART_NODE_CONTRACT.runningHubBoundMedia(mediaFields, refs, settings.rhInputBindings || {});
-    const connected = bound[key];
-    if(inputKind === 'text' && !connected) return renderRhSettingField(field);
-    const icon = inputKind === 'text' ? 'file-text' : inputKind === 'video' ? 'film' : inputKind === 'audio' ? 'audio-lines' : 'image';
-    const label = rhFieldDisplayLabel(field, mediaFields);
-    return `<div class="rh-ai-app-param-row rh-ai-app-media-row ${connected ? 'is-mapped' : 'is-missing'}" title="${escapeAttr(label)}">
-        <span class="rh-ai-app-param-label rh-ai-app-media-label"><i data-lucide="${icon}"></i><span>${escapeHtml(label)}</span>${field.required === true ? `<em>${escapeHtml(tr('smart.rhInputRequired'))}</em>` : ''}</span>
+    const state = rhAiAppFieldInputState(field, fields, refs);
+    const icon = inputKind === 'text' ? 'file-text' : inputKind === 'video' ? 'film' : inputKind === 'audio' ? 'audio-lines' : inputKind === 'image' ? 'image' : 'sliders-horizontal';
+    const label = rhFieldDisplayLabel(field, mediaFields) || field.label || field.fieldName;
+    return `<div class="rh-ai-app-param-row rh-ai-app-media-row is-${state.status}" data-rh-field-row="${escapeAttr(key)}">
+        <div class="rh-ai-app-field-head"><span class="rh-ai-app-param-label rh-ai-app-media-label"><i data-lucide="${icon}"></i><span>${escapeHtml(label)}</span>${field.required === true ? `<em>${escapeHtml(tr('smart.rhInputRequired'))}</em>` : ''}</span><span class="rh-ai-app-field-actions"><small data-rh-field-status>${escapeHtml(state.label)}</small>${!state.connected ? `<button type="button" class="rh-ai-app-clear" data-rh-clear="${escapeAttr(key)}" aria-label="${escapeAttr(capabilityUiText(`清空${label}`,`Clear ${label}`))}" title="${escapeAttr(capabilityUiText('清空','Clear'))}" ${state.status === 'empty' ? 'disabled' : ''}><i data-lucide="x" aria-hidden="true"></i></button>` : ''}</span></div>
         <div class="rh-ai-app-media-control">
-            ${connected ? renderRhConnectedInputControl(connected, inputKind) : renderRhUnconnectedInputControl(field, inputKind)}
+            ${state.connected ? renderRhConnectedInputControl(state.connected, inputKind) : renderRhUnconnectedInputControl(field, inputKind)}
         </div>
     </div>`;
+}
+function rhAiAppFieldInputState(field, fields, refs, sourceSettings=settings, node=activeSettingsSubject()){
+    const key = rhParamKey(field.nodeId, field.fieldName);
+    const bound = SMART_NODE_CONTRACT.runningHubBoundMedia(fields, refs, sourceSettings.rhInputBindings || {});
+    const connection = (canvas?.connections || []).find(edge => edge.to === node?.id && connectionTargetFieldKey(edge) === key && !['result','story','history'].includes(edge.kind || 'input'));
+    const source = connection ? nodes.find(item => item.id === connection.from) : null;
+    const connected = bound[key] || (source ? {kind:rhInputFieldKind(field),name:source.title || source.id,pending:true} : null);
+    const value = sourceSettings.rhParams?.[key]?.value ?? rhDefaultValue(field);
+    const status = connected ? 'mapped' : value !== undefined && value !== null && String(value).trim() !== '' ? 'local' : 'empty';
+    const label = status === 'mapped' ? capabilityUiText('已连接','Connected')
+        : status === 'local' ? capabilityUiText('使用本节点值','Using local value') : capabilityUiText('未输入','Empty');
+    return {status,connected,value,label};
+}
+function updateRhAiAppInputRowState(key){
+    const row = dynamicParams?.querySelector(`[data-rh-field-row="${CSS.escape(key)}"]`);
+    const field = rhActiveFields().find(item => rhParamKey(item.nodeId,item.fieldName) === key);
+    if(!row || !field) return;
+    const state = rhAiAppFieldInputState(field,rhActiveFields(),rhConnectedMediaRefs());
+    row.classList.remove('is-mapped','is-local','is-empty'); row.classList.add(`is-${state.status}`);
+    const status = row.querySelector('[data-rh-field-status]'); if(status) status.textContent = state.label;
+    const clear = row.querySelector('[data-rh-clear]'); if(clear) clear.disabled = state.status === 'empty';
 }
 function renderRhConnectedInputControl(item, kind){
     const text = kind === 'text' ? SMART_NODE_CONTRACT.textContentForMediaItem(item) : '';
@@ -9724,22 +9748,90 @@ function renderRhConnectedInputControl(item, kind){
             : `<i data-lucide="${kind === 'text' ? 'file-text' : kind === 'audio' ? 'audio-lines' : 'link-2'}"></i>`;
     return `<div class="rh-ai-app-connected-card" title="${escapeAttr(name)}">
         <span class="rh-ai-app-connected-preview">${preview}</span>
-        <span class="rh-ai-app-connected-copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(capabilityUiText('已连接', 'Connected'))}</small></span>
+        <span class="rh-ai-app-connected-copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(item.pending?capabilityUiText('已连接 · 等待来源内容','Connected · Waiting for source content'):capabilityUiText('已连接', 'Connected'))}</small></span>
         <i data-lucide="link-2" class="rh-ai-app-connected-link"></i>
     </div>`;
 }
 function renderRhUnconnectedInputControl(field, kind){
-    const labels = {
-        text:['file-text','文本素材','text material'],
-        image:['image','图片素材','image material'],
-        video:['film','视频素材','video material'],
-        audio:['audio-lines','音频素材','audio material']
-    };
-    const [icon, labelZh, labelEn] = labels[kind] || labels.text;
-    return `<div class="rh-ai-app-unconnected-card"><i data-lucide="${icon}"></i><span>${escapeHtml(capabilityUiText(`等待连接${labelZh}`, `Waiting for ${labelEn}`))}</span><small>${escapeHtml(capabilityUiText('请从画布素材节点拖出连线', 'Drag a connection from a canvas material node'))}</small></div>`;
+    const key = rhParamKey(field.nodeId,field.fieldName);
+    const value = settings.rhParams?.[key]?.value ?? rhDefaultValue(field);
+    const label = field.label || field.description || field.fieldName || key;
+    if(kind === 'text') return `<textarea class="rh-ai-app-local-text" data-rh-param="${escapeAttr(key)}" data-rh-type="text" aria-label="${escapeAttr(label)}" placeholder="${escapeAttr(capabilityUiText('输入文本，或连接文本节点','Enter text or connect a text node'))}">${escapeHtml(String(value ?? ''))}</textarea>`;
+    if(!['image','video','audio'].includes(kind)) return renderRhSettingField(field);
+    const labels = {image:['图片','image'],video:['视频','video'],audio:['音频','audio']};
+    const [zh,en] = labels[kind];
+    const hasValue = String(value ?? '').trim() !== '';
+    const explicit = Object.prototype.hasOwnProperty.call(settings.rhParams || {},key);
+    const hint = hasValue && !explicit
+        ? capabilityUiText(`可连接${zh}节点；未连接时使用默认${zh}。`,`Connect an ${en} node, or use the default ${en} when unconnected.`)
+        : hasValue ? capabilityUiText(`可连接${zh}节点；未连接时使用本节点${zh}。`,`Connect an ${en} node, or use this node's ${en} when unconnected.`)
+        : capabilityUiText(`当前没有${zh}，可连接节点或选择文件。`,`No ${en} input. Connect a node or choose a file.`);
+    const name = settings.rhParams?.[key]?.media?.name || value;
+    return `<div class="rh-ai-app-unconnected-card">${hasValue ? `<div class="rh-ai-app-media-value"><i data-lucide="${kind==='audio'?'audio-lines':kind==='video'?'film':'image'}" aria-hidden="true"></i><span class="rh-ai-app-local-name" title="${escapeAttr(String(name))}">${escapeHtml(String(name))}</span></div>` : `<label class="rh-ai-app-file"><i data-lucide="upload" aria-hidden="true"></i><span>${escapeHtml(capabilityUiText(`选择${zh}`,`Choose ${en}`))}</span><input type="file" data-rh-field-upload="${escapeAttr(key)}" data-rh-field-kind="${kind}" accept="${kind}/*" aria-label="${escapeAttr(capabilityUiText(`选择${zh}：${label}`,`Choose ${en}: ${label}`))}"></label>`}<small>${escapeHtml(hint)}</small></div>`;
 }
 function renderRhSettingField(field){
-    return renderExternalParameterControl(field,'rh');
+    const key=rhParamKey(field.nodeId,field.fieldName), spec=externalParameterSpec(field,'rh');
+    const value=rhParamValue(field,null), label=field.label || field.fieldName;
+    let body;
+    if(spec.type==='boolean'){
+        const checked=value!=='' && (value===true || ['true','1'].includes(String(value).toLowerCase()));
+        body=`<label class="rh-ai-app-toggle"><input type="checkbox" role="switch" data-capability-param="${escapeAttr(key)}" data-capability-type="boolean" aria-label="${escapeAttr(label)}" ${checked?'checked':''}><span class="rh-ai-app-toggle-track" aria-hidden="true"></span><span class="rh-ai-app-toggle-state">${escapeHtml(value===''?capabilityUiText('未输入','Empty'):checked?capabilityUiText('是','Yes'):capabilityUiText('否','No'))}</span></label>`;
+    }else if(['integer','number'].includes(spec.type) && value===''){
+        body=`<input class="rh-ai-app-inline-number" type="number" data-capability-param="${escapeAttr(key)}" data-capability-type="${spec.type}" aria-label="${escapeAttr(label)}" placeholder="${escapeAttr(capabilityUiText('未输入','Empty'))}" value="" ${spec.min!==undefined?`min="${escapeAttr(spec.min)}"`:''} ${spec.max!==undefined?`max="${escapeAttr(spec.max)}"`:''} step="${escapeAttr(spec.step??(spec.type==='integer'?1:'any'))}">`;
+    }else if(spec.type==='enum' && spec.options.length>4){
+        body=`<select class="rh-ai-app-inline-select" data-capability-param="${escapeAttr(key)}" data-capability-type="enum" aria-label="${escapeAttr(label)}"><option value="" ${value===''?'selected':''} disabled>${escapeHtml(capabilityUiText('请选择','Choose an option'))}</option>${spec.options.map(option=>`<option value="${escapeAttr(option)}" ${String(option)===String(value)?'selected':''}>${escapeHtml(spec.option_labels?.[String(option)]??option)}</option>`).join('')}</select>`;
+    }else{
+        body=renderCapabilityParameterEditor(key,spec,{model_id:settings.rhAppId,parameters:{[key]:spec}},{[key]:value}).body;
+        if(rhRandomEnabled(field)) body+=`<button type="button" class="dice-btn ${smartRhRandomActive(key)?'active':''}" data-rh-random="${escapeAttr(key)}" title="${escapeAttr(tr(smartRhRandomActive(key)?'smart.diceOn':'smart.diceOff'))}"><i data-lucide="dice-5"></i></button>`;
+    }
+    return `<div class="rh-ai-app-inline-parameter" data-external-engine="rh">${body}</div>`;
+}
+function syncRhAiAppInlineParameter(control,key,value){
+    const root=control.closest('.rh-ai-app-inline-parameter');
+    if(!root) return false;
+    root.querySelectorAll('[data-capability-option]').forEach(button=>{
+        const active=String(button.dataset.capabilityValue)===String(value);
+        button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
+    });
+    root.querySelectorAll('input[data-capability-param],select[data-capability-param]').forEach(input=>{
+        if(input.dataset.capabilityParam!==key) return;
+        if(input.type==='checkbox') input.checked=value===true;
+        else if(input!==document.activeElement) input.value=String(value??'');
+    });
+    const state=root.querySelector('.rh-ai-app-toggle-state');
+    if(state) state.textContent=value===true?capabilityUiText('是','Yes'):capabilityUiText('否','No');
+    const output=root.querySelector('output');if(output) output.textContent=String(value??'');
+    return true;
+}
+async function uploadRhAiAppFieldFile(input){
+    const file = input.files?.[0], owner = activeSettingsSubject();
+    if(!file || !owner) return;
+    const key = input.dataset.rhFieldUpload, kind = input.dataset.rhFieldKind;
+    const ownerId = owner.id, operationKey = `${ownerId}:${key}`, token = {};
+    const identity = source => JSON.stringify([source.rhConfigKey,source.rhAppId,source.rhRegion]);
+    const originalIdentity = identity(settings), originalValue = JSON.stringify(settings.rhParams?.[key] ?? null);
+    runningHubFieldUploads.set(operationKey,token); input.disabled = true;
+    try {
+        if(mediaKindForFile(file) !== kind) throw new Error(capabilityUiText('文件类型与该输入字段不匹配','The file type does not match this input'));
+        const uploaded = (await uploadFiles([file]))[0];
+        if(!uploaded?.url || mediaKindForItem(uploaded) !== kind) throw new Error(capabilityUiText('没有取得匹配的受管素材','No matching managed material was returned'));
+        const target = nodes.find(node => node.id === ownerId);
+        if(!target || runningHubFieldUploads.get(operationKey) !== token) return;
+        const active = activeSettingsSubject()?.id === ownerId;
+        const targetSettings = active ? settings : smartSettingsForNode(target);
+        const field = rhActiveFields(targetSettings).find(item => rhParamKey(item.nodeId,item.fieldName) === key);
+        if(identity(targetSettings) !== originalIdentity || JSON.stringify(targetSettings.rhParams?.[key] ?? null) !== originalValue
+            || !field || rhInputFieldKind(field) !== kind
+            || rhAiAppFieldInputState(field,rhActiveFields(targetSettings),[],targetSettings,target).connected){
+            toast(capabilityUiText('素材已上传；输入字段已变化，未覆盖当前内容','Material uploaded; the input changed, so its current value was kept'));
+            return;
+        }
+        targetSettings.rhParams ||= {}; targetSettings.rhParams[key] = {value:uploaded.url,media:{...uploaded}};
+        if(active){persistActiveSmartSettings();renderDynamicParams();}
+        else target.runSettings = targetSettings;
+        scheduleSave();
+    } catch(error){errorToast(error.message || capabilityUiText('素材上传失败','Material upload failed'));}
+    finally {if(runningHubFieldUploads.get(operationKey)===token)runningHubFieldUploads.delete(operationKey);if(input.isConnected)input.disabled=false;}
 }
 function comfyRandomEnabledField(field){ return field?.type === 'number' && field.random_enabled === true; }
 function smartComfyRandomActive(fieldId){
@@ -10814,8 +10906,8 @@ function bindDynamicParams(){
             const raw = btn.dataset.capabilityValue;
             const value = type === 'boolean' ? raw === 'true' : type === 'integer' ? Math.round(Number(raw)) : type === 'number' ? Number(raw) : raw;
             setCapabilityParameter(currentCapabilityProfile(btn), btn.dataset.capabilityParam, value);
-            // 选择单项后保留统一参数弹层，便于连续调整多个参数。
-            renderDynamicParams();
+            // AI 应用直接在原字段更新，保留列表、焦点与其他未完成输入。
+            if(!syncRhAiAppInlineParameter(btn,btn.dataset.capabilityParam,value)) renderDynamicParams();
         };
     });
     dynamicParams.querySelectorAll('[data-capability-unset]').forEach(btn => {
@@ -10853,7 +10945,7 @@ function bindDynamicParams(){
             if(btn.dataset.capabilityMin !== '' && Number.isFinite(minimum)) next = Math.max(minimum, next);
             if(btn.dataset.capabilityType === 'integer') next = Math.round(next);
             setCapabilityParameter(profile, key, next);
-            renderDynamicParams();
+            if(!syncRhAiAppInlineParameter(btn,key,next)) renderDynamicParams();
         };
     });
     dynamicParams.querySelectorAll('input[data-capability-param],select[data-capability-param],textarea[data-capability-param]').forEach(input => {
@@ -10865,6 +10957,7 @@ function bindDynamicParams(){
             if(value === undefined) return;
             syncCapabilityNumericControls(input,value);
             setCapabilityParameter(profile, input.dataset.capabilityParam, value);
+            if(profile?._externalEngine==='rh') syncRhAiAppInlineParameter(input,input.dataset.capabilityParam,value);
             const output = input.closest('.capability-range-field')?.querySelector('output');
             if(output) output.textContent = String(value);
             const label=input.closest('.capability-param-control')?.querySelector('.capability-param-label');
@@ -10954,6 +11047,19 @@ function bindDynamicParams(){
             scheduleSave();
         };
     });
+    dynamicParams.querySelectorAll('[data-rh-clear]').forEach(button => {
+        button.onclick = event => {
+            event.preventDefault(); event.stopPropagation();
+            const key = button.dataset.rhClear;
+            runningHubFieldUploads.delete(`${activeSettingsSubject()?.id}:${key}`);
+            settings.rhParams ||= {}; settings.rhParams[key] = {value:''};
+            persistActiveSmartSettings(); renderDynamicParams(); scheduleSave();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-rh-field-upload]').forEach(input => {
+        input.onclick = event => event.stopPropagation();
+        input.onchange = event => {event.stopPropagation();void uploadRhAiAppFieldFile(input);};
+    });
     dynamicParams.querySelectorAll('[data-rh-param]').forEach(input => {
         input.onclick = event => event.stopPropagation();
         input.oninput = input.onchange = event => {
@@ -10973,6 +11079,7 @@ function bindDynamicParams(){
             control?.querySelectorAll('[data-rh-param]').forEach(peer=>{if(peer!==input)peer.value=input.value;});
             if(pillValue) pillValue.textContent = input.value;
             persistActiveSmartSettings();
+            updateRhAiAppInputRowState(key);
             scheduleSave();
         };
         if(input.dataset.rhType === 'slider'){
@@ -12504,12 +12611,50 @@ function completeSmartNodeWithImages(node, images){
     if(smartNodeHasDisplayResult(copy)) markSmartNodeComplete(copy);
     return copy;
 }
+// The button and progress display consume the same persisted task records.
+const selectedNodeRunOperations = new Map();
+const selectedNodeStopOperations = new Set();
+function activeRunsForExecutionNode(node){
+    if(!node?.id) return [];
+    const terminal = new Set(['succeeded','partially_succeeded','failed','cancelled']);
+    return [...new Map([...CanvasCreation.tasks(nodes), ...nodes].filter(task => {
+        const belongs = task.sourceExecutionNodeId === node.id || task.id === node.id
+            || (node.creationTasks || []).some(item => item.id === task.id);
+        return belongs && !terminal.has(String(task.runStatus || task.status || '').toLowerCase())
+            && Boolean(task.isRunPlaceholder || task.creationTask || smartNodeInFlight(task));
+    }).map(task => [task.id, task])).values()];
+}
 function syncRunButtonState(node=selectedNode()){
     if(!runBtn) return;
-    // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
-    // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
-    runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id)
-        || !settingsNodeModelOptionsReady(node);
+    const tasks = activeRunsForExecutionNode(node);
+    const stopping = selectedNodeStopOperations.has(node?.id) || tasks.some(task => task.cancelInProgress);
+    const submitting = !tasks.length && (selectedNodeRunOperations.has(node?.id) || hypitNodeRunOperations.has(node?.id));
+    const key = stopping ? 'smart.cancellingRun' : tasks.length ? 'smart.cancelRun' : submitting ? 'smart.submittingRun' : 'smart.run';
+    const icon = stopping || submitting ? 'loader-2' : tasks.length ? 'square' : 'sparkles';
+    if(runBtn.dataset.runState !== key){
+        runBtn.dataset.runState = key;
+        runBtn.innerHTML = `<i data-lucide="${icon}"></i><span data-i18n="${key}">${escapeHtml(tr(key))}</span>`;
+        window.lucide?.createIcons({root:runBtn});
+    }
+    runBtn.disabled = stopping || submitting || (!tasks.length && (
+        !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id)
+        || !settingsNodeModelOptionsReady(node)));
+}
+async function stopSelectedNodeRuns(node){
+    if(selectedNodeStopOperations.has(node.id)) return;
+    const tasks = activeRunsForExecutionNode(node);
+    if(!tasks.length) return;
+    selectedNodeStopOperations.add(node.id);
+    syncRunButtonState();
+    try {
+        const results = await Promise.all(tasks.map(task => cancelExecutionResultRun(task.id)));
+        if(results.some(result => result === false)) return;
+        // Do not allow a new run while the cancelled invocation is unwinding.
+        await selectedNodeRunOperations.get(node.id);
+    } finally {
+        selectedNodeStopOperations.delete(node.id);
+        syncRunButtonState();
+    }
 }
 function smartGenerationVersionKey(version){
     if(!version) return '';
@@ -13588,7 +13733,7 @@ async function saveCanvas(options={}){
             canvasSyncSaveQueued = false;
             scheduleSave();
         } else if(refreshHypitProjectionAfterSave&&!canvasSyncSaveBlocked){
-            void refreshHypitCanvasProjectionAfterSave().catch(error=>canvasSyncReportError(error?.message||canvasSyncText('Hypit 输出状态同步失败','Could not synchronize Hypit output status')));
+            void refreshHypitCanvasProjectionAfterSave().catch(error=>canvasSyncReportError(error?.message||canvasSyncText('视频克隆输出状态同步失败','Could not synchronize Video Cloning output status')));
         }
     }
 }
@@ -17129,14 +17274,12 @@ function imageTaskRecoverBodyHtml(node, task, layout){
     </div>`;
 }
 function cancelRunButtonHtml(node){
-    if(!node || (!node.isRunPlaceholder && !node.sourceExecutionNodeId)) return '';
-    const cancelling = Boolean(node.cancelInProgress || (isSettingsCanvasMode&&hypitNodeCancelOperations.has(node.id)));
-    return `<button class="run-placeholder-cancel" type="button" data-cancel-run="${escapeAttr(node.id)}" ${cancelling ? 'disabled' : ''}><i data-lucide="${cancelling ? 'loader-2' : 'square'}"></i><span>${escapeHtml(tr(cancelling ? 'smart.cancellingRun' : 'smart.cancelRun'))}</span></button>`;
+    // Progress surfaces are read-only; the composer owns the stop action.
+    return '';
 }
 function runPlaceholderOverlayHtml(node){
-    const button = cancelRunButtonHtml(node);
-    if(!button) return '';
-    return `<div class="run-placeholder-overlay"><i class="run-placeholder-spinner" data-lucide="loader-2"></i><span>${escapeHtml(tr('smart.hintPending'))}</span>${button}</div>`;
+    if(!node || (!node.isRunPlaceholder && !node.sourceExecutionNodeId)) return '';
+    return `<div class="run-placeholder-overlay"><i class="run-placeholder-spinner" data-lucide="loader-2"></i><span>${escapeHtml(tr('smart.hintPending'))}</span></div>`;
 }
 function runPlaceholderFailureHtml(node, layout){
     const message = String(node?.runError || tr('smart.errRunFailed')).trim() || tr('smart.errRunFailed');
@@ -17557,7 +17700,6 @@ function generationRerunOverlayHtml(node){
         <div class="generation-rerun-spinner"><i data-lucide="loader-2"></i></div>
         <strong>${escapeHtml(capabilityUiText('重新运行中','Regenerating'))}</strong>
         <span data-generation-rerun-timer="${escapeAttr(node.id)}">${escapeHtml(formatRunDuration(nowMs() - startedAt))}</span>
-        <button type="button" class="generation-rerun-cancel" data-cancel-generation-rerun="${escapeAttr(node.id)}"><i data-lucide="square"></i><span>${escapeHtml(capabilityUiText('取消运行','Cancel'))}</span></button>
     </div>`;
 }
 function ensureSmartGenerationInfoModal(){
@@ -17705,7 +17847,7 @@ function openSmartGenerationInfo(nodeId){
     runIcon.setAttribute('data-lucide', node.generationRerunPending ? 'square' : stopping ? 'loader-2' : 'refresh-cw');
     runButton.querySelector('i,svg')?.replaceWith(runIcon);
     runButton.querySelector('span').textContent = node.generationRerunPending
-        ? capabilityUiText('取消重新生成','Cancel regeneration')
+        ? capabilityUiText('停止运行','Stop run')
         : stopping
         ? capabilityUiText('正在停止…','Stopping…')
         : capabilityUiText('按此配置重新生成','Regenerate with these settings');
@@ -17879,8 +18021,12 @@ function smartNodeHeaderHtml(node, fallback){
     const resetLabel=capabilityUiText('重置设置','Reset settings');
     const resetTitle=capabilityUiText('恢复该模型的已确认参数默认值，并重置同模型共用的显示顺序；不改变模型、输入或结果。','Restore verified defaults for this model and reset its shared display order; model, inputs, and results stay unchanged.');
     const resetAction=resetTarget?`<button type="button" class="node-header-action canvas-settings-node-reset" data-canvas-settings-reset-node="1" data-node-id="${escapeAttr(node.id)}" title="${escapeAttr(resetTitle)}" aria-label="${escapeAttr(resetLabel)}"><i data-lucide="rotate-ccw"></i><span>${escapeHtml(resetLabel)}</span></button>`:'';
+    const inputLockLabel=node.hypitInputLocked===true?capabilityUiText('输入已锁定','Input locked'):capabilityUiText('锁定输入','Lock input');
+    const inputLockHint=node.hypitInputLocked===true
+        ? capabilityUiText('保留当前输入，模块任务不会自动替换；仍可手动编辑。','Keep this input during module runs; you can still edit it manually.')
+        : capabilityUiText('允许模块任务替换输入；锁定后保留当前内容，仍可手动编辑。','Module runs may replace this input. Lock it to keep the current content; manual editing remains available.');
     const hypitLock=isSettingsCanvasMode&&isSmartMaterialNode(node)&&String(node.sourceKind||'').toLowerCase()!=='result'
-        ? `<button type="button" class="hypit-input-lock" data-hypit-input-lock="1" data-node-id="${escapeAttr(node.id)}" aria-pressed="${node.hypitInputLocked===true?'true':'false'}" title="${escapeAttr(node.hypitInputLocked===true?capabilityUiText('Hypit 输入已锁定','Hypit input is locked'):capabilityUiText('锁定 Hypit 输入','Lock Hypit input'))}"><i data-lucide="${node.hypitInputLocked===true?'lock':'unlock'}"></i></button>`:'';
+        ? `<button type="button" class="hypit-input-lock" data-hypit-input-lock="1" data-node-id="${escapeAttr(node.id)}" aria-pressed="${node.hypitInputLocked===true?'true':'false'}" aria-label="${escapeAttr(inputLockLabel)}" title="${escapeAttr(`${inputLockLabel}：${inputLockHint}`)}"><i data-lucide="${node.hypitInputLocked===true?'lock':'unlock'}"></i></button>`:'';
     return `<div class="node-head">${numberMarkup}${canvasTitleEditor.markup(node,node.images?.[0]?.name||capabilityUiText('素材','Material'))}<div class="node-actions" role="toolbar" aria-label="${escapeAttr(capabilityUiText('节点操作','Node actions'))}">${hypitLock}${resetAction}${hasMedia?action('preview','scan',capabilityUiText('预览 / 编辑','Preview / edit')):''}${tools}${item?.url?action('download','download',capabilityUiText('下载','Download')):''}<button class="node-header-action node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i><span>${escapeHtml(tr('smart.deleteNode'))}</span></button></div></div>`;
 }
 function smartNodeToolbarHtml(node){
@@ -20177,48 +20323,60 @@ function pickMediaForSmartNode(nodeId){
     document.body.appendChild(input);
     input.click();
 }
-function pickMediaForTextMaterial(node){
-    if(!node) return;
+function pickMediaForTextMaterial(node, beforeReplace){
+    if(!node) return Promise.resolve(false);
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*,video/*,audio/*,.txt,.md,.markdown,.json,.csv,.srt,.vtt';
-    input.onchange = async () => {
-        const file = input.files?.[0];
-        input.remove();
-        if(!file) return;
-        try {
-            await replaceTextMaterialFromFiles(node, [file]);
-        } catch(error) {
-            toast((error.message || '替换素材失败').slice(0, 160));
-        }
-    };
+    input.dataset.materialFilePicker = '1';
+    const completed = new Promise(resolve => {
+        input.oncancel = () => { input.remove(); resolve(false); };
+        input.onchange = async () => {
+            const file = input.files?.[0];
+            input.remove();
+            if(!file){ resolve(false); return; }
+            try {
+                if(beforeReplace && await beforeReplace() === false){ resolve(false); return; }
+                await replaceTextMaterialFromFiles(node, [file]);
+                resolve(true);
+            } catch(error) {
+                toast((error.message || '替换素材失败').slice(0, 160));
+                resolve(false);
+            }
+        };
+    });
     input.style.position = 'fixed';
     input.style.left = '-9999px';
     input.style.top = '-9999px';
     input.style.opacity = '0';
     document.body.appendChild(input);
     input.click();
+    return completed;
 }
 async function replaceTextMaterialFromFiles(node, files=[]){
     const file = [...(files || [])][0];
     if(!node || !file) return;
-    pushUndo();
+    const revision = node.creationRevision;
+    const previousImages = node.images;
+    let replacement;
     if(isSupportedTextFile(file)){
         const text = await file.text();
-        const item = node.images?.[0] || {kind:'text'};
-        item.kind = 'text';
-        item.text = text;
-        item.content = text;
-        item.url = '';
-        item.name = file.name || '导入文本.md';
-        node.images = [item];
-        node.title = item.name;
+        replacement = {kind:'text',text,content:text,url:'',name:file.name || '导入文本.md'};
     } else {
         const uploaded = await uploadFiles([file]);
         if(!uploaded?.length) throw new Error('素材上传失败');
-        node.images = [{...uploaded[0], kind:uploaded[0].kind || mediaKindForFile(file)}];
-        node.title = node.images[0].name || file.name || '素材';
+        replacement = {...uploaded[0], kind:uploaded[0].kind || mediaKindForFile(file)};
     }
+    if(!nodes.includes(node) || node.creationRevision !== revision || node.images !== previousImages) throw new Error(capabilityUiText('素材已被更新，请重新选择文件','Material changed; select the file again'));
+    pushUndo();
+    CanvasCreation.ensure(node);
+    node.resultVersions ||= [CanvasCreation.snapshot(node,uid('version'))];
+    node.creationParentId=node.creationId; node.creationId=uid('creation'); node.creationOwnerNodeId=node.id;
+    node.images = [replacement];
+    node.title = replacement.name || file.name || capabilityUiText('素材','Material');
+    node.creationRevision += 1;
+    node.resultVersions.push(CanvasCreation.snapshot(node,uid('version')));
+    node.activeResultVersion=node.resultVersions.length-1;
     render();
     scheduleSave();
 }
@@ -23373,7 +23531,7 @@ function ensureSmartTextEditorModal(){
         <div class="smart-text-editor-head"><strong data-text-editor-title></strong><button type="button" data-text-editor-close aria-label="${escapeAttr(capabilityUiText('关闭','Close'))}">×</button></div>
         <div class="creation-text-columns"><label class="creation-text-main"><span>${escapeHtml(capabilityUiText('正文','Content'))}</span><textarea data-text-editor-input spellcheck="false"></textarea></label>
         <aside class="creation-text-details"><div class="creation-notes-heading"><strong>${escapeHtml(capabilityUiText('创作说明','Creation notes'))}</strong><button type="button" data-creation-notes-toggle>${escapeHtml(capabilityUiText('预览','Preview'))}</button></div><p class="creation-notes-hint">${escapeHtml(capabilityUiText('记录这一段已确定的结论，方便继续创作。支持 Markdown，格式自由。','Keep this part’s creative decisions for later work. Free-form Markdown.'))}</p><textarea data-creation-notes aria-label="${escapeAttr(capabilityUiText('创作说明 Markdown','Creation notes Markdown'))}" spellcheck="false" placeholder="${escapeAttr(capabilityUiText('可以记录创作结论、资产状态、衔接或参考来源；不必逐项填写。','Optionally note creative decisions, asset states, transitions or references.'))}"></textarea><div data-creation-notes-preview class="media-text-preview" hidden></div></aside></div>
-        <div class="smart-text-editor-actions"><span>${escapeHtml(capabilityUiText('保存到当前节点，历史正文保留为版本','Save in this node; previous content remains in history'))}</span><button type="button" data-text-editor-cancel>${escapeHtml(capabilityUiText('取消','Cancel'))}</button><button type="button" data-text-editor-save>${escapeHtml(capabilityUiText('保存','Save'))}</button></div>
+        <div class="smart-text-editor-actions"><button type="button" data-text-editor-upload><i data-lucide="upload-cloud"></i>${escapeHtml(capabilityUiText('上传素材','Upload material'))}</button><span>${escapeHtml(capabilityUiText('直接输入文字，或上传图片、音视频等文件','Enter text, or upload images, audio, video and other files'))}</span><button type="button" data-text-editor-cancel>${escapeHtml(capabilityUiText('取消','Cancel'))}</button><button type="button" data-text-editor-save>${escapeHtml(capabilityUiText('保存','Save'))}</button></div>
     </div>`;
     document.body.appendChild(modal);
     modal.addEventListener('mousedown', event => event.stopPropagation());
@@ -23382,6 +23540,8 @@ function ensureSmartTextEditorModal(){
         if(event.target === modal || event.target.closest('[data-text-editor-close],[data-text-editor-cancel]')) closeTextMaterialEditor();
     });
     modal.querySelector('[data-text-editor-save]').addEventListener('click', saveTextMaterialEditor);
+    modal.querySelector('[data-text-editor-upload]').addEventListener('click', uploadTextMaterialEditor);
+    lucide.createIcons({root:modal});
     modal.querySelector('[data-creation-notes-toggle]').addEventListener('click',()=>{
         const input=modal.querySelector('[data-creation-notes]'), preview=modal.querySelector('[data-creation-notes-preview]');
         const show=preview.hidden;
@@ -23499,7 +23659,7 @@ async function openTextMaterialEditor(nodeId, imageIndex=0){
     modal.querySelector('[data-creation-notes-preview]').hidden=true;
     modal.querySelector('[data-creation-notes-toggle]').textContent=capabilityUiText('预览','Preview');
     input.value = SMART_NODE_CONTRACT.textContentForMediaItem(item);
-    editorState.originalText=input.value; input.readOnly=false; input.placeholder='';
+    editorState.originalText=input.value; input.readOnly=false; input.placeholder=capabilityUiText('输入文字，或使用下方按钮上传素材…','Enter text, or use the button below to upload material…');
     modal.classList.add('open');
     if(!input.value && item.url){
         input.readOnly=true;
@@ -23520,15 +23680,38 @@ async function openTextMaterialEditor(nodeId, imageIndex=0){
     input.setSelectionRange(0, 0);
 }
 function closeTextMaterialEditor(){
+    if(smartTextEditorState?.saving || smartTextEditorState?.uploading) return;
     document.getElementById('smartTextEditorModal')?.classList.remove('open');
     smartTextEditorState = null;
 }
-async function saveTextMaterialEditor(){
+async function uploadTextMaterialEditor(){
+    const state = smartTextEditorState;
+    const source = nodes.find(n=>n.id===state?.nodeId);
+    if(!source || state.saving || state.uploading) return;
+    const modal = document.getElementById('smartTextEditorModal');
+    const button = modal.querySelector('[data-text-editor-upload]');
+    state.uploading = true; button.disabled = true;
+    try {
+        const replaced = await pickMediaForTextMaterial(source, async () => {
+            if(smartTextEditorState !== state) return false;
+            modal.querySelectorAll('textarea').forEach(input => { input.readOnly=true; });
+            return saveTextMaterialEditor({keepOpen:true,allowEmpty:true});
+        });
+        state.uploading = false;
+        if(replaced && smartTextEditorState === state) closeTextMaterialEditor();
+    } finally {
+        state.uploading = false; button.disabled = false;
+        if(smartTextEditorState === state) modal.querySelectorAll('textarea').forEach(input => { input.readOnly=false; });
+    }
+}
+async function saveTextMaterialEditor(options={}){
     const state = smartTextEditorState;
     const modal = document.getElementById('smartTextEditorModal');
     const source = nodes.find(n=>n.id===state?.nodeId);
     const content = String(modal?.querySelector('[data-text-editor-input]')?.value || '');
-    if(!source || !content.trim()){ toast(capabilityUiText('正文不能为空','Content cannot be empty')); return; }
+    if(!source || state.saving || (state.uploading && !options.keepOpen)) return false;
+    if(!content.trim() && !options.allowEmpty){ toast(capabilityUiText('正文不能为空','Content cannot be empty')); return false; }
+    state.saving=true;
     const button=modal.querySelector('[data-text-editor-save]'); button.disabled=true;
     try {
         const details=modal.querySelector('[data-creation-notes]').value;
@@ -23536,9 +23719,12 @@ async function saveTextMaterialEditor(){
         CanvasCreation.updateDetails(draft,details,state.revision);
         const original=state.originalText;
         if(content!==original){
-            const response=await fetch('/api/canvas-text-results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:content,name:`${String(source.title||'文本').replace(/\.(md|txt)$/i,'')}.md`,canvas_id:canvasId,canvas_title:canvas?.title||''})});
-            const stored=await response.json();
-            if(!response.ok) throw new Error(apiErrorMessage(stored,'文本保存失败'));
+            let stored={url:'',display_name:source.title};
+            if(content.trim()){
+                const response=await fetch('/api/canvas-text-results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:content,name:`${String(source.title||'文本').replace(/\.(md|txt)$/i,'')}.md`,canvas_id:canvasId,canvas_title:canvas?.title||''})});
+                stored=await response.json();
+                if(!response.ok) throw new Error(apiErrorMessage(stored,'文本保存失败'));
+            }
             if(source.creationRevision!==state.revision) throw new Error(capabilityUiText('正文已被更新，请重新打开后编辑','Content changed; reopen the editor'));
             pushUndo();
             source.resultVersions ||= [CanvasCreation.snapshot(source,uid('version'))];
@@ -23549,9 +23735,14 @@ async function saveTextMaterialEditor(){
             source.activeResultVersion=source.resultVersions.length-1;
         } else pushUndo();
         source.creationDetails=draft.creationDetails; source.creationRevision=draft.creationRevision;
-        closeTextMaterialEditor(); render(); scheduleSave();
-    } catch(error){ toast(String(error.message||error)); }
-    finally { button.disabled=false; }
+        state.originalText=content;
+        state.saving=false;
+        if(!options.keepOpen) closeTextMaterialEditor();
+        render(); scheduleSave();
+        state.revision=source.creationRevision;
+        return true;
+    } catch(error){ toast(String(error.message||error)); return false; }
+    finally { state.saving=false; button.disabled=false; }
 }
 // 打开整组图片预览：以被双击图片为起点，左右切换遍历分组内所有图片。
 function openGroupImagePreview(group, startNodeId, startIndex=0){
@@ -24172,6 +24363,16 @@ function positionComposerForNode(node){
         const leftScreen=Math.max(14,Math.min(viewport.x+(rect.x+rect.width/2)*scale-width/2,shell.clientWidth-width-14));
         composer.style.left=(leftScreen-viewport.x)/scale+'px';composer.style.top=(rect.y+rect.height+14/scale)+'px';
         composer.style.setProperty('--ai-app-param-list-max-height',Math.max(80,shell.clientHeight-350)+'px');
+        if(node.type===SMART_NODE_TYPES.aiApp){
+            const limit=Math.max(240,Math.min(680,shell.clientHeight-100));
+            const below=viewport.y+(rect.y+rect.height)*scale+14;
+            const remaining=shell.clientHeight-below-14;
+            const height=remaining>=260?Math.min(limit,remaining):limit;
+            const top=Math.max(64,Math.min(below,shell.clientHeight-height-14));
+            composer.style.top=(top-viewport.y)/scale+'px';
+            composer.style.height=height+'px';composer.style.maxHeight=height+'px';
+            composer.style.setProperty('--ai-app-param-list-max-height',Math.max(60,height-220)+'px');
+        }
         composer.classList.remove('composer-side','composer-above');return;
     }
     composer.classList.remove('screen-ui');composer.style.transform='';composer.style.maxHeight='';
@@ -27870,14 +28071,14 @@ function runSmartCascadeFromLoop(loopId){
     selectedImage = {nodeId:'', index:-1};
     runSmartCascade(tail);
 }
-async function runGeneration(){
-    const node = selectedNode();
+async function runGeneration(targetNode=null){
+    const node = targetNode || selectedNode();
     if(isSmartDirectorNode(node)) return runMinimaxNode(node.id);
     if(!isSmartExecutionNode(node) && !isSmartGroupNode(node)) return;
     const request = buildPromptRequest(node, null, true, smartLoopContext);
     const prompt = request.prompt.trim();
     if(!node) return;
-    if(smartNodeInFlight(node)) return;
+    if(smartNodeInFlight(node) || activeRunsForExecutionNode(node).length) return;
     const clientOperationId = createCanvasOperationId(node.id);
     const refs = request.refs;
     const previousSettings = cloneSmartSettings(settings);
@@ -28113,6 +28314,7 @@ async function runPromptLLMNode(nodeId){
     const node = nodes.find(n => n.id === nodeId);
     const isTextGenerator = node?.type === SMART_NODE_TYPES.textGenerator;
     if(!node || (!isTextGenerator && node.type !== 'smart-prompt')) return;
+    if(isTextGenerator && activeRunsForExecutionNode(node).length) return;
     const clientOperationId = createCanvasOperationId(node.id);
     const runSettings = isTextGenerator ? smartSettingsForNode(node) : null;
     const textInputs = isTextGenerator ? textGenerationMediaForNode(node) : null;
@@ -28308,10 +28510,21 @@ async function runPromptLLMNode(nodeId){
     }
 }
 async function runSelectedNode(){
-    savePromptDraftForCurrent();
     const node = selectedNode();
-    if(node?.type === SMART_NODE_TYPES.textGenerator) return runPromptLLMNode(node.id);
-    return runGeneration();
+    if(!node || selectedNodeStopOperations.has(node.id)) return;
+    if(activeRunsForExecutionNode(node).length) return stopSelectedNodeRuns(node);
+    if(selectedNodeRunOperations.has(node.id) || hypitNodeRunOperations.has(node.id)) return;
+    savePromptDraftForCurrent();
+    // Register synchronously, before preflight or any asynchronous submission.
+    const operation = Promise.resolve().then(() => node.type === SMART_NODE_TYPES.textGenerator
+        ? runPromptLLMNode(node.id) : runGeneration(node));
+    selectedNodeRunOperations.set(node.id, operation);
+    syncRunButtonState();
+    try { return await operation; }
+    finally {
+        selectedNodeRunOperations.delete(node.id);
+        syncRunButtonState();
+    }
 }
 function comfyFieldKind(field){
     if(['image','video','audio'].includes(field?.type)) return field.type;
@@ -30208,6 +30421,7 @@ function createNodeFromMenu(type){
     const createOptions = {inheritManual:true, ...(pendingConnection ? {skipUndo:true} : {})};
     let created = null;
     if(type === 'prompt') created = createExecutionNode(p.x - 158, p.y - 97, SMART_NODE_TYPES.textGenerator, createOptions);
+    else if(type === 'material' || type === 'text-input') created = createTextMaterialNodeAt(p, '', {...createOptions, name:capabilityUiText('素材','Material')});
     else if(type === 'angle-control') created = createAngleControlNode(p, createOptions);
     else if(type === 'image-compare') created = createImageCompareNode(p, createOptions);
     else if(type === 'loop') created = createLoopNode(p.x - 135, p.y - 95, createOptions);
@@ -30258,6 +30472,7 @@ function createNodeFromMenu(type){
         render();
         scheduleSave();
     }
+    if((type === 'material' || type === 'text-input') && created && !pendingConnection) beginSmartInlineTextEdit(created.id, 0);
     return created;
 }
 function setSpaceCanvasPanReady(ready){
@@ -31734,7 +31949,7 @@ function canvasInputEnterAction(editable){
     const node = nodeId ? nodes.find(item => item.id === nodeId) : selectedNode();
     if(!editable.closest('#composer.open, .image-node[data-id], [data-smart-node-id]')) return null;
     if(!isSmartRunnableNode(node) || node?.id !== selectedNode()?.id) return null;
-    return {button:runBtn, busy:smartNodeInFlight(node) || smartCascadeIsLoopRunning(node.id)};
+    return {button:runBtn, busy:activeRunsForExecutionNode(node).length > 0 || selectedNodeRunOperations.has(node.id) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node.id)};
 }
 function handleCanvasInputEnter(event){
     // 输入法的确认键不是提交；保持 Shift+Enter 的原生多行编辑行为。

@@ -24,7 +24,7 @@ class AiMoneyUiTests(unittest.TestCase):
             self.assertIn(f'{public_path}?v=', html)
         self.assertNotIn('/static/js/i18n.js?v=', html)
 
-    def test_api_settings_contains_ai_money_entry_and_links(self):
+    def test_api_settings_contains_ai_money_entry_and_account_links(self):
         script = (ROOT / "static/js/api-settings.js").read_text(encoding="utf-8")
         html = (ROOT / "static/api-settings.html").read_text(encoding="utf-8")
 
@@ -33,7 +33,8 @@ class AiMoneyUiTests(unittest.TestCase):
         self.assertIn("/static/images/ai-money.png", script)
         self.assertIn("https://api.lao-hu.com/sign-up?aff=460d", script)
         self.assertIn("const AI_MONEY_HOME_URL = 'https://api.lao-hu.com/';", script)
-        self.assertIn('href="https://api.lao-hu.com/"', html)
+        for path in ('keys', 'wallet', 'usage-logs', 'sign-in'):
+            self.assertIn(f'href="https://api.lao-hu.com/{path}"', html)
         self.assertNotIn("api.laohuaimoney.com", script)
         self.assertNotIn("api.laohuaimoney.com", html)
         self.assertNotIn("llms.txt", script)

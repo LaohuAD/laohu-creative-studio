@@ -962,7 +962,7 @@ ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id!==undefined)console.log(JSON
         self.wait_for("document.body?.innerText.includes('我是老胡')", "红白示例正文没有加载老胡介绍")
         preview_copy = self.evaluate("(() => {const text=document.body?.innerText||'';const chapterHeadings=['让技能接住具体环节','画布把流程摆在眼前','视频创作与复刻有自己的入口','公众号文章项目'];return {text,chapterHeadings:chapterHeadings.filter(title=>text.includes(title)),sectionCount:document.querySelectorAll('section').length};})()")
         self.assertIn("老胡画梦枋", preview_copy["text"], preview_copy)
-        self.assertIn("Hypit", preview_copy["text"], preview_copy)
+        self.assertIn("视频克隆", preview_copy["text"], preview_copy)
         self.assertEqual(preview_copy["chapterHeadings"], ["让技能接住具体环节", "画布把流程摆在眼前", "视频创作与复刻有自己的入口", "公众号文章项目"], preview_copy)
         self.assertGreater(preview_copy["sectionCount"], 10, preview_copy)
         self.assertIn("工具可以把路铺开，创作者仍然能决定作品往哪里走。", preview_copy["text"], preview_copy)

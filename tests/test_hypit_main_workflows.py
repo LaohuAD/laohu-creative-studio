@@ -30,6 +30,37 @@ class Request(BaseModel):
 
 
 class HypitMainWorkflowTests(unittest.TestCase):
+    def test_module_result_history_preserves_versions_without_recursive_histories(self):
+        original_version = {'id':'older','images':[{'url':'/api/results/older','kind':'audio'}],
+                            'title':'old narration','runSettings':{'engine':'runninghub'},
+                            'resultVersions':[{'id':'redundant-older-copy','images':[]}],
+                            'creationTasks':[{'id':'redundant-task-copy'}]}
+        canvas={'id':'article-settings','nodes':[{'id':'source','type':'smart-ai-app',
+                'creationId':'voice','creationOwnerNodeId':'source','images':original_version['images'],
+                'runSettings':{'engine':'runninghub'},'resultVersions':[copy.deepcopy(original_version)],
+                'creationTasks':[{'id':'accepted-original-task'}]}]}
+        class Service:
+            module_id='article'
+            def ensure_canvas(self): return copy.deepcopy(canvas)
+            def save_agent_canvas(self,value): canvas.clear();canvas.update(copy.deepcopy(value));return value
+        async def notify(_): pass
+        with mock.patch.object(main,'studio_settings_canvas_service',return_value=Service()), \
+             mock.patch.object(main,'plan_hypit_slot',return_value={'recipe_fingerprint':'recipe'}), \
+             mock.patch.object(main,'studio_notify',notify):
+            for index in range(8):
+                task={'slot':'voice','output_node_id':'voice-out','recipe_fingerprint':'recipe',
+                      'canvas_id':'article-settings','run_id':f'run-{index}'}
+                self.assertTrue(asyncio.run(main.studio_hypit_publish_node_result(
+                    canvas,canvas['nodes'][0],[{'url':f'/api/results/audio-{index}','kind':'audio'}],task)))
+        node=canvas['nodes'][0]
+        self.assertEqual(len(node['resultVersions']),9)
+        self.assertEqual(node['resultVersions'][0]['images'],original_version['images'])
+        self.assertEqual(node['resultVersions'][0]['runSettings'],original_version['runSettings'])
+        self.assertEqual(node['creationTasks'][0]['id'],'accepted-original-task')
+        self.assertEqual(len(node['creationTasks']),9)
+        self.assertTrue(all('resultVersions' not in v and 'creationTasks' not in v for v in node['resultVersions']))
+        self.assertLess(len(json.dumps(node)),25000)
+
     def test_agent_run_node_completes_server_task_and_projects_green_after_connect(self):
         """用真实 Agent 路由与 StudioExecution 验证先运行后连输出，不需要浏览器 Agent。"""
         import time

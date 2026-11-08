@@ -42,7 +42,7 @@ class StudioModuleIdentityTests(unittest.TestCase):
         descriptors = module_descriptors()
         self.assertEqual(set(descriptors), {"canvas", "hypit", "article", "music", "script", "novel"})
         self.assertEqual(descriptors["canvas"]["label"], {"zh": "画布", "en": "Canvas"})
-        self.assertEqual(descriptors["hypit"]["label"], {"zh": "Hypit克隆", "en": "Hypit Clone"})
+        self.assertEqual(descriptors["hypit"]["label"], {"zh": "视频克隆", "en": "Video Cloning"})
         self.assertEqual(descriptors["article"]["label"], {"zh": "公众号文章", "en": "Article"})
         self.assertEqual(descriptors["music"]["label"], {"zh": "音乐创作", "en": "Music Creation"})
         for module_id in ("script", "novel"):

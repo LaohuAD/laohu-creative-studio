@@ -45,6 +45,8 @@ class CanvasInputShortcutTests(unittest.TestCase):
             function selectedNode(){return nodes[0];}
             function isSmartRunnableNode(node){return ['text','image','video','audio','music','app','comfy'].includes(node?.type);}
             function smartNodeInFlight(){return busy;}
+            function activeRunsForExecutionNode(){return [];}
+            var selectedNodeRunOperations = new Map();
             function smartCascadeIsLoopRunning(){return false;}
             runBtn.onclick = () => counts.run++;
             document.querySelector('[data-text-editor-save]').onclick = () => counts.save++;
