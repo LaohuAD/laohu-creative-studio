@@ -33,6 +33,8 @@ NODE = shutil.which("node")
 
 @unittest.skipUnless(CHROME and NODE, "需要本机 Chrome/Chromium 和 Node.js 执行缩放浏览器回归")
 class ThemeUiScaleBrowserTests(unittest.TestCase):
+    canvas_script_delay = 0
+
     @classmethod
     def setUpClass(cls):
         class Handler(SimpleHTTPRequestHandler):
@@ -52,6 +54,8 @@ class ThemeUiScaleBrowserTests(unittest.TestCase):
 
             def do_GET(self):
                 path = urlsplit(self.path).path
+                if path == "/static/js/smart-canvas.js" and cls.canvas_script_delay:
+                    time.sleep(cls.canvas_script_delay)
                 if path == "/api/providers":
                     self._json({"providers": []})
                     return
@@ -148,6 +152,16 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         cls.cdp_request_id = 0
         cls.cdp("Page.enable")
         cls.cdp("Runtime.enable")
+        cls.cdp("Page.addScriptToEvaluateOnNewDocument", {"source": """(() => {
+          window.__uiScaleLoadErrors = [];
+          addEventListener('error', event => window.__uiScaleLoadErrors.push({
+            message: String(event.message || 'Resource failed'),
+            source: String(event.filename || event.target?.src || '')
+          }), true);
+          addEventListener('unhandledrejection', event => window.__uiScaleLoadErrors.push({
+            message: String(event.reason?.stack || event.reason || ''), source: 'promise'
+          }));
+        })();"""})
 
     @classmethod
     def tearDownClass(cls):
@@ -204,6 +218,35 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         self.cdp("Emulation.setDeviceMetricsOverride", {
             "width": width, "height": height, "deviceScaleFactor": 1, "mobile": width < 600,
         })
+
+    def wait_for_canvas_document(self, url, timeout=20):
+        """先等待真实文档加载；加载完成后缺少坐标函数仍立即失败。"""
+        deadline = time.monotonic() + timeout
+        diagnostic = None
+        while time.monotonic() < deadline:
+            try:
+                diagnostic = self.evaluate("""(() => ({
+                  url: location.href, readyState: document.readyState,
+                  scale: typeof window.StudioScale, coordinate: typeof screenToWorld,
+                  errors: window.__uiScaleLoadErrors || [],
+                  scripts: [...document.scripts].map(script => script.src).filter(Boolean),
+                  resource: performance.getEntriesByType('resource')
+                    .filter(entry => entry.name.includes('/static/js/smart-canvas.js'))
+                    .map(entry => ({name:entry.name,duration:entry.duration,bytes:entry.transferSize}))
+                }))()""")
+            except AssertionError as error:
+                if not any(message in str(error) for message in (
+                    "Execution context was destroyed", "Cannot find context", "Inspected target navigated",
+                )):
+                    raise
+                time.sleep(.05)
+                continue
+            if diagnostic["url"] == url and diagnostic["readyState"] == "complete":
+                self.assertEqual(diagnostic["scale"], "object", diagnostic)
+                self.assertEqual(diagnostic["coordinate"], "function", diagnostic)
+                return
+            time.sleep(.05)
+        self.fail("画布文档加载未完成：" + json.dumps(diagnostic, ensure_ascii=False))
 
     def open_api_page(self, width, mode="auto"):
         self.set_viewport(width)
@@ -289,14 +332,16 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
         self.assertAlmostEqual(float(manual["sidebarZoom"]), 0.75, places=3, msg=str(manual))
         self.assertAlmostEqual(manual["sidebarRect"], 60, delta=1, msg=str(manual))
 
-        self.cdp("Page.navigate", {"url": f"http://127.0.0.1:{self.http_port}/static/smart-canvas.html?scale-test=1"})
-        canvas = self.evaluate("""(async()=>{
-          let ready=false;
-          for(let i=0;i<160;i++){
-            if(location.pathname==='/static/smart-canvas.html' && window.StudioScale && typeof screenToWorld==='function') { ready=true; break; }
-            await new Promise(resolve=>setTimeout(resolve,50));
-          }
-          if(!ready) throw new Error('实际画布坐标函数未就绪');
+        # 故意超过旧 8 秒预算，证明资源仍在加载时不会误判坐标逻辑失败。
+        type(self).canvas_script_delay = 9
+        self.addCleanup(setattr, type(self), "canvas_script_delay", 0)
+        self.cdp("Network.enable")
+        self.cdp("Network.setCacheDisabled", {"cacheDisabled": True})
+        self.addCleanup(self.cdp, "Network.setCacheDisabled", {"cacheDisabled": False})
+        url = f"http://127.0.0.1:{self.http_port}/static/smart-canvas.html?scale-test=1"
+        self.cdp("Page.navigate", {"url": url})
+        self.wait_for_canvas_document(url)
+        canvas = self.evaluate("""(()=>{
           viewport={x:40,y:25,scale:1.6};
           const rect=shell.getBoundingClientRect();
           const coordinate=screenToWorld({clientX:rect.left+200,clientY:rect.top+160});
